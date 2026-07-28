@@ -22,15 +22,25 @@ Needs the .NET 10 SDK and a Dalamud install to reference.
 dotnet build plugin/NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release
 ```
 
-On Linux the build reads the Dalamud assemblies from `~/.xlcore/dalamud/Hooks/dev/`; set
-`DALAMUD_HOME` to override (see `Directory.Build.props`). On Windows the SDK finds them under
-`%APPDATA%\XIVLauncher` by itself.
+`Dalamud.NET.Sdk` locates the assemblies itself: `~/.xlcore/dalamud/Hooks/dev/` on Linux,
+`%APPDATA%\XIVLauncher` on Windows, or `$DALAMUD_HOME` if set. It sets that path unconditionally, so
+a `Directory.Build.props` override in this repo would not take effect.
 
-The build produces `bin/Release/NyaaTriggers/NyaaTriggers.dll` plus a packaged `latest.zip`.
+The build produces `bin/Release/NyaaTriggers.dll` alongside `NyaaTriggers.json`, and a packaged
+`bin/Release/NyaaTriggers/latest.zip` for distribution.
+
+`packages.lock.json` is committed: the SDK forces `RestorePackagesWithLockFile`, and a submission is
+expected to carry it.
 
 ## Running it during development
 
 1. `/xlsettings` → **Experimental** → add the full path to `NyaaTriggers.dll` under **Dev Plugin Locations**.
+
+   **On Linux this must be a `Z:\` path**, not the Linux one. Dalamud runs inside the Wine prefix,
+   where `z:` maps to `/`, so `bin/Release/NyaaTriggers.dll` has to be entered as
+   `Z:\home\you\...\bin\Release\NyaaTriggers.dll`. A Linux path is accepted by the settings box and
+   then resolves to nothing, so the plugin simply never appears with no error to explain it.
+
 2. `/xlplugins` → **Dev Tools** → **Installed Dev Plugins** → enable **NyaaTriggers**.
 3. `/nyaa` opens settings. The boxes start unlocked so you can drag them; tick **Lock** when they are
    where you want them, and clicks pass through to the game from then on.
@@ -39,10 +49,16 @@ The build produces `bin/Release/NyaaTriggers/NyaaTriggers.dll` plus a packaged `
 
 ## Distribution
 
-This is going out through a **custom Dalamud repository**, not the official plugin list. The official
+**Not implemented yet.** There is no repo JSON and the release workflow does not build or upload the
+plugin; right now the only way to run it is the dev-plugin route above.
+
+The plan is a **custom Dalamud repository**, not the official plugin list. The official
 [plugin restrictions](https://dalamud.dev/plugin-publishing/restrictions/) rule out plugins that act
 as a bridge to the ACT/raid-logging ecosystem, which is exactly what the app on the other end of this
 socket is. IINACT ships from its own repo for the same reason.
+
+What that still needs: a repo JSON served over HTTP with `DownloadLinkInstall` / `DownloadLinkUpdate`
+pointing at a release asset, and a workflow step that builds the plugin and uploads `latest.zip`.
 
 ## The link
 

@@ -102,8 +102,9 @@ internal sealed class BridgeHost : IDisposable
         WebSocketServer? created = null;
         created = new WebSocketServer(
             this.config.Port,
-            this.Receive,
-            connected => this.OnConnectionChanged(created!, connected));
+            raw => this.Receive(created!, raw),
+            connected => this.OnConnectionChanged(created!, connected),
+            () => this.Greeting(created!));
         this.server = created;
         created.Start();
     }
@@ -115,10 +116,12 @@ internal sealed class BridgeHost : IDisposable
         this.ClearState();
     }
 
-    /// <summary>Socket thread: queue only, never touch the state the UI reads.</summary>
-    private void Receive(string raw)
+    /// <summary>Socket thread: queue only, never touch the state the UI reads.
+    /// Guarded on the source so a leaked or superseded server cannot keep
+    /// injecting into the live session's inbox.</summary>
+    private void Receive(WebSocketServer source, string raw)
     {
-        if (this.inbox.Count >= MaxInboxDepth)
+        if (!ReferenceEquals(source, this.server) || this.inbox.Count >= MaxInboxDepth)
         {
             return;
         }
@@ -137,22 +140,23 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        if (connected)
-        {
-            // Ordering is the session's channel, so this reaches the app before
-            // anything queued after it, which is what the protocol promises.
-            source.Send(
-                $"{{\"ev\":\"hello\",\"protocol\":{ProtocolVersion}," +
-                $"\"plugin\":{JsonSerializer.Serialize(PluginVersion.Value)}}}");
-        }
-        else
+        if (!connected)
         {
             // The app going away must not leave a frozen timeline on screen
             // pretending the pull is still running. Queued so it lands on the
             // draw thread with everything else.
-            this.Receive("{\"c\":\"clear\"}");
+            this.Receive(source, "{\"c\":\"clear\"}");
         }
     }
+
+    /// <summary>The session's first frame. Returned rather than sent so the
+    /// server can queue it before publishing the session, which is what makes
+    /// "hello arrives first" true rather than merely likely.</summary>
+    private string? Greeting(WebSocketServer source)
+        => ReferenceEquals(source, this.server)
+            ? $"{{\"ev\":\"hello\",\"protocol\":{ProtocolVersion}," +
+              $"\"plugin\":{JsonSerializer.Serialize(PluginVersion.Value)}}}"
+            : null;
 
     /// <summary>Drain the inbox and expire stale alerts. Draw thread only.</summary>
     internal void Update()
@@ -292,20 +296,13 @@ internal sealed class BridgeHost : IDisposable
         seconds = Math.Clamp(seconds, 0.5f, 30.0f);
 
         var now = Environment.TickCount64;
-        this.alerts.Add(new ActiveAlert
+        this.Push(new ActiveAlert
         {
             Text = text,
             Severity = severity,
             ShownAt = now,
             ExpiresAt = now + (long)(seconds * 1000),
         });
-
-        // Oldest first out: a burst inside one alert's lifetime must not grow
-        // the on-screen stack without limit.
-        while (this.alerts.Count > MaxAlerts)
-        {
-            this.alerts.RemoveAt(0);
-        }
     }
 
     internal void ClearState()
@@ -321,13 +318,25 @@ internal sealed class BridgeHost : IDisposable
     internal void ShowPlaceholder()
     {
         var now = Environment.TickCount64;
-        this.alerts.Add(new ActiveAlert
+        this.Push(new ActiveAlert
         {
             Text = "Sample callout",
             Severity = Severity.Alarm,
             ShownAt = now,
             ExpiresAt = now + 3000,
         });
+    }
+
+    /// <summary>Add an alert and hold the stack to its cap, oldest out first: a
+    /// burst inside one alert's lifetime must not grow the display without
+    /// limit. Every alert goes through here so no path can skip the trim.</summary>
+    private void Push(ActiveAlert alert)
+    {
+        this.alerts.Add(alert);
+        while (this.alerts.Count > MaxAlerts)
+        {
+            this.alerts.RemoveAt(0);
+        }
     }
 
     private static double ReadDouble(JsonElement root, string name)
