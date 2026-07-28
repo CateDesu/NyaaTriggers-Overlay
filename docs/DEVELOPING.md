@@ -104,6 +104,9 @@ plugin.
 
 ## Status
 
-The plugin half is written. The app half is not. `MainWindow._emit_alert` in the Python app is the
-single fan-out point where the push belongs, and `TimelineEngine.upcoming()` already produces the
-schedule in the shape the `timeline` command wants.
+Both halves are written and talk to each other. The app side is `plugin_client.py` in the
+[NyaaTriggers](https://github.com/CateDesu/NyaaTriggers) repo, wired into `MainWindow._emit_alert`
+for callouts and `TimelineEngine.upcoming()` for the schedule, with the link configured under
+**Settings - In-Game Display**.
+
+Not yet confirmed in a real game session.
