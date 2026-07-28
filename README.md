@@ -53,18 +53,43 @@ expected to carry it.
 
 `/nyaa lock` toggles the lock without opening the window.
 
-## Distribution
+## Installing
 
-**Not implemented yet.** There is no repo JSON and the release workflow does not build or upload the
-plugin; right now the only way to run it is the dev-plugin route above.
+In the game: `/xlsettings` → **Experimental** → **Custom Plugin Repositories** → paste this in the
+empty row, press **+**, then the **save** icon:
 
-The plan is a **custom Dalamud repository**, not the official plugin list. The official
+```
+https://raw.githubusercontent.com/CateDesu/NyaaTriggers-Overlay/main/pluginmaster.json
+```
+
+**NyaaTriggers** then appears in `/xlplugins` under **All Plugins**, and updates arrive like any other
+plugin.
+
+> Nothing is listed until the first release is tagged. Until then, use the dev-plugin route below.
+
+This is a **custom repository**, not the official plugin list, and it always will be. The official
 [plugin restrictions](https://dalamud.dev/plugin-publishing/restrictions/) rule out plugins that act
 as a bridge to the ACT/raid-logging ecosystem, which is exactly what the app on the other end of this
 socket is. IINACT ships from its own repo for the same reason.
 
-What that still needs: a repo JSON served over HTTP with `DownloadLinkInstall` / `DownloadLinkUpdate`
-pointing at a release asset, and a workflow step that builds the plugin and uploads `latest.zip`.
+## Releasing
+
+The tag is the version. It must match `<Version>` in the csproj, or the build stops.
+
+```
+git tag v0.1.0.1 && git push origin v0.1.0.1
+```
+
+That builds against the pinned Dalamud API 15 assemblies, attaches `latest.zip` to a GitHub release,
+regenerates `pluginmaster.json` from the built manifest, and commits it to `main`. Anyone who added
+the repository URL picks the new version up on their next Dalamud refresh.
+
+Running the workflow by hand is a dry run: it builds and checks, and publishes nothing.
+
+`pluginmaster.json` is generated, never hand-edited. `tools/make_pluginmaster.py` reads the manifest
+DalamudPackager already produces and adds only the release URL and timestamp, so the two can never
+drift. Stable channel only for now; a testing channel would need its keys merged into the same entry
+rather than rewriting it.
 
 ## The link
 

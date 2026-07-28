@@ -1,0 +1,103 @@
+# Cuts a release and republishes the Dalamud repository listing.
+#
+# Push a tag to release:
+#
+#     git tag v0.1.0.1 && git push origin v0.1.0.1
+#
+# The tag IS the version and must match <Version> in the csproj; the build fails
+# loudly if they disagree, so a release can never advertise one version and ship
+# another. Running this by hand (workflow_dispatch) is a dry run: it builds and
+# checks, but publishes nothing.
+#
+# Only first-party actions are used here. A plugin gets injected into the game
+# process, so the build that produces it is not somewhere to run a random
+# marketplace action.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Pinned to the API level the plugin targets. Tracking "latest" would mean a
+  # Dalamud API bump silently rebuilds this against headers it was never
+  # written for.
+  DALAMUD_DISTRIB: https://goatcorp.github.io/dalamud-distrib/api15/latest.zip
+  PACKAGE: NyaaTriggers.Plugin/bin/Release/NyaaTriggers/latest.zip
+  MANIFEST: NyaaTriggers.Plugin/bin/Release/NyaaTriggers.json
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Fetch the Dalamud assemblies
+        run: |
+          # There is no XIVLauncher on a runner, so the SDK is pointed at an
+          # unpacked distrib instead of a local install.
+          mkdir -p "$HOME/dalamud"
+          curl -fsSL "$DALAMUD_DISTRIB" -o /tmp/dalamud.zip
+          unzip -q /tmp/dalamud.zip -d "$HOME/dalamud"
+          test -f "$HOME/dalamud/Dalamud.dll" || {
+            echo "::error::Dalamud.dll missing from the distrib zip"; exit 1; }
+          echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release
+
+      - name: Check the package came out
+        run: |
+          test -f "$PACKAGE" || { echo "::error::no $PACKAGE"; exit 1; }
+          test -f "$MANIFEST" || { echo "::error::no $MANIFEST"; exit 1; }
+          unzip -l "$PACKAGE"
+
+      # Everything below only runs for a real tag push.
+      - name: Refuse a tag that is not on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # pluginmaster.json is committed to main, so releasing a commit that
+          # never reached main would publish a listing for code main does not
+          # have.
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::tag ${GITHUB_REF_NAME} is not an ancestor of main"; exit 1; }
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$PACKAGE" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Republish pluginmaster.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git checkout main
+          python3 tools/make_pluginmaster.py \
+            --manifest "$MANIFEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --out pluginmaster.json
+
+          if git diff --quiet -- pluginmaster.json; then
+            echo "pluginmaster.json already current"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pluginmaster.json
+          git commit -m "Publish ${GITHUB_REF_NAME} to the plugin repository"
+          git push origin main
