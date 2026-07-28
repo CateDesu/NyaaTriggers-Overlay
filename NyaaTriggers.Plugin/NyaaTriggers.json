@@ -1,0 +1,20 @@
+{
+  "Name": "NyaaTriggers",
+  "InternalName": "NyaaTriggers",
+  "Author": "CateDesu",
+  "Punchline": "In-game timeline bars and alert callouts for NyaaTriggers.",
+  "Description": "Companion plugin for the NyaaTriggers desktop app. The app decides what to call out; this plugin draws it inside the game.\n\nIt listens on a loopback port and the app connects to it, so the two can start in either order. Nothing is sent off your machine, and the plugin does not read the game state or act on your behalf: it only draws what the app tells it to draw.\n\nRequires the NyaaTriggers app, which is what actually reads the combat log and speaks the callouts.",
+  "RepoUrl": "https://github.com/CateDesu/NyaaTriggers",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "triggers",
+    "timeline",
+    "overlay",
+    "raid"
+  ],
+  "CategoryTags": [
+    "utility"
+  ],
+  "AcceptsFeedback": true,
+  "IconUrl": "https://raw.githubusercontent.com/CateDesu/NyaaTriggers/master/plugin/images/icon.png"
+}

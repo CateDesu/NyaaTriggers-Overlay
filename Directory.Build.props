@@ -1,0 +1,15 @@
+<Project>
+  <!--
+    Dalamud.NET.Sdk looks for the Dalamud assemblies under %APPDATA% on Windows,
+    which does not exist when building on Linux against an XIVLauncher.Core
+    install. Point it at ~/.xlcore instead, and let DALAMUD_HOME win so a Steam
+    Deck / flatpak / non-standard install can be built without editing this file.
+
+    The trailing slash matters: the SDK concatenates the path with the assembly
+    names directly.
+  -->
+  <PropertyGroup Condition="'$(OS)' != 'Windows_NT'">
+    <DalamudLibPath Condition="'$(DALAMUD_HOME)' != ''">$(DALAMUD_HOME)/</DalamudLibPath>
+    <DalamudLibPath Condition="'$(DalamudLibPath)' == ''">$(HOME)/.xlcore/dalamud/Hooks/dev/</DalamudLibPath>
+  </PropertyGroup>
+</Project>
