@@ -5,7 +5,7 @@ Connects to the plugin's loopback WebSocket and feeds it a fake pull: a
 timeline that counts down, and callouts at fixed points. Lets the in-game
 drawing be checked before the app knows anything about the plugin.
 
-    python plugin/test_bridge.py [--port 27080] [--speed 1.0]
+    python test_bridge.py [--port 27080] [--speed 1.0]
 
 Needs the `websockets` package (the app itself uses Qt's client instead; this
 is a standalone tool, not part of the app).

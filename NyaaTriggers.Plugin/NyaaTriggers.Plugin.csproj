@@ -12,7 +12,7 @@
     <Company />
     <Description>Draws NyaaTriggers' timeline bars and alert callouts inside the game.</Description>
     <Copyright />
-    <PackageProjectUrl>https://github.com/CateDesu/NyaaTriggers</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/CateDesu/NyaaTriggers-Overlay</PackageProjectUrl>
   </PropertyGroup>
 
   <PropertyGroup>

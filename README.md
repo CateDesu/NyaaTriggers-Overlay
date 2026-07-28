@@ -1,10 +1,16 @@
-# NyaaTriggers companion plugin
+# NyaaTriggers Overlay
 
-A Dalamud plugin that draws NyaaTriggers' timeline bars and alert callouts inside FFXIV.
+A Dalamud plugin that draws [NyaaTriggers](https://github.com/CateDesu/NyaaTriggers) timeline bars
+and alert callouts inside FFXIV.
 
-The desktop app still does all the thinking: it reads the combat log from IINACT, runs the trigger
+You need both. The app does the thinking: it reads the combat log from IINACT, runs the trigger
 engines, and speaks the callouts. This plugin only draws what the app tells it to draw. It reads
 nothing about the game beyond whether the overlay should be visible, and it never acts on your behalf.
+
+| | |
+|---|---|
+| The app | [CateDesu/NyaaTriggers](https://github.com/CateDesu/NyaaTriggers) |
+| This plugin | [CateDesu/NyaaTriggers-Overlay](https://github.com/CateDesu/NyaaTriggers-Overlay) |
 
 ## Why a plugin
 
@@ -19,15 +25,15 @@ on every platform and needs no compositor setup.
 Needs the .NET 10 SDK and a Dalamud install to reference.
 
 ```
-dotnet build plugin/NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release
+dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release
 ```
 
 `Dalamud.NET.Sdk` locates the assemblies itself: `~/.xlcore/dalamud/Hooks/dev/` on Linux,
 `%APPDATA%\XIVLauncher` on Windows, or `$DALAMUD_HOME` if set. It sets that path unconditionally, so
 a `Directory.Build.props` override in this repo would not take effect.
 
-The build produces `bin/Release/NyaaTriggers.dll` alongside `NyaaTriggers.json`, and a packaged
-`bin/Release/NyaaTriggers/latest.zip` for distribution.
+The build produces `NyaaTriggers.Plugin/bin/Release/NyaaTriggers.dll` alongside `NyaaTriggers.json`, and a packaged
+`NyaaTriggers.Plugin/bin/Release/NyaaTriggers/latest.zip` for distribution.
 
 `packages.lock.json` is committed: the SDK forces `RestorePackagesWithLockFile`, and a submission is
 expected to carry it.
