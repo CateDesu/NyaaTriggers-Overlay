@@ -28,13 +28,19 @@ internal sealed class ConfigWindow : Window
         this.ui = ui;
         this.pendingPort = config.Port;
 
-        this.Size = new Vector2(420, 520);
+        this.Size = new Vector2(420, 560);
         this.SizeCondition = ImGuiCond.FirstUseEver;
         this.SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(360, 320),
             MaximumSize = new Vector2(900, 1400),
         };
+
+        // Explicit so it cannot drift with a Dalamud default: this window is
+        // opened and closed by the user, unlike the overlay boxes (which hide
+        // theirs because IsOpen is rewritten every frame).
+        this.ShowCloseButton = true;
+        this.DisableWindowSounds = true;
     }
 
     public override void Draw()
@@ -183,6 +189,16 @@ internal sealed class ConfigWindow : Window
     {
         ImGui.TextUnformatted("Appearance");
         ImGui.Spacing();
+
+        // Backdrop behind each box's content, 0 = invisible. Stored 0..1 but
+        // shown as a percent (SliderFloat formats the raw value).
+        var bgPct = this.config.BgOpacity * 100.0f;
+        if (ImGui.SliderFloat("Background", ref bgPct, 0.0f, 100.0f, "%.0f%%"))
+        {
+            this.config.BgOpacity = bgPct / 100.0f;
+        }
+
+        this.SaveIfDragEnded();
 
         // Every slider applies live but saves only when the drag ends: they
         // report a change every frame while held, and writing the config file

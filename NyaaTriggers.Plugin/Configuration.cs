@@ -41,6 +41,12 @@ internal sealed class Configuration : IPluginConfiguration
     // ── appearance ────────────────────────────────────────────────────────
     public float TextScale { get; set; } = 1.0f;
 
+    /// <summary>Backdrop alpha behind each box's content: 0 = invisible (the
+    /// raid-night default; the boxes float bare text/bars over the game), up
+    /// to 1 = solid theme background. Applies to the locked boxes via a custom
+    /// rect and to unlocked ones via the window bg alpha.</summary>
+    public float BgOpacity { get; set; } = 0.0f;
+
     /// <summary>Seconds ahead of the fight clock a timeline entry becomes a bar.</summary>
     public float TimelineWindow { get; set; } = 45.0f;
 
@@ -77,6 +83,7 @@ internal sealed class Configuration : IPluginConfiguration
     {
         var fresh = new Configuration();
         TextScale = fresh.TextScale;
+        BgOpacity = fresh.BgOpacity;
         TimelineWindow = fresh.TimelineWindow;
         TimelineRows = fresh.TimelineRows;
         AlertSeconds = fresh.AlertSeconds;

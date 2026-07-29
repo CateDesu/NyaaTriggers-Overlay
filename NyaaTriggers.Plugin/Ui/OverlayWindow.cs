@@ -60,6 +60,11 @@ internal abstract class OverlayWindow : Window
         var locked = this.Config.Locked;
         this.Flags = locked ? LockedFlags : UnlockedFlags;
 
+        // The window bg honors the configured backdrop opacity (0 = invisible).
+        // The locked state stays NoBackground and gets a custom rect in Draw()
+        // instead, so its click-through and chromeless shape are unaffected.
+        ImGui.SetNextWindowBgAlpha(Math.Clamp(this.Config.BgOpacity, 0.0f, 1.0f));
+
         // Dalamud multiplies Size by GlobalScale on the way out but leaves
         // Position alone, so the stored size is divided back out here. Skipping
         // this draws the box GlobalScale times too big at any UI scale, and
@@ -80,6 +85,20 @@ internal abstract class OverlayWindow : Window
         ImGui.SetWindowFontScale(scale);
         try
         {
+            // Locked boxes are NoBackground by design: draw the configured
+            // backdrop ourselves (a no-op at 0 opacity, which is the default).
+            if (this.Config.Locked && this.Config.BgOpacity > 0.0f)
+            {
+                var drawList = ImGui.GetWindowDrawList();
+                var pos = ImGui.GetWindowPos();
+                var size = ImGui.GetWindowSize();
+                drawList.AddRectFilled(
+                    pos,
+                    pos + size,
+                    ImGui.GetColorU32(ImGuiCol.WindowBg, Math.Clamp(this.Config.BgOpacity, 0.0f, 1.0f)),
+                    3.0f);
+            }
+
             this.DrawContent();
         }
         finally
