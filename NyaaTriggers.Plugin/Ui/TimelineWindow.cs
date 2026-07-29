@@ -16,7 +16,6 @@ internal sealed class TimelineWindow : OverlayWindow
     /// <summary>Seconds out at which a bar turns to the imminent colour.</summary>
     private const float ImminentAt = 5.0f;
 
-    private const float BarHeight = 22.0f;
     private const float BarSpacing = 4.0f;
 
     private readonly BridgeHost bridge;
@@ -84,7 +83,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = BarHeight * Math.Clamp(this.Config.TextScale, 0.5f, 3.0f);
+        var height = this.Config.BarHeight * Math.Clamp(this.Config.TextScale, 0.5f, 3.0f);
 
         // Depletes toward zero as the cue arrives, so the bar reads as time
         // left rather than time elapsed.

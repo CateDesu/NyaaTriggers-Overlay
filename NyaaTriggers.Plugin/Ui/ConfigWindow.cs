@@ -211,6 +211,14 @@ internal sealed class ConfigWindow : Window
 
         this.SaveIfDragEnded();
 
+        var barHeight = this.config.BarHeight;
+        if (ImGui.SliderFloat("Bar height", ref barHeight, 12.0f, 48.0f, "%.0f px"))
+        {
+            this.config.BarHeight = barHeight;
+        }
+
+        this.SaveIfDragEnded();
+
         var window = this.config.TimelineWindow;
         if (ImGui.SliderFloat("Look ahead", ref window, 5.0f, 120.0f, "%.0f s"))
         {

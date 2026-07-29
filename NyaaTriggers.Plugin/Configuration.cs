@@ -47,6 +47,9 @@ internal sealed class Configuration : IPluginConfiguration
     /// rect and to unlocked ones via the window bg alpha.</summary>
     public float BgOpacity { get; set; } = 0.0f;
 
+    /// <summary>Timeline bar row height before the text-scale multiplier.</summary>
+    public float BarHeight { get; set; } = 22.0f;
+
     /// <summary>Seconds ahead of the fight clock a timeline entry becomes a bar.</summary>
     public float TimelineWindow { get; set; } = 45.0f;
 
@@ -84,6 +87,7 @@ internal sealed class Configuration : IPluginConfiguration
         var fresh = new Configuration();
         TextScale = fresh.TextScale;
         BgOpacity = fresh.BgOpacity;
+        BarHeight = fresh.BarHeight;
         TimelineWindow = fresh.TimelineWindow;
         TimelineRows = fresh.TimelineRows;
         AlertSeconds = fresh.AlertSeconds;
