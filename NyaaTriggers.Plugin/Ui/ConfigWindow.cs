@@ -58,15 +58,8 @@ internal sealed class ConfigWindow : Window
 
     private void DrawLink()
     {
-        ImGui.TextUnformatted("Link to the NyaaTriggers app");
-        ImGui.Spacing();
-
         var error = this.bridge.LastError;
-        if (!this.config.BridgeEnabled)
-        {
-            ImGui.TextColored(Waiting, "Off. Nothing is being drawn.");
-        }
-        else if (error != null)
+        if (error != null)
         {
             ImGui.TextColored(Bad, $"Not listening: {error}");
             ImGui.TextWrapped(
@@ -83,14 +76,6 @@ internal sealed class ConfigWindow : Window
         }
 
         ImGui.Spacing();
-
-        var enabled = this.config.BridgeEnabled;
-        if (ImGui.Checkbox("Accept connections from the app", ref enabled))
-        {
-            this.config.BridgeEnabled = enabled;
-            this.config.Save();
-            this.bridge.Restart();
-        }
 
         ImGui.SetNextItemWidth(120);
         ImGui.InputInt("Port", ref this.pendingPort);

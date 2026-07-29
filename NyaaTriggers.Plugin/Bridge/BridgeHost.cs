@@ -92,10 +92,6 @@ internal sealed class BridgeHost : IDisposable
     internal void Start()
     {
         this.Stop();
-        if (!this.config.BridgeEnabled)
-        {
-            return;
-        }
 
         // The callback needs to know which server it came from, so a late
         // callback from one we already disposed can be ignored.

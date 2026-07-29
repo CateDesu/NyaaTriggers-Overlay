@@ -13,11 +13,9 @@ internal sealed class Configuration : IPluginConfiguration
 
     // ── link ──────────────────────────────────────────────────────────────
     /// <summary>Loopback port the desktop app connects to. Not exposed off the
-    /// machine: the listener binds 127.0.0.1 and ::1 only.</summary>
+    /// machine: the listener binds 127.0.0.1 and ::1 only. As a companion
+    /// plugin it always listens; there is no off switch.</summary>
     public int Port { get; set; } = 27080;
-
-    /// <summary>Serve the link at all. Off means the plugin is inert.</summary>
-    public bool BridgeEnabled { get; set; } = true;
 
     // ── what to draw ──────────────────────────────────────────────────────
     public bool ShowTimeline { get; set; } = true;
