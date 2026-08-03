@@ -38,6 +38,8 @@ internal sealed class TimelineWindow : OverlayWindow
         set => this.Config.TimelineSize = value;
     }
 
+    protected override float TextScale => this.Config.TimelineTextScale;
+
     protected override void DrawContent()
     {
         var window = Math.Max(this.Config.TimelineWindow, 1.0f);
@@ -83,7 +85,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.BarHeight * Math.Clamp(this.Config.TextScale, 0.5f, 3.0f);
+        var height = this.Config.BarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
 
         // Depletes toward zero as the cue arrives, so the bar reads as time
         // left rather than time elapsed.

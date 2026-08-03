@@ -188,10 +188,18 @@ internal sealed class ConfigWindow : Window
         // Every slider applies live but saves only when the drag ends: they
         // report a change every frame while held, and writing the config file
         // at frame rate would be absurd.
-        var scale = this.config.TextScale;
-        if (ImGui.SliderFloat("Text size", ref scale, 0.5f, 3.0f, "%.2fx"))
+        var barScale = this.config.TimelineTextScale;
+        if (ImGui.SliderFloat("Bar text size", ref barScale, 0.5f, 3.0f, "%.2fx"))
         {
-            this.config.TextScale = scale;
+            this.config.TimelineTextScale = barScale;
+        }
+
+        this.SaveIfDragEnded();
+
+        var alertScale = this.config.AlertsTextScale;
+        if (ImGui.SliderFloat("Alert text size", ref alertScale, 0.5f, 3.0f, "%.2fx"))
+        {
+            this.config.AlertsTextScale = alertScale;
         }
 
         this.SaveIfDragEnded();

@@ -37,7 +37,12 @@ internal sealed class Configuration : IPluginConfiguration
     public Vector2 AlertsSize { get; set; } = new(420, 160);
 
     // ── appearance ────────────────────────────────────────────────────────
-    public float TextScale { get; set; } = 1.0f;
+    /// <summary>Text scale inside the timeline box: the bar labels and their
+    /// countdowns. Bar row heights scale with it so the text stays inside.</summary>
+    public float TimelineTextScale { get; set; } = 1.0f;
+
+    /// <summary>Text scale inside the alerts box.</summary>
+    public float AlertsTextScale { get; set; } = 1.0f;
 
     /// <summary>Backdrop alpha behind each box's content: 0 = invisible (the
     /// raid-night default; the boxes float bare text/bars over the game), up
@@ -83,7 +88,8 @@ internal sealed class Configuration : IPluginConfiguration
     public void ResetAppearance()
     {
         var fresh = new Configuration();
-        TextScale = fresh.TextScale;
+        TimelineTextScale = fresh.TimelineTextScale;
+        AlertsTextScale = fresh.AlertsTextScale;
         BgOpacity = fresh.BgOpacity;
         BarHeight = fresh.BarHeight;
         TimelineWindow = fresh.TimelineWindow;

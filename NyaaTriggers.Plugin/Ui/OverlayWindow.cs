@@ -55,6 +55,10 @@ internal abstract class OverlayWindow : Window
 
     protected abstract Vector2 StoredSize { get; set; }
 
+    /// <summary>Text scale for this box, so the timeline bars and the alerts
+    /// are sized independently in settings.</summary>
+    protected abstract float TextScale { get; }
+
     public override void PreDraw()
     {
         var locked = this.Config.Locked;
@@ -81,7 +85,7 @@ internal abstract class OverlayWindow : Window
 
     public override void Draw()
     {
-        var scale = Math.Clamp(this.Config.TextScale, 0.5f, 3.0f);
+        var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
         ImGui.SetWindowFontScale(scale);
         try
         {

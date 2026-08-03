@@ -39,6 +39,8 @@ internal sealed class AlertsWindow : OverlayWindow
         set => this.Config.AlertsSize = value;
     }
 
+    protected override float TextScale => this.Config.AlertsTextScale;
+
     protected override void DrawContent()
     {
         var alerts = this.bridge.Alerts;
