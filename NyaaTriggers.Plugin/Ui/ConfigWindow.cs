@@ -12,6 +12,12 @@ internal sealed class ConfigWindow : Window
     private static readonly Vector4 Waiting = new(0.85f, 0.75f, 0.40f, 1.0f);
     private static readonly Vector4 Bad = new(0.90f, 0.40f, 0.40f, 1.0f);
 
+    private static readonly string[] EffectNames = { "None", "Shadow", "Outline" };
+    private static readonly string[] FillNames = { "Deplete (time left)", "Fill (time elapsed)" };
+    private static readonly string[] CountdownNames = { "Hidden", "Whole seconds", "Tenths" };
+    private static readonly string[] OrderNames = { "Newest at top", "Oldest at top" };
+    private static readonly string[] AlignNames = { "Left", "Center", "Right" };
+
     private readonly Configuration config;
     private readonly BridgeHost bridge;
     private readonly PluginUi ui;
@@ -28,7 +34,7 @@ internal sealed class ConfigWindow : Window
         this.ui = ui;
         this.pendingPort = config.Port;
 
-        this.Size = new Vector2(420, 560);
+        this.Size = new Vector2(460, 640);
         this.SizeCondition = ImGuiCond.FirstUseEver;
         this.SizeConstraints = new WindowSizeConstraints
         {
@@ -45,15 +51,41 @@ internal sealed class ConfigWindow : Window
 
     public override void Draw()
     {
-        this.DrawLink();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        this.DrawWindows();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        this.DrawAppearance();
+        if (ImGui.CollapsingHeader("Link", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            this.DrawLink();
+            ImGui.Spacing();
+        }
+
+        if (ImGui.CollapsingHeader("Boxes", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            this.DrawWindows();
+            ImGui.Spacing();
+        }
+
+        if (ImGui.CollapsingHeader("Timeline bars"))
+        {
+            this.DrawTimeline();
+            ImGui.Spacing();
+        }
+
+        if (ImGui.CollapsingHeader("Alerts"))
+        {
+            this.DrawAlerts();
+            ImGui.Spacing();
+        }
+
+        if (ImGui.CollapsingHeader("Text"))
+        {
+            this.DrawText();
+            ImGui.Spacing();
+        }
+
+        if (ImGui.CollapsingHeader("Colors"))
+        {
+            this.DrawColors();
+            ImGui.Spacing();
+        }
     }
 
     private void DrawLink()
@@ -114,9 +146,6 @@ internal sealed class ConfigWindow : Window
 
     private void DrawWindows()
     {
-        ImGui.TextUnformatted("What to draw");
-        ImGui.Spacing();
-
         var timeline = this.config.ShowTimeline;
         if (ImGui.Checkbox("Timeline bars", ref timeline))
         {
@@ -168,38 +197,34 @@ internal sealed class ConfigWindow : Window
             ImGui.SameLine();
             ImGui.TextColored(Waiting, "Hidden outside duties.");
         }
-    }
 
-    private void DrawAppearance()
-    {
-        ImGui.TextUnformatted("Appearance");
         ImGui.Spacing();
 
         // Backdrop behind each box's content, 0 = invisible. Stored 0..1 but
         // shown as a percent (SliderFloat formats the raw value).
-        var bgPct = this.config.BgOpacity * 100.0f;
-        if (ImGui.SliderFloat("Background", ref bgPct, 0.0f, 100.0f, "%.0f%%"))
+        var timelineBg = this.config.TimelineBgOpacity * 100.0f;
+        if (ImGui.SliderFloat("Timeline background", ref timelineBg, 0.0f, 100.0f, "%.0f%%"))
         {
-            this.config.BgOpacity = bgPct / 100.0f;
+            this.config.TimelineBgOpacity = timelineBg / 100.0f;
         }
 
         this.SaveIfDragEnded();
 
-        // Every slider applies live but saves only when the drag ends: they
-        // report a change every frame while held, and writing the config file
-        // at frame rate would be absurd.
+        var alertsBg = this.config.AlertsBgOpacity * 100.0f;
+        if (ImGui.SliderFloat("Alerts background", ref alertsBg, 0.0f, 100.0f, "%.0f%%"))
+        {
+            this.config.AlertsBgOpacity = alertsBg / 100.0f;
+        }
+
+        this.SaveIfDragEnded();
+    }
+
+    private void DrawTimeline()
+    {
         var barScale = this.config.TimelineTextScale;
         if (ImGui.SliderFloat("Bar text size", ref barScale, 0.5f, 3.0f, "%.2fx"))
         {
             this.config.TimelineTextScale = barScale;
-        }
-
-        this.SaveIfDragEnded();
-
-        var alertScale = this.config.AlertsTextScale;
-        if (ImGui.SliderFloat("Alert text size", ref alertScale, 0.5f, 3.0f, "%.2fx"))
-        {
-            this.config.AlertsTextScale = alertScale;
         }
 
         this.SaveIfDragEnded();
@@ -211,6 +236,75 @@ internal sealed class ConfigWindow : Window
         }
 
         this.SaveIfDragEnded();
+
+        var spacing = this.config.BarSpacing;
+        if (ImGui.SliderFloat("Bar spacing", ref spacing, 0.0f, 16.0f, "%.0f px"))
+        {
+            this.config.BarSpacing = spacing;
+        }
+
+        this.SaveIfDragEnded();
+
+        var rounding = this.config.BarRounding;
+        if (ImGui.SliderFloat("Corner rounding", ref rounding, 0.0f, 12.0f, "%.0f px"))
+        {
+            this.config.BarRounding = rounding;
+        }
+
+        this.SaveIfDragEnded();
+
+        var border = this.config.BarBorderThickness;
+        if (ImGui.SliderFloat("Border thickness", ref border, 0.0f, 4.0f, "%.0f px"))
+        {
+            this.config.BarBorderThickness = border;
+        }
+
+        this.SaveIfDragEnded();
+
+        var track = this.config.BarTrackOpacity * 100.0f;
+        if (ImGui.SliderFloat("Track opacity", ref track, 0.0f, 100.0f, "%.0f%%"))
+        {
+            this.config.BarTrackOpacity = track / 100.0f;
+        }
+
+        this.SaveIfDragEnded();
+        ImGui.TextDisabled("The faint full-length bar under the fill.");
+
+        this.Combo("Fill direction", FillNames, () => this.config.BarFill, v => this.config.BarFill = v);
+
+        var rtl = this.config.BarRightToLeft;
+        if (ImGui.Checkbox("Anchor fill to the right", ref rtl))
+        {
+            this.config.BarRightToLeft = rtl;
+            this.config.Save();
+        }
+
+        this.Combo("Bar text alignment", AlignNames, () => this.config.BarTextAlign, v => this.config.BarTextAlign = v);
+
+        this.Combo("Countdown", CountdownNames, () => this.config.Countdown, v => this.config.Countdown = v);
+
+        var split = this.config.CountdownSplit;
+        if (ImGui.Checkbox("Countdown on the right edge", ref split))
+        {
+            this.config.CountdownSplit = split;
+            this.config.Save();
+        }
+
+        var imminent = this.config.ImminentSeconds;
+        if (ImGui.SliderFloat("Imminent at", ref imminent, 0.0f, 15.0f, "%.0f s"))
+        {
+            this.config.ImminentSeconds = imminent;
+        }
+
+        this.SaveIfDragEnded();
+        ImGui.TextDisabled("Bars this close to firing switch to the imminent colour.");
+
+        var pulse = this.config.ImminentPulse;
+        if (ImGui.Checkbox("Pulse imminent bars", ref pulse))
+        {
+            this.config.ImminentPulse = pulse;
+            this.config.Save();
+        }
 
         var window = this.config.TimelineWindow;
         if (ImGui.SliderFloat("Look ahead", ref window, 5.0f, 120.0f, "%.0f s"))
@@ -227,6 +321,17 @@ internal sealed class ConfigWindow : Window
         }
 
         this.SaveIfDragEnded();
+    }
+
+    private void DrawAlerts()
+    {
+        var alertScale = this.config.AlertsTextScale;
+        if (ImGui.SliderFloat("Alert text size", ref alertScale, 0.5f, 3.0f, "%.2fx"))
+        {
+            this.config.AlertsTextScale = alertScale;
+        }
+
+        this.SaveIfDragEnded();
 
         var seconds = this.config.AlertSeconds;
         if (ImGui.SliderFloat("Alert time", ref seconds, 0.5f, 15.0f, "%.1f s"))
@@ -236,10 +341,59 @@ internal sealed class ConfigWindow : Window
 
         this.SaveIfDragEnded();
 
+        var visible = this.config.AlertsMaxVisible;
+        if (ImGui.SliderInt("Max visible", ref visible, 1, 8))
+        {
+            this.config.AlertsMaxVisible = visible;
+        }
+
+        this.SaveIfDragEnded();
+
+        this.Combo("Stack order", OrderNames, () => this.config.AlertOrder, v => this.config.AlertOrder = v);
+
+        this.Combo("Text alignment", AlignNames, () => this.config.AlertsAlign, v => this.config.AlertsAlign = v);
+
+        var animate = this.config.AlertsAnimate;
+        if (ImGui.Checkbox("Fade in and out", ref animate))
+        {
+            this.config.AlertsAnimate = animate;
+            this.config.Save();
+        }
+    }
+
+    private void DrawText()
+    {
+        var highQuality = this.config.HighQualityText;
+        if (ImGui.Checkbox("High quality text", ref highQuality))
+        {
+            this.config.HighQualityText = highQuality;
+            this.config.Save();
+        }
+
+        ImGui.TextDisabled(
+            "Rasterizes text at its real size instead of stretching it. " +
+            "Turn off if text ever looks wrong.");
+
         ImGui.Spacing();
 
+        this.Combo("Text effect", EffectNames, () => this.config.TextEffect, v => this.config.TextEffect = v);
+
+        var thickness = this.config.OutlineThickness;
+        if (ImGui.SliderInt("Effect thickness", ref thickness, 0, 4))
+        {
+            this.config.OutlineThickness = thickness;
+        }
+
+        this.SaveIfDragEnded();
+
+        this.ColorRow("Effect color", () => this.config.ColorOutline, v => this.config.ColorOutline = v);
+    }
+
+    private void DrawColors()
+    {
         this.ColorRow("Bar", () => this.config.ColorBar, v => this.config.ColorBar = v);
         this.ColorRow("Bar text", () => this.config.ColorBarText, v => this.config.ColorBarText = v);
+        this.ColorRow("Bar border", () => this.config.ColorBarBorder, v => this.config.ColorBarBorder = v);
         this.ColorRow("Imminent", () => this.config.ColorImminent, v => this.config.ColorImminent = v);
         this.ColorRow("Info", () => this.config.ColorInfo, v => this.config.ColorInfo = v);
         this.ColorRow("Alert", () => this.config.ColorAlert, v => this.config.ColorAlert = v);
@@ -249,6 +403,17 @@ internal sealed class ConfigWindow : Window
         if (ImGui.Button("Reset appearance"))
         {
             this.config.ResetAppearance();
+            this.config.Save();
+        }
+    }
+
+    private void Combo<T>(string label, string[] names, Func<T> get, Action<T> set)
+        where T : struct, Enum
+    {
+        var index = Convert.ToInt32(get());
+        if (ImGui.Combo(label, ref index, names, names.Length))
+        {
+            set((T)Enum.ToObject(typeof(T), index));
             this.config.Save();
         }
     }

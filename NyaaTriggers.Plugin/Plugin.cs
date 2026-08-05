@@ -12,6 +12,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly Configuration config;
     private readonly BridgeHost bridge;
+    private readonly ScaledFonts fonts;
     private readonly PluginUi ui;
 
     public Plugin(IDalamudPluginInterface pluginInterface)
@@ -19,8 +20,15 @@ public sealed class Plugin : IDalamudPlugin
         Services.Initialize(pluginInterface);
 
         this.config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        if (this.config.Version < 2)
+        {
+            this.config.MigrateFromV1();
+            this.config.Save();
+        }
+
         this.bridge = new BridgeHost(this.config);
-        this.ui = new PluginUi(this.config, this.bridge);
+        this.fonts = new ScaledFonts();
+        this.ui = new PluginUi(this.config, this.bridge, this.fonts);
 
         Services.Commands.AddHandler(CommandName, new CommandInfo(this.OnCommand)
         {

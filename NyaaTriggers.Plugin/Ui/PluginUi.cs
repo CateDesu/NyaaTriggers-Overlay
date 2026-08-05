@@ -12,18 +12,20 @@ internal sealed class PluginUi : IDisposable
 {
     private readonly Configuration config;
     private readonly BridgeHost bridge;
+    private readonly ScaledFonts fonts;
     private readonly WindowSystem windows = new("NyaaTriggers");
     private readonly TimelineWindow timeline;
     private readonly AlertsWindow alerts;
     private readonly ConfigWindow configWindow;
 
-    internal PluginUi(Configuration config, BridgeHost bridge)
+    internal PluginUi(Configuration config, BridgeHost bridge, ScaledFonts fonts)
     {
         this.config = config;
         this.bridge = bridge;
+        this.fonts = fonts;
 
-        this.timeline = new TimelineWindow(config, bridge);
-        this.alerts = new AlertsWindow(config, bridge);
+        this.timeline = new TimelineWindow(config, bridge, fonts);
+        this.alerts = new AlertsWindow(config, bridge, fonts);
         this.configWindow = new ConfigWindow(config, bridge, this);
 
         this.windows.AddWindow(this.timeline);
@@ -90,5 +92,6 @@ internal sealed class PluginUi : IDisposable
     public void Dispose()
     {
         this.windows.RemoveAllWindows();
+        this.fonts.Dispose();
     }
 }
