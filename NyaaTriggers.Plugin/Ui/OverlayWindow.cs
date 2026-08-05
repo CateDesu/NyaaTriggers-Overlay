@@ -144,4 +144,26 @@ internal abstract class OverlayWindow : Window
     /// <summary>Fade a colour's alpha, for alerts on their way out.</summary>
     protected static Vector4 WithAlpha(Vector4 rgba, float alpha)
         => new(rgba.X, rgba.Y, rgba.Z, rgba.W * Math.Clamp(alpha, 0.0f, 1.0f));
+
+    /// <summary>Draw text with a dark outline. Overlay text floats over the game
+    /// with little or no backdrop, and unoutlined text washes out over bright
+    /// arenas; the outline is what keeps a callout readable mid-pull.</summary>
+    protected static void AddOutlinedText(ImDrawListPtr drawList, Vector2 pos, Vector4 color, string text)
+    {
+        var outline = ImGui.GetColorU32(new Vector4(0.0f, 0.0f, 0.0f, 0.9f * Math.Clamp(color.W, 0.0f, 1.0f)));
+        for (var dx = -1; dx <= 1; dx++)
+        {
+            for (var dy = -1; dy <= 1; dy++)
+            {
+                if (dx == 0 && dy == 0)
+                {
+                    continue;
+                }
+
+                drawList.AddText(pos + new Vector2(dx, dy), outline, text);
+            }
+        }
+
+        drawList.AddText(pos, ToColor(color), text);
+    }
 }

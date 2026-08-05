@@ -104,7 +104,7 @@ internal sealed class TimelineWindow : OverlayWindow
         drawList.AddRectFilled(
             origin,
             origin + new Vector2(width, height),
-            ToColor(WithAlpha(fill, 0.25f)),
+            ToColor(WithAlpha(fill, 0.5f)),
             3.0f);
         drawList.AddRectFilled(
             origin,
@@ -114,9 +114,10 @@ internal sealed class TimelineWindow : OverlayWindow
 
         var text = $"{label}  {remaining.ToString("0.0", CultureInfo.InvariantCulture)}";
         var textSize = ImGui.CalcTextSize(text);
-        drawList.AddText(
+        AddOutlinedText(
+            drawList,
             origin + new Vector2(6.0f, (height - textSize.Y) * 0.5f),
-            ToColor(this.Config.ColorBarText),
+            this.Config.ColorBarText,
             text);
 
         // Reserve the row so the next bar lands underneath it: the bars are

@@ -79,6 +79,18 @@ internal sealed class AlertsWindow : OverlayWindow
     private void DrawLine(string text, Vector4 color, float alpha)
     {
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
+        var pos = ImGui.GetCursorPos();
+
+        // Shadow pass first (same wrap, offset by a pixel): the text floats
+        // over the game with little or no backdrop and washes out without it.
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.0f, 0.0f, 0.0f, 0.9f * alpha));
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + width);
+        ImGui.SetCursorPos(pos + new Vector2(1.0f, 1.0f));
+        ImGui.TextUnformatted(text);
+        ImGui.PopTextWrapPos();
+        ImGui.PopStyleColor();
+
+        ImGui.SetCursorPos(pos);
         ImGui.PushStyleColor(ImGuiCol.Text, WithAlpha(color, alpha));
         ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + width);
         try
