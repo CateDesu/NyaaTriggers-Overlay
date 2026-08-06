@@ -19,11 +19,18 @@ namespace NyaaTriggers.Plugin.Ui;
 /// </summary>
 internal sealed class ScaledFonts : IDisposable
 {
-    /// <summary>Roughly 12% apart, so the residual bitmap scaling between a
-    /// bucket and the requested size stays under about 6%.</summary>
+    /// <summary>1 px apart where scaled-up text actually lands, widening to
+    /// about 4% a step at the top, so the residual bitmap scaling between a
+    /// bucket and the requested size stays under about 4%. (At the smallest
+    /// sizes a 1 px step is proportionally larger, but a 1 px miss on an 8 px
+    /// font is invisible.) Shared by every overlay window, so the dps meter,
+    /// the timeline and the alerts all sharpen from the same list.</summary>
     private static readonly float[] Buckets =
     {
-        8, 10, 12, 14, 16, 18, 20, 23, 26, 29, 33, 37, 42, 48, 54, 61, 69, 78, 88, 100,
+        8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+        28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76,
+        79, 82, 85, 88, 91, 94, 97, 100, 103, 107, 111, 115, 119, 123, 127, 131, 135, 139, 143,
     };
 
     private readonly IFontAtlas atlas;

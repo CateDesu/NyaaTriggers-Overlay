@@ -17,6 +17,7 @@ internal sealed class ConfigWindow : Window
     private static readonly string[] CountdownNames = { "Hidden", "Whole seconds", "Tenths" };
     private static readonly string[] OrderNames = { "Newest at top", "Oldest at top" };
     private static readonly string[] AlignNames = { "Left", "Center", "Right" };
+    private static readonly string[] DpsStyleNames = { "Bars", "Horizoverlay", "Kagerou" };
 
     private readonly Configuration config;
     private readonly BridgeHost bridge;
@@ -159,6 +160,34 @@ internal sealed class ConfigWindow : Window
             this.config.ShowAlerts = alerts;
             this.config.Save();
         }
+
+        var dps = this.config.ShowDps;
+        if (ImGui.Checkbox("DPS meter", ref dps))
+        {
+            this.config.ShowDps = dps;
+            this.config.Save();
+        }
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(160);
+        this.Combo("DPS style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
+
+        var dpsScale = this.config.DpsTextScale;
+        if (ImGui.SliderFloat("DPS text size", ref dpsScale, 0.5f, 3.0f, "%.2fx"))
+        {
+            this.config.DpsTextScale = dpsScale;
+        }
+
+        this.SaveIfDragEnded();
+
+        // Stored 0..1 but shown as a percent, like the other box backdrops.
+        var dpsBg = this.config.DpsBgOpacity * 100.0f;
+        if (ImGui.SliderFloat("DPS background", ref dpsBg, 0.0f, 100.0f, "%.0f%%"))
+        {
+            this.config.DpsBgOpacity = dpsBg / 100.0f;
+        }
+
+        this.SaveIfDragEnded();
 
         var onlyInDuty = this.config.OnlyInDuty;
         if (ImGui.Checkbox("Only inside duties", ref onlyInDuty))

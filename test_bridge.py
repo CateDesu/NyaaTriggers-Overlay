@@ -6,6 +6,7 @@ timeline that counts down, and callouts at fixed points. Lets the in-game
 drawing be checked before the app knows anything about the plugin.
 
     python test_bridge.py [--port 27080] [--speed 1.0]
+    python test_bridge.py --dps          fake encounter for the DPS meter instead
 
 Needs the `websockets` package (the app itself uses Qt's client instead; this
 is a standalone tool, not part of the app).
@@ -17,6 +18,7 @@ ticks, so a fast-forwarded clock makes the bars step rather than glide. Above
 import argparse
 import asyncio
 import json
+import random
 import sys
 
 try:
@@ -53,29 +55,51 @@ CALLOUTS = [
     (39.0, "Soak your tower", "alert"),
 ]
 
+# (name, job, base encdps) - the same shape the app's meter rows produce,
+# already close to sorted; each frame jitters and re-sorts them.
+PARTY = [
+    ("Alphinaud L", "SGE", 10234.5),
+    ("Beta Tester", "DRG", 9876.0),
+    ("Cid Garlond", "MCH", 9450.0),
+    ("Dulia Chai", "WHM", 9012.0),
+    ("Estinien W", "DRG", 8780.0),
+    ("Five Heads", "BLM", 8540.0),
+    ("G'raha Tia", "RDM", 8100.0),
+    ("Hythlodaeus", "PLD", 7600.0),
+]
+
 TICK_SECONDS = 0.25
+
+# The app's meter cadence: one dps frame per second while the encounter runs.
+DPS_SECONDS = 1.0
+DPS_FRAMES = 6
+
+
+async def handshake(ws) -> None:
+    """Read the hello and refuse to drive a plugin we do not understand."""
+    try:
+        raw = await asyncio.wait_for(ws.recv(), timeout=HELLO_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise SystemExit(
+            f"connected, but no hello within {HELLO_TIMEOUT:g}s. "
+            "Something is listening on this port, but it is not the plugin.")
+
+    hello = json.loads(raw)
+    print(f"plugin says: {hello}")
+
+    # Gate rather than warn: driving a plugin whose wire format we do not
+    # understand produces confusing in-game behaviour, not a clean failure.
+    if hello.get("protocol") != PROTOCOL_VERSION:
+        raise SystemExit(
+            f"plugin speaks protocol {hello.get('protocol')!r}, this tool speaks "
+            f"{PROTOCOL_VERSION}. Update whichever is older.")
 
 
 async def run(port: int, speed: float) -> None:
     url = f"ws://127.0.0.1:{port}/"
     print(f"connecting to {url}")
     async with connect(url) as ws:
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=HELLO_TIMEOUT)
-        except asyncio.TimeoutError:
-            raise SystemExit(
-                f"connected, but no hello within {HELLO_TIMEOUT:g}s. "
-                "Something is listening on this port, but it is not the plugin.")
-
-        hello = json.loads(raw)
-        print(f"plugin says: {hello}")
-
-        # Gate rather than warn: driving a plugin whose wire format we do not
-        # understand produces confusing in-game behaviour, not a clean failure.
-        if hello.get("protocol") != PROTOCOL_VERSION:
-            raise SystemExit(
-                f"plugin speaks protocol {hello.get('protocol')!r}, this tool speaks "
-                f"{PROTOCOL_VERSION}. Update whichever is older.")
+        await handshake(ws)
 
         await ws.send(json.dumps({"c": "timeline", "v": [list(e) for e in SCHEDULE]}))
         print(f"sent {len(SCHEDULE)} timeline entries; running the clock "
@@ -101,6 +125,44 @@ async def run(port: int, speed: float) -> None:
         print("pull over, cleared")
 
 
+async def run_dps(port: int) -> None:
+    url = f"ws://127.0.0.1:{port}/"
+    print(f"connecting to {url}")
+    async with connect(url) as ws:
+        await handshake(ws)
+
+        # Seeded so the demo looks the same every run.
+        rng = random.Random(42)
+        print(f"sending {DPS_FRAMES} dps frames, one per second (ctrl-c to stop)")
+        for frame in range(DPS_FRAMES):
+            rows = []
+            for name, job, base in PARTY:
+                dps = round(base * rng.uniform(0.95, 1.05), 1)
+                rows.append([name, job, dps, 0.0])
+
+            rows.sort(key=lambda row: row[2], reverse=True)
+            total = sum(row[2] for row in rows)
+            for row in rows:
+                row[3] = round(row[2] / total * 100.0, 1)
+
+            await ws.send(json.dumps({
+                "c": "dps",
+                "show": True,
+                "enc": {
+                    "t": "Everkeep",
+                    "d": f"03:{12 + frame:02d}",
+                    "dps": round(total, 1),
+                },
+                "rows": rows,
+            }))
+            print(f"  03:{12 + frame:02d}  party {total:,.1f} "
+                  f"(top: {rows[0][0]} {rows[0][2]:,.1f})")
+            await asyncio.sleep(DPS_SECONDS)
+
+        await ws.send(json.dumps({"c": "dps", "show": False}))
+        print("encounter over, meter hidden")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=27080,
@@ -109,10 +171,13 @@ def main() -> None:
                         help="clock multiplier, e.g. 4 to run the pull fast. "
                              "Above 1x the bars step instead of gliding, because "
                              "the plugin interpolates the clock in real time")
+    parser.add_argument("--dps", action="store_true",
+                        help="feed the DPS meter a fake encounter instead of "
+                             "the timeline demo")
     args = parser.parse_args()
 
     try:
-        asyncio.run(run(args.port, args.speed))
+        asyncio.run(run_dps(args.port) if args.dps else run(args.port, args.speed))
     except KeyboardInterrupt:
         print("\nstopped")
     except ConnectionRefusedError:

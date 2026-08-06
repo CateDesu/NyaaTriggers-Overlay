@@ -7,7 +7,8 @@
 # Setup (one-time): repo → Settings → Secrets and variables → Actions →
 # "New repository secret" → Name = DISCORD_WEBHOOK, Value = your Discord
 # webhook URL (https://discord.com/api/webhooks/…). No other config needed.
-# Use the same webhook as CateDesu/NyaaTriggers to post both repos to one channel.
+# Both repos point the same NyaaTriggers webhook at one channel; the username
+# below is what tells this repo's posts apart from the app's.
 name: Discord notify
 
 on:
@@ -38,4 +39,4 @@ jobs:
 
           ${COMMIT_MSG}
           ${COMMIT_URL}" '{content:$c, username:"NyaaTriggers Overlay"}' \
-            | curl -sSf -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK" || true
+            | curl -sS -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK"

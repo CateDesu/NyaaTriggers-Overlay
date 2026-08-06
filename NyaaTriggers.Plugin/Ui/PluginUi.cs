@@ -16,6 +16,7 @@ internal sealed class PluginUi : IDisposable
     private readonly WindowSystem windows = new("NyaaTriggers");
     private readonly TimelineWindow timeline;
     private readonly AlertsWindow alerts;
+    private readonly DpsWindow dps;
     private readonly ConfigWindow configWindow;
 
     internal PluginUi(Configuration config, BridgeHost bridge, ScaledFonts fonts)
@@ -26,10 +27,12 @@ internal sealed class PluginUi : IDisposable
 
         this.timeline = new TimelineWindow(config, bridge, fonts);
         this.alerts = new AlertsWindow(config, bridge, fonts);
+        this.dps = new DpsWindow(config, bridge, fonts);
         this.configWindow = new ConfigWindow(config, bridge, this);
 
         this.windows.AddWindow(this.timeline);
         this.windows.AddWindow(this.alerts);
+        this.windows.AddWindow(this.dps);
         this.windows.AddWindow(this.configWindow);
     }
 
@@ -58,6 +61,12 @@ internal sealed class PluginUi : IDisposable
         this.OverlayVisible = this.ShouldShowOverlay();
         this.timeline.IsOpen = this.OverlayVisible && this.config.ShowTimeline;
         this.alerts.IsOpen = this.OverlayVisible && this.config.ShowAlerts;
+
+        // The meter only exists while an encounter runs; unlocked keeps it up
+        // anyway, since that is when the box is being positioned.
+        var dps = this.bridge.Dps;
+        this.dps.IsOpen = this.OverlayVisible && this.config.ShowDps &&
+            (!this.config.Locked || (dps.Show && dps.Rows.Count > 0));
 
         this.windows.Draw();
     }

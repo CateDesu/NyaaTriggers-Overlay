@@ -12,6 +12,15 @@ internal enum TextEffectStyle
     Outline,
 }
 
+/// <summary>How the dps meter draws its rows: timeline-style share bars,
+/// horizoverlay's solid job-coloured bars, or kagerou's underlined text.</summary>
+internal enum DpsMeterStyle
+{
+    Bars,
+    Horizoverlay,
+    Kagerou,
+}
+
 /// <summary>Whether a bar shrinks toward empty as the cue arrives or grows
 /// toward full as time elapses.</summary>
 internal enum BarFillMode
@@ -59,6 +68,10 @@ internal sealed class Configuration : IPluginConfiguration
     // ── what to draw ──────────────────────────────────────────────────────
     public bool ShowTimeline { get; set; } = true;
     public bool ShowAlerts { get; set; } = true;
+    public bool ShowDps { get; set; } = true;
+
+    /// <summary>How the dps meter draws its rows.</summary>
+    public DpsMeterStyle DpsStyle { get; set; } = DpsMeterStyle.Bars;
 
     /// <summary>Locked: chromeless and click-through, i.e. the raid-night state.
     /// Unlocked shows a frame and sample content so the boxes can be placed.</summary>
@@ -74,6 +87,8 @@ internal sealed class Configuration : IPluginConfiguration
     public Vector2 TimelineSize { get; set; } = new(320, 220);
     public Vector2 AlertsPos { get; set; } = new(80, 440);
     public Vector2 AlertsSize { get; set; } = new(420, 160);
+    public Vector2 DpsPos { get; set; } = new(80, 620);
+    public Vector2 DpsSize { get; set; } = new(320, 240);
 
     // ── text ──────────────────────────────────────────────────────────────
     /// <summary>Text scale inside the timeline box: the bar labels and their
@@ -82,6 +97,9 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>Text scale inside the alerts box.</summary>
     public float AlertsTextScale { get; set; } = 1.0f;
+
+    /// <summary>Text scale inside the dps meter box.</summary>
+    public float DpsTextScale { get; set; } = 1.0f;
 
     /// <summary>Rasterize overlay text at its real pixel size in a private
     /// font atlas instead of stretching the default font's bitmap. This is
@@ -108,6 +126,9 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>Backdrop alpha behind the alerts box's content.</summary>
     public float AlertsBgOpacity { get; set; }
+
+    /// <summary>Backdrop alpha behind the dps meter box's content.</summary>
+    public float DpsBgOpacity { get; set; }
 
     /// <summary>Version 1's single backdrop opacity, split per box in version
     /// 2. Kept only so the migration can read the old value.</summary>
@@ -217,12 +238,15 @@ internal sealed class Configuration : IPluginConfiguration
         var fresh = new Configuration();
         TimelineTextScale = fresh.TimelineTextScale;
         AlertsTextScale = fresh.AlertsTextScale;
+        DpsTextScale = fresh.DpsTextScale;
         HighQualityText = fresh.HighQualityText;
         TextEffect = fresh.TextEffect;
         OutlineThickness = fresh.OutlineThickness;
         ColorOutline = fresh.ColorOutline;
         TimelineBgOpacity = fresh.TimelineBgOpacity;
         AlertsBgOpacity = fresh.AlertsBgOpacity;
+        DpsBgOpacity = fresh.DpsBgOpacity;
+        DpsStyle = fresh.DpsStyle;
         BarHeight = fresh.BarHeight;
         BarSpacing = fresh.BarSpacing;
         BarRounding = fresh.BarRounding;

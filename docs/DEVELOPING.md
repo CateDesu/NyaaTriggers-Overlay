@@ -87,8 +87,16 @@ the app's existing reconnect handling carries over from how it already talks to 
 | `{"c":"tick","t":12.5}` | Fight clock, in timeline seconds. The plugin interpolates from here, so this only has to beat drift, not the frame rate. |
 | `{"c":"timeline","v":[[18.0,"Wing"],[24.5,"Dive"]]}` | Replace the schedule. `[time, label]` pairs in timeline seconds, same shape as the app's `TimelineEngine.upcoming()`. |
 | `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured alert time. |
-| `{"c":"clear"}` | Drop the schedule and any live alerts. Send on zone change and fight end. |
+| `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4]]}` | DPS meter snapshot; see below. |
+| `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and fight end. |
 | `{"c":"ping"}` | Liveness check; answered with `{"ev":"pong"}`. |
+
+`dps` is sent about once a second while an encounter runs. `enc` carries the encounter title, the
+fight duration as `mm:ss` text and the party's combined dps; `rows` is at most eight
+`[name, job, encdps, share]` arrays already sorted by encdps descending, where `job` is the job
+acronym (or `""`) and `share` is the member's damage percentage. `{"c":"dps","show":false}` hides
+the meter, so the app sends it when the encounter ends. The plugin keeps only the latest snapshot;
+there is nothing to acknowledge.
 
 Unknown commands are ignored rather than treated as errors, so a newer app can talk to an older
 plugin.

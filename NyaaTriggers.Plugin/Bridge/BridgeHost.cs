@@ -14,6 +14,23 @@ internal enum Severity
 
 internal readonly record struct TimelineEntry(float Time, string Label);
 
+internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share);
+
+/// <summary>The app's latest dps frame. Replaced whole on every update rather
+/// than mutated, so the UI never reads a half-updated meter.</summary>
+internal sealed class DpsState
+{
+    internal bool Show { get; init; }
+
+    internal string Title { get; init; } = string.Empty;
+
+    internal string Duration { get; init; } = string.Empty;
+
+    internal double EncDps { get; init; }
+
+    internal IReadOnlyList<DpsRow> Rows { get; init; } = Array.Empty<DpsRow>();
+}
+
 internal sealed class ActiveAlert
 {
     internal required string Text { get; init; }
@@ -57,6 +74,10 @@ internal sealed class BridgeHost : IDisposable
     /// and the whole list is walked each frame.</summary>
     private const int MaxTimelineEntries = 256;
 
+    /// <summary>DPS rows kept. The app caps at a full party of eight; more
+    /// would only ever be a bug, and the window walks the list each frame.</summary>
+    private const int MaxDpsRows = 8;
+
     private readonly Configuration config;
     private readonly ConcurrentQueue<string> inbox = new();
     private readonly List<TimelineEntry> timeline = new();
@@ -84,6 +105,8 @@ internal sealed class BridgeHost : IDisposable
     internal IReadOnlyList<TimelineEntry> Timeline => this.timeline;
 
     internal IReadOnlyList<ActiveAlert> Alerts => this.alerts;
+
+    internal DpsState Dps { get; private set; } = new();
 
     internal double Clock => this.clockRunning
         ? this.clockBase + ((Environment.TickCount64 - this.clockStamp) / 1000.0)
@@ -201,6 +224,10 @@ internal sealed class BridgeHost : IDisposable
                 this.ApplyAlert(root);
                 break;
 
+            case "dps":
+                this.ApplyDps(root);
+                break;
+
             case "clear":
                 this.ClearState();
                 break;
@@ -301,10 +328,87 @@ internal sealed class BridgeHost : IDisposable
         });
     }
 
+    private void ApplyDps(JsonElement root)
+    {
+        // The contract always carries "show"; a frame without it is malformed
+        // and ignored like any other bad frame.
+        if (!root.TryGetProperty("show", out var show) ||
+            show.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return;
+        }
+
+        // Encounter over: hide the meter and drop the rows with it.
+        if (show.ValueKind == JsonValueKind.False)
+        {
+            this.Dps = new DpsState();
+            return;
+        }
+
+        var title = string.Empty;
+        var duration = string.Empty;
+        var encDps = 0.0;
+        if (root.TryGetProperty("enc", out var enc) && enc.ValueKind == JsonValueKind.Object)
+        {
+            title = ReadString(enc, "t");
+            duration = ReadString(enc, "d");
+            encDps = ReadDouble(enc, "dps");
+        }
+
+        var rows = new List<DpsRow>();
+        if (root.TryGetProperty("rows", out var rowsElement) &&
+            rowsElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in rowsElement.EnumerateArray())
+            {
+                // [name, job, encdps, share] rows, sorted by encdps desc,
+                // matching what the app's meter already produces.
+                if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
+                {
+                    continue;
+                }
+
+                var name = entry[0];
+                var job = entry[1];
+                var dps = entry[2];
+                var share = entry[3];
+                if (name.ValueKind != JsonValueKind.String ||
+                    job.ValueKind != JsonValueKind.String ||
+                    dps.ValueKind != JsonValueKind.Number ||
+                    share.ValueKind != JsonValueKind.Number)
+                {
+                    continue;
+                }
+
+                rows.Add(new DpsRow(
+                    name.GetString() ?? string.Empty,
+                    job.GetString() ?? string.Empty,
+                    dps.GetDouble(),
+                    share.GetDouble()));
+
+                if (rows.Count >= MaxDpsRows)
+                {
+                    Services.Log.Debug($"dps rows truncated at {MaxDpsRows}");
+                    break;
+                }
+            }
+        }
+
+        this.Dps = new DpsState
+        {
+            Show = true,
+            Title = title,
+            Duration = duration,
+            EncDps = encDps,
+            Rows = rows,
+        };
+    }
+
     internal void ClearState()
     {
         this.timeline.Clear();
         this.alerts.Clear();
+        this.Dps = new DpsState();
         this.clockBase = 0;
         this.clockRunning = false;
     }
@@ -339,6 +443,11 @@ internal sealed class BridgeHost : IDisposable
         => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
             ? value.GetDouble()
             : 0.0;
+
+    private static string ReadString(JsonElement root, string name)
+        => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
 
     public void Dispose() => this.Stop();
 }
