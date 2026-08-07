@@ -238,14 +238,16 @@ internal sealed class WebSocketServer : IDisposable
         {
             client.NoDelay = true;   // callouts are latency-critical and tiny
             // Enable TCP keepalive so a half-open peer (app killed on sleep or a
-            // network change) is detected in tens of seconds, not the OS default
-            // (~2h on Linux). Without this the session slot stays pinned and the
-            // overlay shows stale state until the next outbound send fails.
+            // network change) is detected in about a minute (30s idle, then 3
+            // probes 10s apart), not the OS default (~2h on Linux). Without this
+            // the session slot stays pinned and the overlay shows stale state
+            // until the next outbound send fails.
             try
             {
                 client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
                 client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
                 client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 10);
+                client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
             }
             catch (SocketException)
             {
