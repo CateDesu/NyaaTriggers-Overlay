@@ -133,6 +133,15 @@ internal sealed class BridgeHost : IDisposable
         this.server?.Dispose();
         this.server = null;
         this.ClearState();
+        // Drain anything the old server queued (including a synthesised clear
+        // from its disconnect) so a Restart / port change does not re-apply stale
+        // timeline or dps frames onto the freshly-cleared state next Update.
+        // This lives here, not in ClearState: ClearState also runs for the
+        // "clear" command, and the app sends clear + new timeline back-to-back
+        // on a zone change, so draining there would discard the fresh frames.
+        while (this.inbox.TryDequeue(out _))
+        {
+        }
     }
 
     /// <summary>Socket thread: queue only, never touch the state the UI reads.
@@ -421,12 +430,6 @@ internal sealed class BridgeHost : IDisposable
         this.Dps = new DpsState();
         this.clockBase = 0;
         this.clockRunning = false;
-        // Drain anything the old server queued (including a synthesised clear
-        // from its disconnect) so a Restart / port change does not re-apply stale
-        // timeline or dps frames onto the freshly-cleared state next Update.
-        while (this.inbox.TryDequeue(out _))
-        {
-        }
     }
 
     /// <summary>Sample content for the unlocked state, so an overlay being

@@ -243,7 +243,7 @@ internal sealed class WebSocketServer : IDisposable
             // overlay shows stale state until the next outbound send fails.
             try
             {
-                client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Keepalive, true);
+                client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
                 client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
                 client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 10);
             }
