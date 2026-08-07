@@ -297,6 +297,16 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
+        // Clamp length: the wire cap is 1 MiB, but no callout needs that.
+        // AlertsWindow.WrapLines would otherwise Split(' ') the whole string
+        // every frame for the alert's lifetime, a GC-pressure foot-gun under a
+        // flood of max-length frames.
+        const int MaxAlertTextChars = 4096;
+        if (text.Length > MaxAlertTextChars)
+        {
+            text = text[..MaxAlertTextChars];
+        }
+
         var severity = Severity.Info;
         if (root.TryGetProperty("sev", out var sev) && sev.ValueKind == JsonValueKind.String)
         {
@@ -411,6 +421,12 @@ internal sealed class BridgeHost : IDisposable
         this.Dps = new DpsState();
         this.clockBase = 0;
         this.clockRunning = false;
+        // Drain anything the old server queued (including a synthesised clear
+        // from its disconnect) so a Restart / port change does not re-apply stale
+        // timeline or dps frames onto the freshly-cleared state next Update.
+        while (this.inbox.TryDequeue(out _))
+        {
+        }
     }
 
     /// <summary>Sample content for the unlocked state, so an overlay being
