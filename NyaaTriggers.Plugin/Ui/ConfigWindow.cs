@@ -12,7 +12,7 @@ internal sealed class ConfigWindow : Window
     private static readonly Vector4 Waiting = new(0.85f, 0.75f, 0.40f, 1.0f);
     private static readonly Vector4 Bad = new(0.90f, 0.40f, 0.40f, 1.0f);
 
-    private static readonly string[] EffectNames = { "None", "Shadow", "Outline" };
+    private static readonly string[] EffectNames = { "None", "Outline", "Glow" };
     private static readonly string[] FillNames = { "Deplete (time left)", "Fill (time elapsed)" };
     private static readonly string[] CountdownNames = { "Hidden", "Whole seconds", "Tenths" };
     private static readonly string[] OrderNames = { "Newest at top", "Oldest at top" };
@@ -60,11 +60,11 @@ internal sealed class ConfigWindow : Window
 
         if (ImGui.CollapsingHeader("Boxes", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            this.DrawWindows();
+            this.DrawBoxes();
             ImGui.Spacing();
         }
 
-        if (ImGui.CollapsingHeader("Timeline bars"))
+        if (ImGui.CollapsingHeader("Timeline"))
         {
             this.DrawTimeline();
             ImGui.Spacing();
@@ -76,16 +76,16 @@ internal sealed class ConfigWindow : Window
             ImGui.Spacing();
         }
 
-        if (ImGui.CollapsingHeader("Text"))
+        if (ImGui.CollapsingHeader("DPS meter"))
         {
-            this.DrawText();
+            this.DrawDps();
             ImGui.Spacing();
         }
 
-        if (ImGui.CollapsingHeader("Colors"))
+        if (ImGui.Button("Reset appearance"))
         {
-            this.DrawColors();
-            ImGui.Spacing();
+            this.config.ResetAppearance();
+            this.config.Save();
         }
     }
 
@@ -145,56 +145,12 @@ internal sealed class ConfigWindow : Window
         ImGui.TextDisabled("Loopback only. Nothing is reachable from outside this machine.");
     }
 
-    private void DrawWindows()
+    private void DrawBoxes()
     {
-        var timeline = this.config.ShowTimeline;
-        if (ImGui.Checkbox("Timeline bars", ref timeline))
-        {
-            this.config.ShowTimeline = timeline;
-            this.config.Save();
-        }
-
-        var alerts = this.config.ShowAlerts;
-        if (ImGui.Checkbox("Alert pop-ups", ref alerts))
-        {
-            this.config.ShowAlerts = alerts;
-            this.config.Save();
-        }
-
-        var dps = this.config.ShowDps;
-        if (ImGui.Checkbox("DPS meter", ref dps))
-        {
-            this.config.ShowDps = dps;
-            this.config.Save();
-        }
-
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(160);
-        this.Combo("DPS style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
-
-        var dpsScale = this.config.DpsTextScale;
-        if (ImGui.SliderFloat("DPS text size", ref dpsScale, 0.5f, 3.0f, "%.2fx"))
-        {
-            this.config.DpsTextScale = dpsScale;
-        }
-
-        this.SaveIfDragEnded();
-
-        // Stored 0..1 but shown as a percent, like the other box backdrops.
-        var dpsBg = this.config.DpsBgOpacity * 100.0f;
-        if (ImGui.SliderFloat("DPS background", ref dpsBg, 0.0f, 100.0f, "%.0f%%"))
-        {
-            this.config.DpsBgOpacity = dpsBg / 100.0f;
-        }
-
-        this.SaveIfDragEnded();
-
-        var onlyInDuty = this.config.OnlyInDuty;
-        if (ImGui.Checkbox("Only inside duties", ref onlyInDuty))
-        {
-            this.config.OnlyInDuty = onlyInDuty;
-            this.config.Save();
-        }
+        this.Check("Timeline bars", () => this.config.ShowTimeline, v => this.config.ShowTimeline = v);
+        this.Check("Alert pop-ups", () => this.config.ShowAlerts, v => this.config.ShowAlerts = v);
+        this.Check("DPS meter", () => this.config.ShowDps, v => this.config.ShowDps = v);
+        this.Check("Only inside duties", () => this.config.OnlyInDuty, v => this.config.OnlyInDuty = v);
 
         ImGui.Spacing();
 
@@ -226,212 +182,211 @@ internal sealed class ConfigWindow : Window
             ImGui.SameLine();
             ImGui.TextColored(Waiting, "Hidden outside duties.");
         }
-
-        ImGui.Spacing();
-
-        // Backdrop behind each box's content, 0 = invisible. Stored 0..1 but
-        // shown as a percent (SliderFloat formats the raw value).
-        var timelineBg = this.config.TimelineBgOpacity * 100.0f;
-        if (ImGui.SliderFloat("Timeline background", ref timelineBg, 0.0f, 100.0f, "%.0f%%"))
-        {
-            this.config.TimelineBgOpacity = timelineBg / 100.0f;
-        }
-
-        this.SaveIfDragEnded();
-
-        var alertsBg = this.config.AlertsBgOpacity * 100.0f;
-        if (ImGui.SliderFloat("Alerts background", ref alertsBg, 0.0f, 100.0f, "%.0f%%"))
-        {
-            this.config.AlertsBgOpacity = alertsBg / 100.0f;
-        }
-
-        this.SaveIfDragEnded();
     }
 
     private void DrawTimeline()
     {
-        var barScale = this.config.TimelineTextScale;
-        if (ImGui.SliderFloat("Bar text size", ref barScale, 0.5f, 3.0f, "%.2fx"))
-        {
-            this.config.TimelineTextScale = barScale;
-        }
+        // The same widget labels recur in every box's section; the pushed id
+        // keeps ImGui from folding them into one widget.
+        ImGui.PushID("timeline");
 
-        this.SaveIfDragEnded();
+        this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
+            () => this.config.TimelineTextScale, v => this.config.TimelineTextScale = v);
+        this.PercentSlider("Background",
+            () => this.config.TimelineBgOpacity, v => this.config.TimelineBgOpacity = v);
 
-        var barHeight = this.config.BarHeight;
-        if (ImGui.SliderFloat("Bar height", ref barHeight, 12.0f, 48.0f, "%.0f px"))
-        {
-            this.config.BarHeight = barHeight;
-        }
+        ImGui.Spacing();
 
-        this.SaveIfDragEnded();
-
-        var spacing = this.config.BarSpacing;
-        if (ImGui.SliderFloat("Bar spacing", ref spacing, 0.0f, 16.0f, "%.0f px"))
-        {
-            this.config.BarSpacing = spacing;
-        }
-
-        this.SaveIfDragEnded();
-
-        var rounding = this.config.BarRounding;
-        if (ImGui.SliderFloat("Corner rounding", ref rounding, 0.0f, 12.0f, "%.0f px"))
-        {
-            this.config.BarRounding = rounding;
-        }
-
-        this.SaveIfDragEnded();
-
-        var border = this.config.BarBorderThickness;
-        if (ImGui.SliderFloat("Border thickness", ref border, 0.0f, 4.0f, "%.0f px"))
-        {
-            this.config.BarBorderThickness = border;
-        }
-
-        this.SaveIfDragEnded();
-
-        var track = this.config.BarTrackOpacity * 100.0f;
-        if (ImGui.SliderFloat("Track opacity", ref track, 0.0f, 100.0f, "%.0f%%"))
-        {
-            this.config.BarTrackOpacity = track / 100.0f;
-        }
-
-        this.SaveIfDragEnded();
-        ImGui.TextDisabled("The faint full-length bar under the fill.");
+        this.Slider("Bar height", 12.0f, 48.0f, "%.0f px",
+            () => this.config.TimelineBarHeight, v => this.config.TimelineBarHeight = v);
+        this.Slider("Bar spacing", 0.0f, 16.0f, "%.0f px",
+            () => this.config.TimelineBarSpacing, v => this.config.TimelineBarSpacing = v);
+        this.Slider("Corner rounding", 0.0f, 12.0f, "%.0f px",
+            () => this.config.TimelineBarRounding, v => this.config.TimelineBarRounding = v);
+        this.Slider("Border thickness", 0.0f, 4.0f, "%.0f px",
+            () => this.config.TimelineBarBorderThickness, v => this.config.TimelineBarBorderThickness = v);
+        this.PercentSlider("Track opacity",
+            () => this.config.TimelineBarTrackOpacity, v => this.config.TimelineBarTrackOpacity = v);
+        ImGui.TextDisabled("The full-length slot under the fill.");
 
         this.Combo("Fill direction", FillNames, () => this.config.BarFill, v => this.config.BarFill = v);
+        this.Check("Anchor fill to the right",
+            () => this.config.BarRightToLeft, v => this.config.BarRightToLeft = v);
+        this.Combo("Bar text alignment", AlignNames,
+            () => this.config.BarTextAlign, v => this.config.BarTextAlign = v);
+        this.Combo("Countdown", CountdownNames,
+            () => this.config.Countdown, v => this.config.Countdown = v);
+        this.Check("Countdown on the right edge",
+            () => this.config.CountdownSplit, v => this.config.CountdownSplit = v);
 
-        var rtl = this.config.BarRightToLeft;
-        if (ImGui.Checkbox("Anchor fill to the right", ref rtl))
-        {
-            this.config.BarRightToLeft = rtl;
-            this.config.Save();
-        }
-
-        this.Combo("Bar text alignment", AlignNames, () => this.config.BarTextAlign, v => this.config.BarTextAlign = v);
-
-        this.Combo("Countdown", CountdownNames, () => this.config.Countdown, v => this.config.Countdown = v);
-
-        var split = this.config.CountdownSplit;
-        if (ImGui.Checkbox("Countdown on the right edge", ref split))
-        {
-            this.config.CountdownSplit = split;
-            this.config.Save();
-        }
-
-        var imminent = this.config.ImminentSeconds;
-        if (ImGui.SliderFloat("Imminent at", ref imminent, 0.0f, 15.0f, "%.0f s"))
-        {
-            this.config.ImminentSeconds = imminent;
-        }
-
-        this.SaveIfDragEnded();
+        this.Slider("Imminent at", 0.0f, 15.0f, "%.0f s",
+            () => this.config.ImminentSeconds, v => this.config.ImminentSeconds = v);
         ImGui.TextDisabled("Bars this close to firing switch to the imminent colour.");
+        this.Check("Pulse imminent bars",
+            () => this.config.ImminentPulse, v => this.config.ImminentPulse = v);
 
-        var pulse = this.config.ImminentPulse;
-        if (ImGui.Checkbox("Pulse imminent bars", ref pulse))
-        {
-            this.config.ImminentPulse = pulse;
-            this.config.Save();
-        }
+        this.Slider("Look ahead", 5.0f, 120.0f, "%.0f s",
+            () => this.config.TimelineWindow, v => this.config.TimelineWindow = v);
+        this.SliderInt("Max bars", 1, 12,
+            () => this.config.TimelineRows, v => this.config.TimelineRows = v);
 
-        var window = this.config.TimelineWindow;
-        if (ImGui.SliderFloat("Look ahead", ref window, 5.0f, 120.0f, "%.0f s"))
-        {
-            this.config.TimelineWindow = window;
-        }
+        ImGui.Spacing();
 
-        this.SaveIfDragEnded();
+        this.ColorRow("Bar", () => this.config.TimelineBarColor, v => this.config.TimelineBarColor = v);
+        this.ColorRow("Bar track",
+            () => this.config.TimelineBarTrackColor, v => this.config.TimelineBarTrackColor = v);
+        this.ColorRow("Bar border",
+            () => this.config.TimelineBarBorderColor, v => this.config.TimelineBarBorderColor = v);
+        this.ColorRow("Bar text",
+            () => this.config.TimelineTextColor, v => this.config.TimelineTextColor = v);
+        this.ColorRow("Imminent", () => this.config.ColorImminent, v => this.config.ColorImminent = v);
 
-        var rows = this.config.TimelineRows;
-        if (ImGui.SliderInt("Max bars", ref rows, 1, 12))
-        {
-            this.config.TimelineRows = rows;
-        }
+        ImGui.Spacing();
 
-        this.SaveIfDragEnded();
+        this.EffectGroup(
+            () => this.config.TimelineTextEffect, v => this.config.TimelineTextEffect = v,
+            () => this.config.TimelineEffectThickness, v => this.config.TimelineEffectThickness = v,
+            () => this.config.TimelineEffectColor, v => this.config.TimelineEffectColor = v);
+
+        ImGui.PopID();
     }
 
     private void DrawAlerts()
     {
-        var alertScale = this.config.AlertsTextScale;
-        if (ImGui.SliderFloat("Alert text size", ref alertScale, 0.5f, 3.0f, "%.2fx"))
-        {
-            this.config.AlertsTextScale = alertScale;
-        }
+        ImGui.PushID("alerts");
 
-        this.SaveIfDragEnded();
-
-        var seconds = this.config.AlertSeconds;
-        if (ImGui.SliderFloat("Alert time", ref seconds, 0.5f, 15.0f, "%.1f s"))
-        {
-            this.config.AlertSeconds = seconds;
-        }
-
-        this.SaveIfDragEnded();
-
-        var visible = this.config.AlertsMaxVisible;
-        if (ImGui.SliderInt("Max visible", ref visible, 1, 8))
-        {
-            this.config.AlertsMaxVisible = visible;
-        }
-
-        this.SaveIfDragEnded();
-
-        this.Combo("Stack order", OrderNames, () => this.config.AlertOrder, v => this.config.AlertOrder = v);
-
-        this.Combo("Text alignment", AlignNames, () => this.config.AlertsAlign, v => this.config.AlertsAlign = v);
-
-        var animate = this.config.AlertsAnimate;
-        if (ImGui.Checkbox("Fade in and out", ref animate))
-        {
-            this.config.AlertsAnimate = animate;
-            this.config.Save();
-        }
-    }
-
-    private void DrawText()
-    {
-        var highQuality = this.config.HighQualityText;
-        if (ImGui.Checkbox("High quality text", ref highQuality))
-        {
-            this.config.HighQualityText = highQuality;
-            this.config.Save();
-        }
-
-        ImGui.TextDisabled(
-            "Rasterizes text at its real size instead of stretching it. " +
-            "Turn off if text ever looks wrong.");
+        this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
+            () => this.config.AlertsTextScale, v => this.config.AlertsTextScale = v);
+        this.PercentSlider("Background",
+            () => this.config.AlertsBgOpacity, v => this.config.AlertsBgOpacity = v);
 
         ImGui.Spacing();
 
-        this.Combo("Text effect", EffectNames, () => this.config.TextEffect, v => this.config.TextEffect = v);
+        this.Slider("Alert time", 0.5f, 15.0f, "%.1f s",
+            () => this.config.AlertSeconds, v => this.config.AlertSeconds = v);
+        this.SliderInt("Max visible", 1, 8,
+            () => this.config.AlertsMaxVisible, v => this.config.AlertsMaxVisible = v);
+        this.Combo("Stack order", OrderNames,
+            () => this.config.AlertOrder, v => this.config.AlertOrder = v);
+        this.Combo("Text alignment", AlignNames,
+            () => this.config.AlertsAlign, v => this.config.AlertsAlign = v);
+        this.Check("Fade in and out", () => this.config.AlertsAnimate, v => this.config.AlertsAnimate = v);
 
-        var thickness = this.config.OutlineThickness;
-        if (ImGui.SliderInt("Effect thickness", ref thickness, 0, 4))
-        {
-            this.config.OutlineThickness = thickness;
-        }
+        ImGui.Spacing();
 
-        this.SaveIfDragEnded();
-
-        this.ColorRow("Effect color", () => this.config.ColorOutline, v => this.config.ColorOutline = v);
-    }
-
-    private void DrawColors()
-    {
-        this.ColorRow("Bar", () => this.config.ColorBar, v => this.config.ColorBar = v);
-        this.ColorRow("Bar text", () => this.config.ColorBarText, v => this.config.ColorBarText = v);
-        this.ColorRow("Bar border", () => this.config.ColorBarBorder, v => this.config.ColorBarBorder = v);
-        this.ColorRow("Imminent", () => this.config.ColorImminent, v => this.config.ColorImminent = v);
         this.ColorRow("Info", () => this.config.ColorInfo, v => this.config.ColorInfo = v);
         this.ColorRow("Alert", () => this.config.ColorAlert, v => this.config.ColorAlert = v);
         this.ColorRow("Alarm", () => this.config.ColorAlarm, v => this.config.ColorAlarm = v);
 
         ImGui.Spacing();
-        if (ImGui.Button("Reset appearance"))
+
+        this.EffectGroup(
+            () => this.config.AlertsTextEffect, v => this.config.AlertsTextEffect = v,
+            () => this.config.AlertsEffectThickness, v => this.config.AlertsEffectThickness = v,
+            () => this.config.AlertsEffectColor, v => this.config.AlertsEffectColor = v);
+
+        ImGui.PopID();
+    }
+
+    private void DrawDps()
+    {
+        ImGui.PushID("dps");
+
+        this.Combo("Style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
+        this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
+            () => this.config.DpsTextScale, v => this.config.DpsTextScale = v);
+        this.PercentSlider("Background",
+            () => this.config.DpsBgOpacity, v => this.config.DpsBgOpacity = v);
+
+        ImGui.Spacing();
+
+        this.Slider("Bar height", 12.0f, 48.0f, "%.0f px",
+            () => this.config.DpsBarHeight, v => this.config.DpsBarHeight = v);
+        this.Slider("Bar spacing", 0.0f, 16.0f, "%.0f px",
+            () => this.config.DpsBarSpacing, v => this.config.DpsBarSpacing = v);
+        this.Slider("Corner rounding", 0.0f, 12.0f, "%.0f px",
+            () => this.config.DpsBarRounding, v => this.config.DpsBarRounding = v);
+        this.Slider("Border thickness", 0.0f, 4.0f, "%.0f px",
+            () => this.config.DpsBarBorderThickness, v => this.config.DpsBarBorderThickness = v);
+        this.PercentSlider("Track opacity",
+            () => this.config.DpsBarTrackOpacity, v => this.config.DpsBarTrackOpacity = v);
+        ImGui.TextDisabled("The full-length slot under the fill.");
+        this.Check("Anchor fill to the right",
+            () => this.config.DpsBarRightToLeft, v => this.config.DpsBarRightToLeft = v);
+
+        ImGui.Spacing();
+
+        this.ColorRow("Bar", () => this.config.DpsBarColor, v => this.config.DpsBarColor = v);
+        this.ColorRow("Bar track",
+            () => this.config.DpsBarTrackColor, v => this.config.DpsBarTrackColor = v);
+        this.ColorRow("Bar border",
+            () => this.config.DpsBarBorderColor, v => this.config.DpsBarBorderColor = v);
+        this.ColorRow("Bar text", () => this.config.DpsTextColor, v => this.config.DpsTextColor = v);
+        ImGui.TextDisabled("Bars style only; Horizoverlay and Kagerou colour by job.");
+
+        ImGui.Spacing();
+
+        this.EffectGroup(
+            () => this.config.DpsTextEffect, v => this.config.DpsTextEffect = v,
+            () => this.config.DpsEffectThickness, v => this.config.DpsEffectThickness = v,
+            () => this.config.DpsEffectColor, v => this.config.DpsEffectColor = v);
+
+        ImGui.PopID();
+    }
+
+    /// <summary>The text readability knobs every box carries: which effect,
+    /// how far it reaches, and its colour.</summary>
+    private void EffectGroup(
+        Func<TextEffectStyle> getEffect, Action<TextEffectStyle> setEffect,
+        Func<int> getThickness, Action<int> setThickness,
+        Func<Vector4> getColor, Action<Vector4> setColor)
+    {
+        this.Combo("Text effect", EffectNames, getEffect, setEffect);
+        this.SliderInt("Effect thickness", 0, 4, getThickness, setThickness);
+        this.ColorRow("Effect color", getColor, setColor);
+    }
+
+    private void Slider(string label, float min, float max, string format, Func<float> get, Action<float> set)
+    {
+        var value = get();
+        if (ImGui.SliderFloat(label, ref value, min, max, format))
         {
-            this.config.ResetAppearance();
+            set(value);
+        }
+
+        this.SaveIfDragEnded();
+    }
+
+    private void SliderInt(string label, int min, int max, Func<int> get, Action<int> set)
+    {
+        var value = get();
+        if (ImGui.SliderInt(label, ref value, min, max))
+        {
+            set(value);
+        }
+
+        this.SaveIfDragEnded();
+    }
+
+    /// <summary>Stored 0..1 but shown as a percent (SliderFloat formats the
+    /// raw value).</summary>
+    private void PercentSlider(string label, Func<float> get, Action<float> set)
+    {
+        var value = get() * 100.0f;
+        if (ImGui.SliderFloat(label, ref value, 0.0f, 100.0f, "%.0f%%"))
+        {
+            set(value / 100.0f);
+        }
+
+        this.SaveIfDragEnded();
+    }
+
+    private void Check(string label, Func<bool> get, Action<bool> set)
+    {
+        var value = get();
+        if (ImGui.Checkbox(label, ref value))
+        {
+            set(value);
             this.config.Save();
         }
     }

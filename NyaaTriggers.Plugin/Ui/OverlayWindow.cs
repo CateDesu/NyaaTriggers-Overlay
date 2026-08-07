@@ -67,6 +67,17 @@ internal abstract class OverlayWindow : Window
     /// independently so a loud timeline can sit next to frameless alerts.</summary>
     protected abstract float BgOpacity { get; }
 
+    /// <summary>What keeps this box's text readable over the game: nothing, an
+    /// outline, or a soft glow. Each box carries its own so a loud alert
+    /// effect does not force itself onto the timeline.</summary>
+    protected abstract TextEffectStyle TextEffect { get; }
+
+    /// <summary>Effect reach in pixels for this box.</summary>
+    protected abstract int EffectThickness { get; }
+
+    /// <summary>Effect colour for this box; the alpha is the effect's opacity.</summary>
+    protected abstract Vector4 EffectColor { get; }
+
     public override void PreDraw()
     {
         var locked = this.Config.Locked;
@@ -100,11 +111,11 @@ internal abstract class OverlayWindow : Window
         // plain bitmap-scaling path would have produced.
         var targetPx = ImGui.GetFont().FontSize * scale;
 
-        // High quality: push a font rasterized at (just above) the target size
-        // and let the window scale cover only the few-percent remainder. While
-        // the font is still building, or if the atlas failed, fall back to
-        // stretching the default font exactly as before.
-        var handle = this.Config.HighQualityText ? this.Fonts.Get(targetPx) : null;
+        // Crisp text at any size: push a font rasterized at (just above) the
+        // target size and let the window scale cover only the few-percent
+        // remainder. Only while the font is still building, or if the atlas
+        // failed, fall back to stretching the default font for the frame.
+        var handle = this.Fonts.Get(targetPx);
         if (handle is { Available: true })
         {
             using (handle.Push())
@@ -190,42 +201,119 @@ internal abstract class OverlayWindow : Window
     protected static Vector4 WithAlpha(Vector4 rgba, float alpha)
         => new(rgba.X, rgba.Y, rgba.Z, rgba.W * Math.Clamp(alpha, 0.0f, 1.0f));
 
-    /// <summary>Draw text with the configured effect. Overlay text floats over
-    /// the game with little or no backdrop, and unadorned text washes out over
-    /// bright arenas; the outline or shadow is what keeps a callout readable
+    /// <summary>Blend a colour toward white, keeping its alpha. The lit top
+    /// edge of a bar fill, so the fill reads lit rather than flat.</summary>
+    protected static Vector4 Lighten(Vector4 rgba, float amount)
+    {
+        var t = Math.Clamp(amount, 0.0f, 1.0f);
+        return new(
+            rgba.X + ((1.0f - rgba.X) * t),
+            rgba.Y + ((1.0f - rgba.Y) * t),
+            rgba.Z + ((1.0f - rgba.Z) * t),
+            rgba.W);
+    }
+
+    /// <summary>Draw a fill with a lit top edge settling to the base colour at
+    /// the bottom, plus a hairline highlight along the top. ImGui cannot round
+    /// a gradient, so a rounded bar keeps the plain flat fill.</summary>
+    protected static void AddBarFill(
+        ImDrawListPtr drawList, Vector2 min, Vector2 max, Vector4 fill, float rounding)
+    {
+        if (rounding >= 0.5f)
+        {
+            drawList.AddRectFilled(min, max, ToColor(fill), rounding);
+            return;
+        }
+
+        var top = ToColor(Lighten(fill, 0.30f));
+        var bottom = ToColor(fill);
+        drawList.AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
+
+        var sheen = ToColor(WithAlpha(Lighten(fill, 0.75f), fill.W * 0.5f));
+        drawList.AddLine(min + new Vector2(0.0f, 0.5f), new Vector2(max.X, min.Y + 0.5f), sheen);
+    }
+
+    /// <summary>Trim text to fit a width, ending it with an ellipsis when it
+    /// had to be cut. Measured with the current font.</summary>
+    protected static string Elide(string text, float maxWidth)
+    {
+        if (ImGui.CalcTextSize(text).X <= maxWidth)
+        {
+            return text;
+        }
+
+        const string Ellipsis = "…";
+        var budget = Math.Max(maxWidth - ImGui.CalcTextSize(Ellipsis).X, 0.0f);
+        var end = text.Length;
+        while (end > 0 && ImGui.CalcTextSize(text[..end]).X > budget)
+        {
+            end--;
+        }
+
+        return string.Concat(text.AsSpan(0, end), Ellipsis);
+    }
+
+    /// <summary>Draw text with the box's configured effect. Overlay text floats
+    /// over the game with little or no backdrop, and unadorned text washes out
+    /// over bright arenas; the outline or glow is what keeps a callout readable
     /// mid-pull. The colour's own alpha carries any fade, and the effect's
     /// opacity is scaled by it so the two never split visually.</summary>
     protected void DrawStyledText(ImDrawListPtr drawList, Vector2 pos, Vector4 color, string text)
     {
         var alpha = Math.Clamp(color.W, 0.0f, 1.0f);
-        var thickness = Math.Clamp(this.Config.OutlineThickness, 0, 4);
-        var effect = this.Config.ColorOutline;
+        var thickness = Math.Clamp(this.EffectThickness, 0, 4);
+        var effect = this.EffectColor;
         var effectAlpha = effect.W * alpha;
-        var effectColor = ImGui.GetColorU32(new Vector4(effect.X, effect.Y, effect.Z, effectAlpha));
 
-        switch (this.Config.TextEffect)
+        if (thickness > 0 && effectAlpha > 0.0f)
         {
-            case TextEffectStyle.Shadow when thickness > 0 && effectAlpha > 0.0f:
-                drawList.AddText(pos + new Vector2(thickness, thickness), effectColor, text);
-                break;
-
-            case TextEffectStyle.Outline when thickness > 0 && effectAlpha > 0.0f:
-                for (var dx = -thickness; dx <= thickness; dx++)
+            switch (this.TextEffect)
+            {
+                // Stamps on concentric rings: a filled circle stays round
+                // where a filled square grid leaves blocky corners.
+                case TextEffectStyle.Outline:
                 {
-                    for (var dy = -thickness; dy <= thickness; dy++)
+                    var ink = ImGui.GetColorU32(new Vector4(effect.X, effect.Y, effect.Z, effectAlpha));
+                    for (var radius = 1; radius <= thickness; radius++)
                     {
-                        if (dx == 0 && dy == 0)
-                        {
-                            continue;
-                        }
-
-                        drawList.AddText(pos + new Vector2(dx, dy), effectColor, text);
+                        StampRing(drawList, pos, text, ink, radius);
                     }
+
+                    break;
                 }
 
-                break;
+                // Wider, fainter rings stacked outward: the overlap reads as a
+                // soft halo rather than a hard edge.
+                case TextEffectStyle.Glow:
+                {
+                    for (var radius = thickness + 2; radius >= 1; radius--)
+                    {
+                        var fade = 1.0f - ((float)radius / (thickness + 3.0f));
+                        var ink = ImGui.GetColorU32(
+                            new Vector4(effect.X, effect.Y, effect.Z, effectAlpha * fade * 0.4f));
+                        StampRing(drawList, pos, text, ink, radius);
+                    }
+
+                    break;
+                }
+            }
         }
 
         drawList.AddText(pos, ToColor(color), text);
+    }
+
+    /// <summary>Stamp the text around a circle of the given radius. The stamp
+    /// count grows with the radius so wider rings have no gaps.</summary>
+    private static void StampRing(ImDrawListPtr drawList, Vector2 pos, string text, uint color, int radius)
+    {
+        var steps = Math.Max(8, radius * 8);
+        for (var i = 0; i < steps; i++)
+        {
+            var angle = (Math.PI * 2.0 * i) / steps;
+            var offset = new Vector2(
+                (float)Math.Round(Math.Cos(angle) * radius),
+                (float)Math.Round(Math.Sin(angle) * radius));
+            drawList.AddText(pos + offset, color, text);
+        }
     }
 }

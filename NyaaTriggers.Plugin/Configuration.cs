@@ -4,16 +4,19 @@ using Dalamud.Configuration;
 
 namespace NyaaTriggers.Plugin;
 
-/// <summary>How overlay text is kept readable over the game.</summary>
+/// <summary>How overlay text is kept readable over the game: nothing, a hard
+/// outline, or a soft glow. The outline stamps the text around concentric
+/// rings; the glow stacks wider, fainter rings for a halo.</summary>
 internal enum TextEffectStyle
 {
     Off,
-    Shadow,
     Outline,
+    Glow,
 }
 
 /// <summary>How the dps meter draws its rows: timeline-style share bars,
-/// horizoverlay's solid job-coloured bars, or kagerou's underlined text.</summary>
+/// horizoverlay's side-by-side job-coloured segments, or kagerou's
+/// underlined text.</summary>
 internal enum DpsMeterStyle
 {
     Bars,
@@ -57,7 +60,7 @@ internal sealed class Configuration : IPluginConfiguration
 {
     /// <summary>Bumped only when a stored field changes meaning, so old configs
     /// can be migrated rather than silently reinterpreted.</summary>
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
 
     // ── link ──────────────────────────────────────────────────────────────
     /// <summary>Loopback port the desktop app connects to. Not exposed off the
@@ -90,67 +93,54 @@ internal sealed class Configuration : IPluginConfiguration
     public Vector2 DpsPos { get; set; } = new(80, 620);
     public Vector2 DpsSize { get; set; } = new(320, 240);
 
-    // ── text ──────────────────────────────────────────────────────────────
+    // ── timeline box ──────────────────────────────────────────────────────
     /// <summary>Text scale inside the timeline box: the bar labels and their
     /// countdowns. Bar row heights scale with it so the text stays inside.</summary>
     public float TimelineTextScale { get; set; } = 1.0f;
 
-    /// <summary>Text scale inside the alerts box.</summary>
-    public float AlertsTextScale { get; set; } = 1.0f;
-
-    /// <summary>Text scale inside the dps meter box.</summary>
-    public float DpsTextScale { get; set; } = 1.0f;
-
-    /// <summary>Rasterize overlay text at its real pixel size in a private
-    /// font atlas instead of stretching the default font's bitmap. This is
-    /// what keeps large text sharp; the fallback exists in case a Dalamud
-    /// build misbehaves with plugin-owned atlases.</summary>
-    public bool HighQualityText { get; set; } = true;
-
-    /// <summary>What is drawn behind text to keep it readable over bright
-    /// arenas: nothing, a drop shadow, or a full outline.</summary>
-    public TextEffectStyle TextEffect { get; set; } = TextEffectStyle.Outline;
-
-    /// <summary>Effect reach in pixels: outline radius or shadow offset.</summary>
-    public int OutlineThickness { get; set; } = 1;
-
-    /// <summary>Outline/shadow colour. The alpha is the effect's opacity and
-    /// is scaled by the text's own fade.</summary>
-    public Vector4 ColorOutline { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
-
-    // ── boxes ─────────────────────────────────────────────────────────────
     /// <summary>Backdrop alpha behind the timeline box's content: 0 =
     /// invisible (the raid-night default; the box floats bare text/bars over
     /// the game), up to 1 = solid theme background.</summary>
     public float TimelineBgOpacity { get; set; }
 
-    /// <summary>Backdrop alpha behind the alerts box's content.</summary>
-    public float AlertsBgOpacity { get; set; }
+    /// <summary>What is drawn behind the timeline's text to keep it readable
+    /// over bright arenas.</summary>
+    public TextEffectStyle TimelineTextEffect { get; set; } = TextEffectStyle.Outline;
 
-    /// <summary>Backdrop alpha behind the dps meter box's content.</summary>
-    public float DpsBgOpacity { get; set; }
+    /// <summary>Effect reach in pixels: outline radius or glow spread.</summary>
+    public int TimelineEffectThickness { get; set; } = 1;
 
-    /// <summary>Version 1's single backdrop opacity, split per box in version
-    /// 2. Kept only so the migration can read the old value.</summary>
-    public float BgOpacity { get; set; }
+    /// <summary>Effect colour. The alpha is the effect's opacity and is scaled
+    /// by the text's own fade.</summary>
+    public Vector4 TimelineEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    // ── timeline bars ─────────────────────────────────────────────────────
-    /// <summary>Timeline bar row height before the text-scale multiplier.</summary>
-    public float BarHeight { get; set; } = 22.0f;
+    /// <summary>Bar label and countdown colour.</summary>
+    public Vector4 TimelineTextColor { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
+
+    /// <summary>Bar row height before the text-scale multiplier.</summary>
+    public float TimelineBarHeight { get; set; } = 22.0f;
 
     /// <summary>Gap between bar rows.</summary>
-    public float BarSpacing { get; set; } = 4.0f;
+    public float TimelineBarSpacing { get; set; } = 4.0f;
 
     /// <summary>Corner rounding on the bar and its track.</summary>
-    public float BarRounding { get; set; } = 3.0f;
+    public float TimelineBarRounding { get; set; } = 3.0f;
 
     /// <summary>Border drawn around each bar, 0 = no border.</summary>
-    public float BarBorderThickness { get; set; }
+    public float TimelineBarBorderThickness { get; set; }
 
-    /// <summary>Alpha multiplier for the full-length track under a bar's
-    /// fill, so the depleting part can sit on a faint ghost of the whole.</summary>
-    public float BarTrackOpacity { get; set; } = 0.5f;
+    /// <summary>Alpha multiplier for the full-length slot under a bar's fill.</summary>
+    public float TimelineBarTrackOpacity { get; set; } = 1.0f;
 
+    public Vector4 TimelineBarColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
+
+    /// <summary>The full-length slot under the fill. Dark by default so the
+    /// fill still reads against it at full track opacity.</summary>
+    public Vector4 TimelineBarTrackColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.60f);
+
+    public Vector4 TimelineBarBorderColor { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
+
+    // ── timeline behaviour ────────────────────────────────────────────────
     /// <summary>Deplete: the bar empties as the cue arrives. Fill: it grows
     /// toward full instead.</summary>
     public BarFillMode BarFill { get; set; } = BarFillMode.Deplete;
@@ -181,7 +171,26 @@ internal sealed class Configuration : IPluginConfiguration
     /// past its configured height.</summary>
     public int TimelineRows { get; set; } = 6;
 
-    // ── alerts ────────────────────────────────────────────────────────────
+    /// <summary>Fill colour for bars about to fire.</summary>
+    public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
+
+    // ── alerts box ────────────────────────────────────────────────────────
+    /// <summary>Text scale inside the alerts box.</summary>
+    public float AlertsTextScale { get; set; } = 1.0f;
+
+    /// <summary>Backdrop alpha behind the alerts box's content.</summary>
+    public float AlertsBgOpacity { get; set; }
+
+    /// <summary>What is drawn behind callout text to keep it readable.</summary>
+    public TextEffectStyle AlertsTextEffect { get; set; } = TextEffectStyle.Outline;
+
+    /// <summary>Effect reach in pixels: outline radius or glow spread.</summary>
+    public int AlertsEffectThickness { get; set; } = 1;
+
+    /// <summary>Effect colour. The alpha is the effect's opacity and is scaled
+    /// by the callout's own fade.</summary>
+    public Vector4 AlertsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
+
     /// <summary>Seconds an alert stays up when the app does not specify one.</summary>
     public float AlertSeconds { get; set; } = 4.0f;
 
@@ -200,14 +209,72 @@ internal sealed class Configuration : IPluginConfiguration
     /// opacity for their whole life.</summary>
     public bool AlertsAnimate { get; set; } = true;
 
-    // ── colours ───────────────────────────────────────────────────────────
-    public Vector4 ColorBar { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
-    public Vector4 ColorBarText { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
-    public Vector4 ColorBarBorder { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
-    public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
     public Vector4 ColorInfo { get; set; } = new(0.89f, 0.74f, 0.42f, 1.00f);
     public Vector4 ColorAlert { get; set; } = new(0.98f, 0.62f, 0.35f, 1.00f);
     public Vector4 ColorAlarm { get; set; } = new(0.95f, 0.30f, 0.30f, 1.00f);
+
+    // ── dps box ───────────────────────────────────────────────────────────
+    /// <summary>Text scale inside the dps meter box.</summary>
+    public float DpsTextScale { get; set; } = 1.0f;
+
+    /// <summary>Backdrop alpha behind the dps meter box's content.</summary>
+    public float DpsBgOpacity { get; set; }
+
+    /// <summary>What is drawn behind the meter's text to keep it readable.</summary>
+    public TextEffectStyle DpsTextEffect { get; set; } = TextEffectStyle.Outline;
+
+    /// <summary>Effect reach in pixels: outline radius or glow spread.</summary>
+    public int DpsEffectThickness { get; set; } = 1;
+
+    /// <summary>Effect colour. The alpha is the effect's opacity.</summary>
+    public Vector4 DpsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
+
+    /// <summary>Name and number colour.</summary>
+    public Vector4 DpsTextColor { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
+
+    /// <summary>Bar row height before the text-scale multiplier.</summary>
+    public float DpsBarHeight { get; set; } = 22.0f;
+
+    /// <summary>Gap between bar rows.</summary>
+    public float DpsBarSpacing { get; set; } = 4.0f;
+
+    /// <summary>Corner rounding on the bar and its track.</summary>
+    public float DpsBarRounding { get; set; } = 3.0f;
+
+    /// <summary>Border drawn around each bar, 0 = no border.</summary>
+    public float DpsBarBorderThickness { get; set; }
+
+    /// <summary>Alpha multiplier for the full-length slot under a bar's fill.</summary>
+    public float DpsBarTrackOpacity { get; set; } = 1.0f;
+
+    public Vector4 DpsBarColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
+
+    /// <summary>The full-length slot under the fill. Dark by default so the
+    /// fill still reads against it at full track opacity.</summary>
+    public Vector4 DpsBarTrackColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.60f);
+
+    public Vector4 DpsBarBorderColor { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
+
+    /// <summary>Anchor the share bars' fill to the right edge instead of the
+    /// left.</summary>
+    public bool DpsBarRightToLeft { get; set; }
+
+    // ── legacy: the shared pre-v3 look, kept only so MigrateFromV2 can read
+    //     the old values, the same pattern as BgOpacity from v1 ────────────
+    public TextEffectStyle TextEffect { get; set; } = TextEffectStyle.Outline;
+    public int OutlineThickness { get; set; } = 1;
+    public Vector4 ColorOutline { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
+    public Vector4 ColorBar { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
+    public Vector4 ColorBarText { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
+    public Vector4 ColorBarBorder { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
+    public float BarHeight { get; set; } = 22.0f;
+    public float BarSpacing { get; set; } = 4.0f;
+    public float BarRounding { get; set; } = 3.0f;
+    public float BarBorderThickness { get; set; }
+
+    /// <summary>Version 1's single backdrop opacity, split per box in version
+    /// 2. Kept only so the migration can read the old value.</summary>
+    public float BgOpacity { get; set; }
 
     /// <summary>Saves reach here from the render thread (settings widgets), the
     /// framework thread (/nyaa lock) and the plugin-manager thread (unload).
@@ -231,27 +298,65 @@ internal sealed class Configuration : IPluginConfiguration
         Version = 2;
     }
 
+    /// <summary>Carry a version 2 config forward: the shared bar look and text
+    /// effect become each box's own, and the retired shadow effect folds into
+    /// the outline. The old shared track opacity is deliberately not carried:
+    /// the track is a colour of its own now and starts fully visible.</summary>
+    public void MigrateFromV2()
+    {
+        // v2's Off stays Off; its Shadow and Outline both land on the outline.
+        var effect = TextEffect == TextEffectStyle.Off ? TextEffectStyle.Off : TextEffectStyle.Outline;
+        TimelineTextEffect = effect;
+        AlertsTextEffect = effect;
+        DpsTextEffect = effect;
+
+        TimelineEffectThickness = OutlineThickness;
+        AlertsEffectThickness = OutlineThickness;
+        DpsEffectThickness = OutlineThickness;
+
+        TimelineEffectColor = ColorOutline;
+        AlertsEffectColor = ColorOutline;
+        DpsEffectColor = ColorOutline;
+
+        TimelineBarColor = ColorBar;
+        DpsBarColor = ColorBar;
+        TimelineTextColor = ColorBarText;
+        DpsTextColor = ColorBarText;
+        TimelineBarBorderColor = ColorBarBorder;
+        DpsBarBorderColor = ColorBarBorder;
+
+        TimelineBarHeight = BarHeight;
+        DpsBarHeight = BarHeight;
+        TimelineBarSpacing = BarSpacing;
+        DpsBarSpacing = BarSpacing;
+        TimelineBarRounding = BarRounding;
+        DpsBarRounding = BarRounding;
+        TimelineBarBorderThickness = BarBorderThickness;
+        DpsBarBorderThickness = BarBorderThickness;
+        DpsBarRightToLeft = BarRightToLeft;
+
+        Version = 3;
+    }
+
     /// <summary>Restore the shipped palette and sizing, leaving the link
     /// settings and window placement alone.</summary>
     public void ResetAppearance()
     {
         var fresh = new Configuration();
         TimelineTextScale = fresh.TimelineTextScale;
-        AlertsTextScale = fresh.AlertsTextScale;
-        DpsTextScale = fresh.DpsTextScale;
-        HighQualityText = fresh.HighQualityText;
-        TextEffect = fresh.TextEffect;
-        OutlineThickness = fresh.OutlineThickness;
-        ColorOutline = fresh.ColorOutline;
         TimelineBgOpacity = fresh.TimelineBgOpacity;
-        AlertsBgOpacity = fresh.AlertsBgOpacity;
-        DpsBgOpacity = fresh.DpsBgOpacity;
-        DpsStyle = fresh.DpsStyle;
-        BarHeight = fresh.BarHeight;
-        BarSpacing = fresh.BarSpacing;
-        BarRounding = fresh.BarRounding;
-        BarBorderThickness = fresh.BarBorderThickness;
-        BarTrackOpacity = fresh.BarTrackOpacity;
+        TimelineTextEffect = fresh.TimelineTextEffect;
+        TimelineEffectThickness = fresh.TimelineEffectThickness;
+        TimelineEffectColor = fresh.TimelineEffectColor;
+        TimelineTextColor = fresh.TimelineTextColor;
+        TimelineBarHeight = fresh.TimelineBarHeight;
+        TimelineBarSpacing = fresh.TimelineBarSpacing;
+        TimelineBarRounding = fresh.TimelineBarRounding;
+        TimelineBarBorderThickness = fresh.TimelineBarBorderThickness;
+        TimelineBarTrackOpacity = fresh.TimelineBarTrackOpacity;
+        TimelineBarColor = fresh.TimelineBarColor;
+        TimelineBarTrackColor = fresh.TimelineBarTrackColor;
+        TimelineBarBorderColor = fresh.TimelineBarBorderColor;
         BarFill = fresh.BarFill;
         BarRightToLeft = fresh.BarRightToLeft;
         BarTextAlign = fresh.BarTextAlign;
@@ -261,17 +366,35 @@ internal sealed class Configuration : IPluginConfiguration
         CountdownSplit = fresh.CountdownSplit;
         TimelineWindow = fresh.TimelineWindow;
         TimelineRows = fresh.TimelineRows;
+        ColorImminent = fresh.ColorImminent;
+        AlertsTextScale = fresh.AlertsTextScale;
+        AlertsBgOpacity = fresh.AlertsBgOpacity;
+        AlertsTextEffect = fresh.AlertsTextEffect;
+        AlertsEffectThickness = fresh.AlertsEffectThickness;
+        AlertsEffectColor = fresh.AlertsEffectColor;
         AlertSeconds = fresh.AlertSeconds;
         AlertsMaxVisible = fresh.AlertsMaxVisible;
         AlertOrder = fresh.AlertOrder;
         AlertsAlign = fresh.AlertsAlign;
         AlertsAnimate = fresh.AlertsAnimate;
-        ColorBar = fresh.ColorBar;
-        ColorBarText = fresh.ColorBarText;
-        ColorBarBorder = fresh.ColorBarBorder;
-        ColorImminent = fresh.ColorImminent;
         ColorInfo = fresh.ColorInfo;
         ColorAlert = fresh.ColorAlert;
         ColorAlarm = fresh.ColorAlarm;
+        DpsTextScale = fresh.DpsTextScale;
+        DpsBgOpacity = fresh.DpsBgOpacity;
+        DpsTextEffect = fresh.DpsTextEffect;
+        DpsEffectThickness = fresh.DpsEffectThickness;
+        DpsEffectColor = fresh.DpsEffectColor;
+        DpsTextColor = fresh.DpsTextColor;
+        DpsBarHeight = fresh.DpsBarHeight;
+        DpsBarSpacing = fresh.DpsBarSpacing;
+        DpsBarRounding = fresh.DpsBarRounding;
+        DpsBarBorderThickness = fresh.DpsBarBorderThickness;
+        DpsBarTrackOpacity = fresh.DpsBarTrackOpacity;
+        DpsBarColor = fresh.DpsBarColor;
+        DpsBarTrackColor = fresh.DpsBarTrackColor;
+        DpsBarBorderColor = fresh.DpsBarBorderColor;
+        DpsBarRightToLeft = fresh.DpsBarRightToLeft;
+        DpsStyle = fresh.DpsStyle;
     }
 }

@@ -9,11 +9,11 @@ namespace NyaaTriggers.Plugin.Ui;
 
 /// <summary>
 /// The app's dps meter: a header with the encounter, its duration and the
-/// party's dps, then one row per member in the configured style — the
-/// timeline-style share bars, horizoverlay's solid job-coloured bars, or
-/// kagerou's underlined text rows. The app sends a whole snapshot about once
-/// a second, so there is nothing to interpolate; the window just draws the
-/// latest one.
+/// party's dps, then the members in the configured style — the
+/// timeline-style share bars, horizoverlay's single top strip of
+/// job-coloured segments side by side, or kagerou's underlined text rows.
+/// The app sends a whole snapshot about once a second, so there is nothing
+/// to interpolate; the window just draws the latest one.
 /// </summary>
 internal sealed class DpsWindow : OverlayWindow
 {
@@ -55,38 +55,51 @@ internal sealed class DpsWindow : OverlayWindow
 
     protected override float BgOpacity => this.Config.DpsBgOpacity;
 
+    protected override TextEffectStyle TextEffect => this.Config.DpsTextEffect;
+
+    protected override int EffectThickness => this.Config.DpsEffectThickness;
+
+    protected override Vector4 EffectColor => this.Config.DpsEffectColor;
+
     protected override void DrawContent()
     {
         var dps = this.bridge.Dps;
         if (dps.Show && dps.Rows.Count > 0)
         {
-            this.DrawHeader(dps.Title, dps.Duration, dps.EncDps);
-            this.DrawRows(dps.Rows);
+            this.DrawMeter(dps.Title, dps.Duration, dps.EncDps, dps.Rows);
             return;
         }
 
         if (!this.Config.Locked)
         {
             // Placeholder so an unlocked box being positioned is never blank.
-            this.DrawHeader("Sample Encounter", "03:12", 81234.5);
-            this.DrawRows(SampleRows);
+            this.DrawMeter("Sample Encounter", "03:12", 81234.5, SampleRows);
         }
     }
 
-    /// <summary>The member rows in the configured style. The header is drawn
-    /// the same way for all three; only the rows change.</summary>
+    private void DrawMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
+    {
+        // Horizoverlay is one strip across the top with the members side by
+        // side; like the ACT original, its header reads centred underneath
+        // instead of above the rows.
+        if (this.Config.DpsStyle == DpsMeterStyle.Horizoverlay)
+        {
+            this.DrawHorizoverlayStrip(rows);
+            this.DrawHeader(title, duration, encDps, centered: true);
+            return;
+        }
+
+        this.DrawHeader(title, duration, encDps);
+        this.DrawRows(rows);
+    }
+
+    /// <summary>The member rows in the row-based styles. The header is drawn
+    /// the same way for both; only the rows change. Horizoverlay never reaches
+    /// here: it is a strip, not rows, and is drawn by DrawMeter itself.</summary>
     private void DrawRows(IReadOnlyList<DpsRow> rows)
     {
         switch (this.Config.DpsStyle)
         {
-            case DpsMeterStyle.Horizoverlay:
-                for (var i = 0; i < rows.Count; i++)
-                {
-                    this.DrawHorizoverlayRow(rows[i], rows[0].Share);
-                }
-
-                break;
-
             case DpsMeterStyle.Kagerou:
                 for (var i = 0; i < rows.Count; i++)
                 {
@@ -105,7 +118,7 @@ internal sealed class DpsWindow : OverlayWindow
         }
     }
 
-    private void DrawHeader(string title, string duration, double encDps)
+    private void DrawHeader(string title, string duration, double encDps, bool centered = false)
     {
         // Skip whichever parts the frame did not carry rather than printing
         // dangling separators; with none of them there is no header at all.
@@ -132,120 +145,165 @@ internal sealed class DpsWindow : OverlayWindow
 
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
-        this.DrawStyledText(drawList, origin, this.Config.ColorBarText, string.Join(" · ", parts));
+        var text = string.Join(" · ", parts);
+        if (centered)
+        {
+            var slack = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f) - ImGui.CalcTextSize(text).X;
+            origin.X += Math.Max(slack * 0.5f, 0.0f);
+        }
+
+        this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, text);
 
         // Reserve the line like a bar row, so the first row lands underneath.
         ImGui.Dummy(new Vector2(
             Math.Max(ImGui.GetContentRegionAvail().X, 1.0f),
-            ImGui.GetTextLineHeight() + Math.Max(this.Config.BarSpacing, 0.0f)));
+            ImGui.GetTextLineHeight() + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
-    /// <summary>Bars: the damage share filled into a faint full-length track
-    /// behind the text, exactly like a timeline bar. The timeline's bar
-    /// settings carry over so the two boxes match.</summary>
+    /// <summary>Bars: the damage share filled into a dark full-length slot
+    /// behind the text, exactly like a timeline bar. The meter's own bar
+    /// settings drive it, independent of the timeline box.</summary>
     private void DrawBarsRow(int rank, DpsRow row)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.BarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
-        var rounding = Math.Min(Math.Max(this.Config.BarRounding, 0.0f), height * 0.5f);
+        var height = this.Config.DpsBarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var rounding = Math.Min(Math.Max(this.Config.DpsBarRounding, 0.0f), height * 0.5f);
 
-        // The share bar reads like a timeline bar: a faint full-length track
-        // with the member's share of the party's damage filled in behind the
-        // text. The timeline's bar settings carry over so the two boxes match.
         drawList.AddRectFilled(
             origin,
             origin + new Vector2(width, height),
-            ToColor(WithAlpha(this.Config.ColorBar, this.Config.BarTrackOpacity)),
+            ToColor(WithAlpha(this.Config.DpsBarTrackColor, this.Config.DpsBarTrackOpacity)),
             rounding);
 
         var fillWidth = width * Math.Clamp((float)row.Share / 100.0f, 0.0f, 1.0f);
         if (fillWidth > 0.0f)
         {
-            var fillOrigin = this.Config.BarRightToLeft
+            var fillOrigin = this.Config.DpsBarRightToLeft
                 ? origin + new Vector2(width - fillWidth, 0.0f)
                 : origin;
-            drawList.AddRectFilled(
-                fillOrigin,
-                fillOrigin + new Vector2(fillWidth, height),
-                ToColor(this.Config.ColorBar),
-                rounding);
+            AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height),
+                this.Config.DpsBarColor, rounding);
         }
 
-        if (this.Config.BarBorderThickness > 0.0f)
+        if (this.Config.DpsBarBorderThickness > 0.0f)
         {
             drawList.AddRect(
                 origin,
                 origin + new Vector2(width, height),
-                ToColor(this.Config.ColorBarBorder),
+                ToColor(this.Config.DpsBarBorderColor),
                 rounding,
                 ImDrawFlags.None,
-                this.Config.BarBorderThickness);
+                this.Config.DpsBarBorderThickness);
         }
 
         var label = string.IsNullOrWhiteSpace(row.Job)
             ? $"{rank}  {row.Name}"
             : $"{rank}  {row.Name} · {row.Job}";
         var dpsText = FormatDps(row.Dps);
+        var dpsWidth = ImGui.CalcTextSize(dpsText).X;
+
+        // The name ends in an ellipsis rather than running into the pinned
+        // number on a narrow box.
+        label = Elide(label, Math.Max(width - dpsWidth - (TextPadding * 3.0f), 1.0f));
         var textY = origin.Y + ((height - ImGui.CalcTextSize(label).Y) * 0.5f);
 
         this.DrawStyledText(
-            drawList, origin + new Vector2(TextPadding, textY), this.Config.ColorBarText, label);
+            drawList, origin + new Vector2(TextPadding, textY), this.Config.DpsTextColor, label);
 
         // The dps pins to the right edge so the numbers never shift the names
         // as they tick over, same as the timeline's split countdown.
-        var dpsWidth = ImGui.CalcTextSize(dpsText).X;
         this.DrawStyledText(
             drawList,
             new Vector2(origin.X + Math.Max(width - dpsWidth - TextPadding, TextPadding), textY),
-            this.Config.ColorBarText,
+            this.Config.DpsTextColor,
             dpsText);
 
         // Reserve the row so the next one lands underneath it: the bars are
         // drawn straight to the draw list and take no layout space by default.
-        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.BarSpacing, 0.0f)));
+        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
-    /// <summary>Horizoverlay: a solid bar in the job's colour and nothing
-    /// else. The length is the member's damage next to the top member's, so
-    /// rank 1 runs the full width; the bar colour says the job, so the text
-    /// carries only the name and the numbers.</summary>
-    private void DrawHorizoverlayRow(DpsRow row, double topShare)
+    /// <summary>Horizoverlay: one strip across the top, split into one
+    /// segment per member side by side, rank 1 on the left. A segment's width
+    /// is the member's share of the party's damage and its colour is the job,
+    /// like the ACT original; the text carries rank and name, then job and
+    /// dps, with the damage percentage at the bottom right.</summary>
+    private void DrawHorizoverlayStrip(IReadOnlyList<DpsRow> rows)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.BarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var lineHeight = ImGui.GetTextLineHeight();
 
-        var fraction = topShare > 0.0
-            ? Math.Clamp((float)(row.Share / topShare), 0.0f, 1.0f)
-            : 0.0f;
-        var barWidth = width * fraction;
-        if (barWidth > 0.0f)
+        // Three text lines plus breathing room, matching the original's tall
+        // strip; the line height already carries the configured text scale.
+        var height = (lineHeight * 3.0f) + (TextPadding * 2.0f);
+
+        var totalShare = 0.0;
+        foreach (var row in rows)
         {
-            drawList.AddRectFilled(
-                origin,
-                origin + new Vector2(barWidth, height),
-                ToColor(JobColors.Get(row.Job)));
+            totalShare += Math.Max(row.Share, 0.0);
         }
 
-        var numbers = $"{FormatDps(row.Dps)}  {FormatShare(row.Share)}";
-        var textY = origin.Y + ((height - ImGui.CalcTextSize(row.Name).Y) * 0.5f);
+        var x = origin.X;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
 
-        this.DrawStyledText(
-            drawList, origin + new Vector2(TextPadding, textY), this.Config.ColorBarText, row.Name);
+            // The last segment takes whatever is left so rounding never
+            // leaves a slit at the strip's right edge.
+            var segWidth = i == rows.Count - 1
+                ? origin.X + width - x
+                : totalShare > 0.0
+                    ? width * (float)(Math.Max(row.Share, 0.0) / totalShare)
+                    : width / rows.Count;
 
-        // The numbers pin to the row's right edge, not the bar's, so they
-        // never jump sideways as the bars tick over.
-        var numbersWidth = ImGui.CalcTextSize(numbers).X;
-        this.DrawStyledText(
-            drawList,
-            new Vector2(origin.X + Math.Max(width - numbersWidth - TextPadding, TextPadding), textY),
-            this.Config.ColorBarText,
-            numbers);
+            var segOrigin = new Vector2(x, origin.Y);
+            var segEnd = new Vector2(x + segWidth, origin.Y + height);
 
-        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.BarSpacing, 0.0f)));
+            // A dark pixel between segments keeps adjacent job colours apart.
+            var fillEnd = i == rows.Count - 1 ? segEnd : segEnd - new Vector2(1.0f, 0.0f);
+            if (fillEnd.X > segOrigin.X)
+            {
+                AddBarFill(drawList, segOrigin, fillEnd, JobColors.Get(row.Job), 0.0f);
+            }
+
+            // Clip to the segment: a thin slice in a big party must not spill
+            // its text over the neighbours.
+            drawList.PushClipRect(segOrigin, segEnd, true);
+
+            var textX = x + TextPadding;
+            var textColor = this.Config.DpsTextColor;
+            this.DrawStyledText(
+                drawList,
+                new Vector2(textX, origin.Y + TextPadding),
+                textColor,
+                Elide($"{i + 1}. {row.Name}", Math.Max(segWidth - (TextPadding * 2.0f), 1.0f)));
+
+            var numbers = string.IsNullOrWhiteSpace(row.Job)
+                ? $"{FormatDps(row.Dps)} DPS"
+                : $"{row.Job}  {FormatDps(row.Dps)} DPS";
+            this.DrawStyledText(
+                drawList, new Vector2(textX, origin.Y + TextPadding + lineHeight), textColor, numbers);
+
+            var share = FormatShare(row.Share);
+            var shareWidth = ImGui.CalcTextSize(share).X;
+            this.DrawStyledText(
+                drawList,
+                new Vector2(
+                    Math.Max(x + segWidth - shareWidth - TextPadding, textX),
+                    origin.Y + TextPadding + (lineHeight * 2.0f)),
+                textColor,
+                share);
+
+            drawList.PopClipRect();
+
+            x += segWidth;
+        }
+
+        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
     /// <summary>Kagerou: no bars, just the text line — job acronym and name
@@ -260,18 +318,32 @@ internal sealed class DpsWindow : OverlayWindow
         var lineHeight = ImGui.GetTextLineHeight();
 
         // Thick enough to read as a bar, thin enough to stay an underline.
-        var underline = Math.Clamp(this.Config.BarHeight * 0.15f, 2.0f, 4.0f);
+        var underline = Math.Clamp(this.Config.DpsBarHeight * 0.15f, 2.0f, 4.0f);
 
-        var label = string.IsNullOrWhiteSpace(row.Job) ? row.Name : $"{row.Job}  {row.Name}";
         var numbers = $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}";
-
-        this.DrawStyledText(drawList, origin, this.Config.ColorBarText, label);
-
         var numbersWidth = ImGui.CalcTextSize(numbers).X;
+        var nameWidth = Math.Max(width - numbersWidth - (TextPadding * 2.0f), 1.0f);
+
+        // The acronym carries the job colour, like kagerou's own; the name
+        // stays in the box's text colour and ends in an ellipsis rather than
+        // running into the pinned numbers.
+        if (string.IsNullOrWhiteSpace(row.Job))
+        {
+            this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, Elide(row.Name, nameWidth));
+        }
+        else
+        {
+            this.DrawStyledText(drawList, origin, JobColors.Get(row.Job), row.Job);
+            var nameX = origin.X + ImGui.CalcTextSize($"{row.Job}  ").X;
+            this.DrawStyledText(
+                drawList, new Vector2(nameX, origin.Y), this.Config.DpsTextColor,
+                Elide(row.Name, Math.Max(origin.X + nameWidth - nameX, 1.0f)));
+        }
+
         this.DrawStyledText(
             drawList,
             new Vector2(origin.X + Math.Max(width - numbersWidth - TextPadding, TextPadding), origin.Y),
-            this.Config.ColorBarText,
+            this.Config.DpsTextColor,
             numbers);
 
         var underlineY = origin.Y + lineHeight + 1.0f;
@@ -286,7 +358,7 @@ internal sealed class DpsWindow : OverlayWindow
 
         ImGui.Dummy(new Vector2(
             width,
-            lineHeight + 1.0f + underline + Math.Max(this.Config.BarSpacing, 0.0f)));
+            lineHeight + 1.0f + underline + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
     /// <summary>Damage share as a percentage. One decimal matches the dps

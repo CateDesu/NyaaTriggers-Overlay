@@ -6,7 +6,7 @@ namespace NyaaTriggers.Plugin.Ui;
 
 /// <summary>
 /// Job accent colours for the dps meter styles where the colour carries the
-/// job (horizoverlay's bars, kagerou's underlines) instead of printing the
+/// job (horizoverlay's segments, kagerou's underlines) instead of printing the
 /// acronym. The values are the cactbot-standard job colours; anything unknown
 /// gets a neutral grey rather than a wrong colour.
 /// </summary>

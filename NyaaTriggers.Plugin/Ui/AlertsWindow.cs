@@ -48,6 +48,12 @@ internal sealed class AlertsWindow : OverlayWindow
 
     protected override float BgOpacity => this.Config.AlertsBgOpacity;
 
+    protected override TextEffectStyle TextEffect => this.Config.AlertsTextEffect;
+
+    protected override int EffectThickness => this.Config.AlertsEffectThickness;
+
+    protected override Vector4 EffectColor => this.Config.AlertsEffectColor;
+
     protected override void DrawContent()
     {
         var alerts = this.bridge.Alerts;

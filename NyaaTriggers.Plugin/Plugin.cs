@@ -20,9 +20,14 @@ public sealed class Plugin : IDalamudPlugin
         Services.Initialize(pluginInterface);
 
         this.config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        if (this.config.Version < 2)
+        if (this.config.Version < 3)
         {
-            this.config.MigrateFromV1();
+            if (this.config.Version < 2)
+            {
+                this.config.MigrateFromV1();
+            }
+
+            this.config.MigrateFromV2();
             this.config.Save();
         }
 

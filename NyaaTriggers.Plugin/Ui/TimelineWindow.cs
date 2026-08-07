@@ -39,6 +39,12 @@ internal sealed class TimelineWindow : OverlayWindow
 
     protected override float BgOpacity => this.Config.TimelineBgOpacity;
 
+    protected override TextEffectStyle TextEffect => this.Config.TimelineTextEffect;
+
+    protected override int EffectThickness => this.Config.TimelineEffectThickness;
+
+    protected override Vector4 EffectColor => this.Config.TimelineEffectColor;
+
     protected override void DrawContent()
     {
         var window = Math.Max(this.Config.TimelineWindow, 1.0f);
@@ -84,8 +90,8 @@ internal sealed class TimelineWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.BarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
-        var rounding = Math.Min(Math.Max(this.Config.BarRounding, 0.0f), height * 0.5f);
+        var height = this.Config.TimelineBarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var rounding = Math.Min(Math.Max(this.Config.TimelineBarRounding, 0.0f), height * 0.5f);
 
         // Depleting bars shrink toward zero as the cue arrives, so the bar
         // reads as time left; filling bars invert that and grow instead.
@@ -96,7 +102,7 @@ internal sealed class TimelineWindow : OverlayWindow
         }
 
         var imminent = remaining <= Math.Max(this.Config.ImminentSeconds, 0.0f);
-        var fill = imminent ? this.Config.ColorImminent : this.Config.ColorBar;
+        var fill = imminent ? this.Config.ColorImminent : this.Config.TimelineBarColor;
 
         if (imminent && this.Config.ImminentPulse)
         {
@@ -106,10 +112,12 @@ internal sealed class TimelineWindow : OverlayWindow
             fill = WithAlpha(fill, phase);
         }
 
+        // The track is a neutral dark slot, not a faded fill, so it stays
+        // readable at full opacity without hiding the fill on top of it.
         drawList.AddRectFilled(
             origin,
             origin + new Vector2(width, height),
-            ToColor(WithAlpha(fill, this.Config.BarTrackOpacity)),
+            ToColor(WithAlpha(this.Config.TimelineBarTrackColor, this.Config.TimelineBarTrackOpacity)),
             rounding);
 
         var fillWidth = width * fraction;
@@ -118,29 +126,25 @@ internal sealed class TimelineWindow : OverlayWindow
             var fillOrigin = this.Config.BarRightToLeft
                 ? origin + new Vector2(width - fillWidth, 0.0f)
                 : origin;
-            drawList.AddRectFilled(
-                fillOrigin,
-                fillOrigin + new Vector2(fillWidth, height),
-                ToColor(fill),
-                rounding);
+            AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height), fill, rounding);
         }
 
-        if (this.Config.BarBorderThickness > 0.0f)
+        if (this.Config.TimelineBarBorderThickness > 0.0f)
         {
             drawList.AddRect(
                 origin,
                 origin + new Vector2(width, height),
-                ToColor(this.Config.ColorBarBorder),
+                ToColor(this.Config.TimelineBarBorderColor),
                 rounding,
                 ImDrawFlags.None,
-                this.Config.BarBorderThickness);
+                this.Config.TimelineBarBorderThickness);
         }
 
         this.DrawBarText(drawList, label, remaining, origin, width, height);
 
         // Reserve the row so the next bar lands underneath it: the bars are
         // drawn straight to the draw list and take no layout space by default.
-        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.BarSpacing, 0.0f)));
+        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.TimelineBarSpacing, 0.0f)));
     }
 
     private void DrawBarText(ImDrawListPtr drawList, string label, float remaining,
@@ -166,7 +170,7 @@ internal sealed class TimelineWindow : OverlayWindow
             this.DrawStyledText(
                 drawList,
                 new Vector2(origin.X + Math.Max(width - countdownWidth - TextPadding, TextPadding), textY),
-                this.Config.ColorBarText,
+                this.Config.TimelineTextColor,
                 countdown);
             return;
         }
@@ -178,6 +182,9 @@ internal sealed class TimelineWindow : OverlayWindow
     private void DrawAlignedText(ImDrawListPtr drawList, string text,
         Vector2 origin, float width, float y)
     {
+        // A label longer than the bar ends in an ellipsis rather than
+        // spilling past the box edge.
+        text = Elide(text, Math.Max(width - TextPadding, 1.0f));
         var textWidth = ImGui.CalcTextSize(text).X;
         var x = this.Config.BarTextAlign switch
         {
@@ -186,6 +193,6 @@ internal sealed class TimelineWindow : OverlayWindow
             _ => TextPadding,
         };
 
-        this.DrawStyledText(drawList, new Vector2(origin.X + x, y), this.Config.ColorBarText, text);
+        this.DrawStyledText(drawList, new Vector2(origin.X + x, y), this.Config.TimelineTextColor, text);
     }
 }
