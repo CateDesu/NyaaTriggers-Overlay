@@ -1,13 +1,14 @@
-# Cuts a release and republishes the Dalamud repository listing.
+# Cuts releases and republishes the Dalamud repository listing.
 #
-# Push a tag to release:
-#
-#     git tag v0.1.0.1 && git push origin v0.1.0.1
-#
-# The tag IS the version and must match <Version> in the csproj; the build fails
-# loudly if they disagree, so a release can never advertise one version and ship
-# another. Running this by hand (workflow_dispatch) is a dry run: it builds and
-# checks, but publishes nothing.
+# Two ways this runs:
+#   * push to MAIN -> a ROLLING release with no manual tagging. The version is
+#     <csproj base>.<run_number> (e.g. 0.1.0.42): the 4th segment increases on
+#     every push, so anyone on the repo URL updates continuously. Older rolling
+#     releases are pruned once the new one is up.
+#   * push a v* TAG -> a hand-cut milestone release. The tag must equal
+#     <Version> in the csproj or the run fails, so a release can never
+#     advertise one version and ship another. Milestone tags (4th segment zero)
+#     are never pruned and stay downloadable as rollback targets.
 #
 # Only first-party actions are used here. A plugin gets injected into the game
 # process, so the build that produces it is not somewhere to run a random
@@ -16,11 +17,22 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
+# Least-privilege default. build and prune-rolling re-declare contents: write;
+# meta only reads the csproj, so it inherits this.
 permissions:
-  contents: write
+  contents: read
+
+# One in-flight build per ref. Rapid pushes to main share a group, so a newer
+# commit supersedes an older still-building rolling run. A canceled run that
+# already published self-heals: the next run's prune sweeps its leftover
+# rolling release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   # Pinned to the API level the plugin targets. Tracking "latest" would mean a
@@ -31,8 +43,55 @@ env:
   MANIFEST: NyaaTriggers.Plugin/bin/Release/NyaaTriggers.json
 
 jobs:
-  release:
+  # Resolve tag / version / rolling ONCE so a branch push (no tag ref) and a
+  # tag push flow through the exact same build+publish pipeline below.
+  meta:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      rolling: ${{ steps.v.outputs.rolling }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          CS=$(grep -oP '<Version>\K[^<]+' NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj | head -1)
+          if [ -z "$CS" ]; then echo "::error::could not read <Version> from the csproj"; exit 1; fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            VER="${TAG#v}"
+            # The tag is the version and must equal the csproj's. Building with
+            # the tag would mask a disagreement, so compare first.
+            if [ "$VER" != "$CS" ]; then
+              echo "::error::tag $TAG disagrees with csproj <Version> $CS"; exit 1
+            fi
+            ROLL=false
+          else
+            # Only main has a release channel. A manual run from another branch
+            # must never publish over it, so fail rather than guess.
+            if [ "${{ github.ref_name }}" != "main" ]; then
+              echo "::error::branch ${{ github.ref_name }} has no release channel"; exit 1
+            fi
+            BASE=$(echo "$CS" | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+')
+            if [ -z "$BASE" ]; then echo "::error::csproj <Version> $CS is not x.y.z[.w]"; exit 1; fi
+            VER="${BASE}.${{ github.run_number }}"
+            TAG="v${VER}"
+            ROLL=true
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VER"
+            echo "rolling=$ROLL"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building tag=$TAG version=$VER rolling=$ROLL"
+
+  build:
+    needs: [meta]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,13 +112,28 @@ jobs:
             echo "::error::Dalamud.dll missing from the distrib zip"; exit 1; }
           echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
 
+      # -p:Version flows into the assembly AND the manifest DalamudPackager
+      # writes, and the step below checks the manifest against the resolved
+      # version, so the listing can never advertise one version while the zip
+      # reports another.
       - name: Build
-        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release
+        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release \
+          -p:Version="${{ needs.meta.outputs.version }}"
 
       - name: Check the package came out
+        env:
+          VER: ${{ needs.meta.outputs.version }}
         run: |
           test -f "$PACKAGE" || { echo "::error::no $PACKAGE"; exit 1; }
           test -f "$MANIFEST" || { echo "::error::no $MANIFEST"; exit 1; }
+          python3 - <<'PY'
+          import json, os, sys
+          m = json.load(open(os.environ["MANIFEST"]))
+          v = m.get("AssemblyVersion")
+          if v != os.environ["VER"]:
+              sys.exit(f"manifest AssemblyVersion {v} != {os.environ['VER']}")
+          print(f"manifest AssemblyVersion OK: {v}")
+          PY
           unzip -l "$PACKAGE"
 
       # Everything below only runs for a real tag push.
@@ -72,23 +146,29 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
             echo "::error::tag ${GITHUB_REF_NAME} is not an ancestor of main"; exit 1; }
 
+      # The listing only updates in the next step, so the release being visible
+      # for a few seconds before the listing points at it harms nothing: nobody
+      # discovers builds except through the listing.
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$PACKAGE" \
-            --title "$GITHUB_REF_NAME" \
+          gh release create "$TAG" "$PACKAGE" \
+            --title "$TAG" \
+            --target "$GITHUB_SHA" \
             --generate-notes
 
       - name: Republish pluginmaster.json
-        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
         run: |
           git checkout main
+          git pull --rebase origin main
           python3 tools/make_pluginmaster.py \
             --manifest "$MANIFEST" \
             --repo "$GITHUB_REPOSITORY" \
-            --tag "$GITHUB_REF_NAME" \
+            --tag "$TAG" \
             --out pluginmaster.json
 
           if git diff --quiet -- pluginmaster.json; then
@@ -99,5 +179,37 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pluginmaster.json
-          git commit -m "Publish ${GITHUB_REF_NAME} to the plugin repository"
+          # [skip ci]: this commit lands on main, and main pushes trigger this
+          # workflow. Without the marker the listing update would build forever.
+          git commit -m "Publish ${TAG} to the plugin repository [skip ci]"
+          git pull --rebase origin main
           git push origin main
+
+  # Keep the rolling channel a single continuously-updated release: after a
+  # rolling build publishes, delete the PREVIOUS rolling releases (and their
+  # tags). Only auto-rolling tags are touched: vX.Y.Z.N with N nonzero (a run
+  # number is never zero). Milestone tags, whose 4th segment is 0, are left
+  # alone so hand-cut releases stay downloadable. Runs after build, so the
+  # previous rolling release is never deleted before the new one is visible.
+  prune-rolling:
+    needs: [meta, build]
+    if: needs.meta.outputs.rolling == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete superseded rolling releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KEEP: ${{ needs.meta.outputs.tag }}
+        run: |
+          gh release list --limit 100 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease | not) | .tagName' | while read -r t; do
+            [ -z "$t" ] && continue
+            [ "$t" = "$KEEP" ] && continue
+            echo "$t" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+\.[1-9][0-9]*$' || continue
+            echo "Pruning superseded rolling release $t"
+            gh release delete "$t" --cleanup-tag --yes || true
+          done

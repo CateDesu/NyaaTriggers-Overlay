@@ -7,7 +7,7 @@
          says "No DLL found for plugin" and nothing loads. -->
     <AssemblyName>NyaaTriggers</AssemblyName>
     <RootNamespace>NyaaTriggers.Plugin</RootNamespace>
-    <Version>0.1.0.0</Version>
+    <Version>0.2.0.0</Version>
     <Authors>CateDesu</Authors>
     <Company />
     <Description>Draws NyaaTriggers' timeline bars and alert callouts inside the game.</Description>
