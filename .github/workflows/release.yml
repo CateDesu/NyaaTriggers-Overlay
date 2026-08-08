@@ -117,8 +117,7 @@ jobs:
       # version, so the listing can never advertise one version while the zip
       # reports another.
       - name: Build
-        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release \
-          -p:Version="${{ needs.meta.outputs.version }}"
+        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release -p:Version="${{ needs.meta.outputs.version }}"
 
       - name: Check the package came out
         env:
