@@ -194,34 +194,50 @@ internal sealed class WebSocketServer : IDisposable
                 continue;
             }
 
-            this.EvictForNewcomer();
+            if (!this.TryMakeRoomForNewcomer())
+            {
+                // Every slot holds an established session. Refusing is safe:
+                // the app backs off and reconnects, so a reconnect that arrives
+                // while old sessions are still unwinding recovers on its own.
+                Services.Log.Debug("all session slots are established; refusing a new connection");
+                client.Dispose();
+                continue;
+            }
+
             this.Register(client);
         }
     }
 
-    /// <summary>Make room for an incoming connection by dropping the oldest
-    /// live sessions.
+    /// <summary>Make room for an incoming connection by dropping sessions that
+    /// have not finished the handshake. Returns false when every slot holds an
+    /// established session, leaving the accept loop to refuse the newcomer.
     ///
-    /// The newcomer wins deliberately. Refusing at the cap instead means the
-    /// app reconnecting faster than a dead session unwinds gets turned away,
-    /// which is the failure that actually matters here: the previous session is
-    /// gone, the user is staring at a dead overlay, and the retry is the thing
-    /// being rejected. A stranger flooding connections just gets its own
-    /// sessions evicted in turn.</summary>
-    private void EvictForNewcomer()
+    /// Only handshake-pending sessions are evictable. A peer that opens a
+    /// socket and says nothing is what a connection flood looks like, and it
+    /// is also what a dead session that has not unwound yet looks like, so
+    /// dropping those for a newcomer costs nothing real. Evicting an
+    /// established session instead would let anything on this machine kick
+    /// the app off the overlay just by reconnecting in a loop.</summary>
+    private bool TryMakeRoomForNewcomer()
     {
         while (true)
         {
-            var live = this.sessions.Keys.Where(s => !s.IsDisposed)
-                .OrderBy(s => s.Sequence).ToArray();
+            var live = this.sessions.Keys.Where(s => !s.IsDisposed).ToArray();
             if (live.Length < MaxSessions)
             {
-                return;
+                return true;
             }
 
-            var oldest = live[0];
-            Services.Log.Debug($"evicting session {oldest.Sequence} to admit a new connection");
-            oldest.Dispose();
+            var pending = live.Where(s => !s.Established)
+                .OrderBy(s => s.Sequence)
+                .FirstOrDefault();
+            if (pending == null)
+            {
+                return false;
+            }
+
+            Services.Log.Debug($"evicting handshake-pending session {pending.Sequence} to admit a new connection");
+            pending.Dispose();
 
             // Its own finally removes it from the dictionary; the IsDisposed
             // flag is set synchronously above, so the next pass sees the room.
@@ -292,6 +308,10 @@ internal sealed class WebSocketServer : IDisposable
             {
                 return;
             }
+
+            // Past this point the peer has proven it speaks the protocol, so
+            // the slot can no longer be taken by a newcomer.
+            session.MarkEstablished();
 
             _ = Task.Run(() => PumpAsync(session));
 
@@ -874,6 +894,7 @@ internal sealed class WebSocketServer : IDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private int disposedFlag;
+        private int establishedFlag;
 
         internal Session(TcpClient client)
         {
@@ -901,6 +922,12 @@ internal sealed class WebSocketServer : IDisposable
         internal Task Drained => this.drained.Task;
 
         internal bool IsDisposed => Volatile.Read(ref this.disposedFlag) != 0;
+
+        /// <summary>Set once the handshake succeeds. Only sessions without it
+        /// may be evicted to make room for a newcomer.</summary>
+        internal bool Established => Volatile.Read(ref this.establishedFlag) != 0;
+
+        internal void MarkEstablished() => Volatile.Write(ref this.establishedFlag, 1);
 
         internal void Enqueue(byte[] frame)
         {
