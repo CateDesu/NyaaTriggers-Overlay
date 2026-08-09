@@ -7,8 +7,9 @@
 #     releases are pruned once the new one is up.
 #   * push a v* TAG -> a hand-cut milestone release. The tag must equal
 #     <Version> in the csproj or the run fails, so a release can never
-#     advertise one version and ship another. Milestone tags (4th segment zero)
-#     are never pruned and stay downloadable as rollback targets.
+#     advertise one version and ship another. A milestone is only the current
+#     build until the next rolling release: nothing on the releases page is
+#     kept permanently.
 #
 # Only first-party actions are used here. A plugin gets injected into the game
 # process, so the build that produces it is not somewhere to run a random
@@ -184,12 +185,10 @@ jobs:
           git pull --rebase origin main
           git push origin main
 
-  # Keep the rolling channel a single continuously-updated release: after a
-  # rolling build publishes, delete the PREVIOUS rolling releases (and their
-  # tags). Only auto-rolling tags are touched: vX.Y.Z.N with N nonzero (a run
-  # number is never zero). Milestone tags, whose 4th segment is 0, are left
-  # alone so hand-cut releases stay downloadable. Runs after build, so the
-  # previous rolling release is never deleted before the new one is visible.
+  # Keep the releases page a single current build: after a rolling build
+  # publishes, delete EVERY other release (and its tag), old rolling builds and
+  # hand-cut milestones alike. Runs after build, so the previous release is
+  # never deleted before the new one is visible.
   prune-rolling:
     needs: [meta, build]
     if: needs.meta.outputs.rolling == 'true'
@@ -198,7 +197,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Delete superseded rolling releases
+      - name: Delete superseded releases
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -208,7 +207,6 @@ jobs:
             --jq '.[] | select(.isPrerelease | not) | .tagName' | while read -r t; do
             [ -z "$t" ] && continue
             [ "$t" = "$KEEP" ] && continue
-            echo "$t" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+\.[1-9][0-9]*$' || continue
-            echo "Pruning superseded rolling release $t"
+            echo "Pruning superseded release $t"
             gh release delete "$t" --cleanup-tag --yes || true
           done

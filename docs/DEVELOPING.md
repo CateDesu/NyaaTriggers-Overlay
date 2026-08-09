@@ -53,21 +53,20 @@ Anyone who added the repo URL gets the update on their next Dalamud refresh, sam
 plugin update. Older rolling releases are pruned once the new one is up, so the releases page
 stays a single current build.
 
-Hand-cut milestones still work when a version is worth keeping: bump `<Version>` in the csproj,
+Hand-cut milestones still work when a release is worth naming: bump `<Version>` in the csproj,
 then
 
 ```
 git tag v0.1.1.0 && git push origin v0.1.1.0
 ```
 
-The tag must equal the csproj version or the workflow fails before building. Milestone tags
-(their 4th segment is always zero, and a run number never is) are never pruned, so they stay
-downloadable as rollback targets.
+The tag must equal the csproj version or the workflow fails before building. A milestone is
+pruned like everything else once the next rolling build is up: nothing on the releases page is
+permanent, only the current build stays downloadable.
 
-That means old milestones collect on the releases page. When they stop being worth keeping, the
-manual **Prune old releases** workflow deletes every release and tag except the current rolling
-Latest. Run it from the Actions tab; the dry run input lists what would go before anything is
-deleted.
+The manual **Prune old releases** workflow runs the same cleanup on demand: every release and
+tag except the current rolling Latest. Run it from the Actions tab; the dry run input lists
+what would go before anything is deleted.
 
 Running the workflow by hand from main does the same as a push; from any other branch it refuses
 to publish.

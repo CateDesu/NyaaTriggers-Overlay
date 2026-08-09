@@ -2,10 +2,9 @@ name: Prune old releases
 
 # Manual one-off cleanup, run from the Actions tab: deletes every release (and
 # its tag) EXCEPT the current rolling Latest (whatever /releases/latest points
-# at). Unlike the automatic prune-rolling job in release.yml, milestone tags go
-# too, so only run this when the old rollback builds are no longer worth
-# keeping. The dry_run input lists what would be deleted without deleting
-# anything.
+# at). The automatic prune in release.yml already does this after every rolling
+# build; this one is for cleaning up on demand. The dry_run input lists what
+# would be deleted without deleting anything.
 on:
   workflow_dispatch:
     inputs:
