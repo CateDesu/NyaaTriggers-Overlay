@@ -64,6 +64,11 @@ The tag must equal the csproj version or the workflow fails before building. Mil
 (their 4th segment is always zero, and a run number never is) are never pruned, so they stay
 downloadable as rollback targets.
 
+That means old milestones collect on the releases page. When they stop being worth keeping, the
+manual **Prune old releases** workflow deletes every release and tag except the current rolling
+Latest. Run it from the Actions tab; the dry run input lists what would go before anything is
+deleted.
+
 Running the workflow by hand from main does the same as a push; from any other branch it refuses
 to publish.
 

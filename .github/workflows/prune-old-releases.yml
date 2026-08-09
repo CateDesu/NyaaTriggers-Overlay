@@ -1,0 +1,42 @@
+name: Prune old releases
+
+# Manual one-off cleanup, run from the Actions tab: deletes every release (and
+# its tag) EXCEPT the current rolling Latest (whatever /releases/latest points
+# at). Unlike the automatic prune-rolling job in release.yml, milestone tags go
+# too, so only run this when the old rollback builds are no longer worth
+# keeping. The dry_run input lists what would be deleted without deleting
+# anything.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without deleting"
+        type: boolean
+        default: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete all but the current rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          KEEP=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          [ -n "$KEEP" ] || { echo "::error::could not resolve the current rolling release"; exit 1; }
+          echo "Keeping latest: $KEEP"
+          gh release list --limit 200 --json tagName --jq '.[].tagName' | while read -r t; do
+            [ -z "$t" ] && continue
+            [ "$t" = "$KEEP" ] && continue
+            if [ "$DRY" = "true" ]; then
+              echo "Would delete $t"
+            else
+              echo "Deleting $t"
+              gh release delete "$t" --cleanup-tag --yes || true
+            fi
+          done
