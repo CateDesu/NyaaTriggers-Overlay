@@ -4,6 +4,16 @@ using System.Numerics;
 
 namespace NyaaTriggers.Plugin.Ui;
 
+/// <summary>The three horizoverlay colour groups. Tanks and healers are
+/// listed; every other combat job is dps, matching the original's jobRoles
+/// table.</summary>
+internal enum JobRole
+{
+    Dps,
+    Tank,
+    Healer,
+}
+
 /// <summary>
 /// Job accent colours for the dps meter styles where the colour carries the
 /// job (horizoverlay's segments, kagerou's underlines) instead of printing the
@@ -14,8 +24,59 @@ internal static class JobColors
 {
     private static readonly Vector4 Unknown = Hex(0x9A9A9A);
 
+    private static readonly HashSet<string> Tanks = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GLA", "MRD", "PLD", "WAR", "DRK", "GNB",
+    };
+
+    private static readonly HashSet<string> Healers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CNJ", "WHM", "SCH", "AST", "SGE",
+    };
+
+    private static readonly HashSet<string> DpsJobs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PGL", "LNC", "ARC", "THM", "MNK", "DRG", "BRD", "BLM", "ACN", "SMN",
+        "ROG", "NIN", "MCH", "SAM", "RDM", "BLU", "RPR", "DNC", "VPR", "PCT",
+        "BST",
+    };
+
+    /// <summary>The job's horizoverlay role, or null for an acronym we do not
+    /// know: the original leaves unknown jobs on the plain dark bar rather
+    /// than guessing a colour.</summary>
+    internal static JobRole? RoleOf(string job)
+    {
+        if (string.IsNullOrWhiteSpace(job))
+        {
+            return null;
+        }
+
+        if (Tanks.Contains(job))
+        {
+            return JobRole.Tank;
+        }
+
+        if (Healers.Contains(job))
+        {
+            return JobRole.Healer;
+        }
+
+        return DpsJobs.Contains(job) ? JobRole.Dps : null;
+    }
+
     private static readonly Dictionary<string, Vector4> ByJob = new(StringComparer.OrdinalIgnoreCase)
     {
+        // Base classes take their job's colour: the app sends class acronyms
+        // for sub-50 content, and kagerou colours them the same.
+        ["GLA"] = Hex(0xA8D2E6),
+        ["PGL"] = Hex(0xD69C00),
+        ["MRD"] = Hex(0xCF2621),
+        ["LNC"] = Hex(0x4164CD),
+        ["ARC"] = Hex(0x91BA5E),
+        ["CNJ"] = Hex(0xFFF0DC),
+        ["THM"] = Hex(0xA579D6),
+        ["ACN"] = Hex(0x2D9B78),
+        ["ROG"] = Hex(0xAF1964),
         ["PLD"] = Hex(0xA8D2E6),
         ["WAR"] = Hex(0xCF2621),
         ["DRK"] = Hex(0xD126CC),

@@ -78,6 +78,11 @@ internal abstract class OverlayWindow : Window
     /// <summary>Effect colour for this box; the alpha is the effect's opacity.</summary>
     protected abstract Vector4 EffectColor { get; }
 
+    /// <summary>The effective on-screen pixel size of this box's text for the
+    /// frame being drawn, set in Draw before DrawContent. Sub-captions that
+    /// should read smaller than the body text derive their font from it.</summary>
+    protected float TextPx { get; private set; }
+
     public override void PreDraw()
     {
         var locked = this.Config.Locked;
@@ -110,6 +115,7 @@ internal abstract class OverlayWindow : Window
         // includes Dalamud's UI scale, so it is the honest base for what the
         // plain bitmap-scaling path would have produced.
         var targetPx = ImGui.GetFont().FontSize * scale;
+        this.TextPx = targetPx;
 
         // Crisp text at any size: push a font rasterized at (just above) the
         // target size and let the window scale cover only the few-percent
@@ -234,7 +240,10 @@ internal abstract class OverlayWindow : Window
     }
 
     /// <summary>Trim text to fit a width, ending it with an ellipsis when it
-    /// had to be cut. Measured with the current font.</summary>
+    /// had to be cut. Measured with the current font. Width only grows as
+    /// characters are appended, so the fitting prefix is bisected: a
+    /// one-character walk is quadratic on long strings, and wire text can be
+    /// long even after the bridge's clamp.</summary>
     protected static string Elide(string text, float maxWidth)
     {
         if (ImGui.CalcTextSize(text).X <= maxWidth)
@@ -244,13 +253,24 @@ internal abstract class OverlayWindow : Window
 
         const string Ellipsis = "…";
         var budget = Math.Max(maxWidth - ImGui.CalcTextSize(Ellipsis).X, 0.0f);
-        var end = text.Length;
-        while (end > 0 && ImGui.CalcTextSize(text[..end]).X > budget)
+
+        // The empty prefix always fits; the full text is known not to.
+        var fits = 0;
+        var tooLong = text.Length;
+        while (tooLong - fits > 1)
         {
-            end--;
+            var mid = fits + ((tooLong - fits) / 2);
+            if (ImGui.CalcTextSize(text[..mid]).X <= budget)
+            {
+                fits = mid;
+            }
+            else
+            {
+                tooLong = mid;
+            }
         }
 
-        return string.Concat(text.AsSpan(0, end), Ellipsis);
+        return string.Concat(text.AsSpan(0, fits), Ellipsis);
     }
 
     /// <summary>Draw text with the box's configured effect. Overlay text floats

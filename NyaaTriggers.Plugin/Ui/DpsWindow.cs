@@ -10,8 +10,8 @@ namespace NyaaTriggers.Plugin.Ui;
 /// <summary>
 /// The app's dps meter: a header with the encounter, its duration and the
 /// party's dps, then the members in the configured style — the
-/// timeline-style share bars, horizoverlay's single top strip of
-/// job-coloured segments side by side, or kagerou's underlined text rows.
+/// timeline-style share bars, horizoverlay's skewed side-by-side bars with
+/// the job icon straddling the top edge, or kagerou's underlined text rows.
 /// The app sends a whole snapshot about once a second, so there is nothing
 /// to interpolate; the window just draws the latest one.
 /// </summary>
@@ -19,16 +19,37 @@ internal sealed class DpsWindow : OverlayWindow
 {
     private const float TextPadding = 6.0f;
 
+    /// <summary>tan(30°): how far the bottom edge of a horizoverlay bar shifts
+    /// left per pixel of height, the original's skew(-30deg) lean.</summary>
+    private const float SkewFactor = 0.57735f;
+
+    // The ACT horizoverlay's own rgb() values. The bar alpha is 0.30, not the
+    // master branch's 0.50: the reference screenshots read at ~0.3 over their
+    // scenes (the hosted build's highlight gradient uses the 0.3 config
+    // colours). The faint side of the two-tone bar is 0.10.
+    private static readonly Vector4 HorizSelfBar = new(1.000f, 1.000f, 1.000f, 0.80f);
+    private static readonly Vector4 HorizDpsBar = new(0.957f, 0.263f, 0.212f, 0.30f);
+    private static readonly Vector4 HorizTankBar = new(0.129f, 0.588f, 0.953f, 0.30f);
+    private static readonly Vector4 HorizHealerBar = new(0.545f, 0.765f, 0.290f, 0.30f);
+    private static readonly Vector4 HorizDimBar = new(0.000f, 0.000f, 0.000f, 0.30f);
+    private static readonly Vector4 HorizSelfText = new(0.000f, 0.000f, 0.000f, 1.00f);
+    private static readonly Vector4 HorizChip = new(0.000f, 0.000f, 0.000f, 0.25f);
+
+    /// <summary>The two-tone seam across a bar, measured from the left: the
+    /// original's 51% gradient stop. The side nearer the member's relevant
+    /// stat is solid; a healing healer (hps above dps) flips it.</summary>
+    private const float HorizSeam = 0.49f;
+
     /// <summary>What an unlocked box draws while no encounter is running, so
     /// every style shows its own look instead of a blank frame.</summary>
     private static readonly DpsRow[] SampleRows =
     {
-        new("Alphinaud L", "SGE", 10234.5, 21.4),
-        new("Beta Tester", "DRG", 9876.0, 20.1),
-        new("Cid Garlond", "MCH", 9012.0, 17.8),
-        new("Curious Gorge", "WAR", 8456.0, 15.9),
-        new("Y'shtola R", "BLM", 7890.0, 13.8),
-        new("Thancred W", "DNC", 6543.0, 10.9),
+        new("Y'shtola R", "BLM", 10234.5, 21.4, 14.0, true),
+        new("Curious Gorge", "WAR", 9876.0, 20.1, 322.0, false),
+        new("Beta Tester", "DRG", 9012.0, 17.8, 0.0, false),
+        new("Cid Garlond", "MCH", 8456.0, 15.9, 0.0, false),
+        new("Thancred W", "DNC", 7890.0, 13.8, 0.0, false),
+        new("Alphinaud L", "SGE", 6543.0, 10.9, 9123.4, false),
     };
 
     private readonly BridgeHost bridge;
@@ -80,12 +101,12 @@ internal sealed class DpsWindow : OverlayWindow
     private void DrawMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
     {
         // Horizoverlay is one strip across the top with the members side by
-        // side; like the ACT original, its header reads centred underneath
-        // instead of above the rows.
+        // side; like the ACT original, its header reads centred underneath,
+        // on its own little skewed chip.
         if (this.Config.DpsStyle == DpsMeterStyle.Horizoverlay)
         {
             this.DrawHorizoverlayStrip(rows);
-            this.DrawHeader(title, duration, encDps, centered: true);
+            this.DrawHeader(title, duration, encDps, centered: true, chip: true);
             return;
         }
 
@@ -118,7 +139,7 @@ internal sealed class DpsWindow : OverlayWindow
         }
     }
 
-    private void DrawHeader(string title, string duration, double encDps, bool centered = false)
+    private void DrawHeader(string title, string duration, double encDps, bool centered = false, bool chip = false)
     {
         // Skip whichever parts the frame did not carry rather than printing
         // dangling separators; with none of them there is no header at all.
@@ -146,10 +167,28 @@ internal sealed class DpsWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var text = string.Join(" · ", parts);
+        var textSize = ImGui.CalcTextSize(text);
         if (centered)
         {
-            var slack = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f) - ImGui.CalcTextSize(text).X;
+            var slack = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f) - textSize.X;
             origin.X += Math.Max(slack * 0.5f, 0.0f);
+        }
+
+        if (chip)
+        {
+            // The original's encounter line sits on a fit-content chip with
+            // the same skew(-30deg) as the bars.
+            var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
+            var chipTop = origin.Y - (2.0f * scale);
+            var chipHeight = textSize.Y + (4.0f * scale);
+            AddSkewedQuad(
+                drawList,
+                origin.X - (10.0f * scale),
+                chipTop,
+                textSize.X + (20.0f * scale),
+                chipHeight,
+                SkewFactor * chipHeight,
+                ToColor(HorizChip));
         }
 
         this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, text);
@@ -225,85 +264,341 @@ internal sealed class DpsWindow : OverlayWindow
         ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
-    /// <summary>Horizoverlay: one strip across the top, split into one
-    /// segment per member side by side, rank 1 on the left. A segment's width
-    /// is the member's share of the party's damage and its colour is the job,
-    /// like the ACT original; the text carries rank and name, then job and
-    /// dps, with the damage percentage at the bottom right.</summary>
+    /// <summary>Horizoverlay: the ACT original's single row of skewed bars,
+    /// one equal-width cell per member, rank 1 on the left. A cell is the rank
+    /// and name centred above a parallelogram bar in the role's tint (solid
+    /// white for the local player, dark for the black-and-white theme), the
+    /// gold job icon straddling the bar's top edge, hps and dps inside the
+    /// bar, and the damage share as a thin skewed strip plus a figure
+    /// underneath.</summary>
     private void DrawHorizoverlayStrip(IReadOnlyList<DpsRow> rows)
     {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var lineHeight = ImGui.GetTextLineHeight();
+        var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
 
-        // Three text lines plus breathing room, matching the original's tall
-        // strip; the line height already carries the configured text scale.
-        var height = (lineHeight * 3.0f) + (TextPadding * 2.0f);
-
-        var totalShare = 0.0;
-        foreach (var row in rows)
+        // The original's own proportions come from a 13px body font: the name
+        // and the in-bar numbers share it, the unit labels are 8px and the
+        // percent figure 7px. The box's text runs larger than that, so the
+        // strip draws in a 0.8x font with 0.5x/0.45x captions.
+        var statFont = this.Fonts.Get(this.TextPx * 0.80f);
+        if (statFont is { Available: true })
         {
-            totalShare += Math.Max(row.Share, 0.0);
+            using (statFont.Push())
+            {
+                this.DrawHorizoverlayCells(drawList, rows, origin, width, scale);
+            }
+
+            return;
         }
 
-        var x = origin.X;
+        // Until the bucket is built, shrink the body font to the same
+        // effective size instead of laying out at body size: a strip that
+        // re-lays out when the atlas catches up visibly snaps after load.
+        var fontSize = ImGui.GetFont().FontSize;
+        if (fontSize <= 0.0f)
+        {
+            this.DrawHorizoverlayCells(drawList, rows, origin, width, scale);
+            return;
+        }
+
+        ImGui.SetWindowFontScale((this.TextPx * 0.80f) / fontSize);
+        try
+        {
+            this.DrawHorizoverlayCells(drawList, rows, origin, width, scale);
+        }
+        finally
+        {
+            // Back to the body size the base draw established; the header is
+            // drawn after the strip, at body size.
+            ImGui.SetWindowFontScale(this.TextPx / fontSize);
+        }
+    }
+
+    private void DrawHorizoverlayCells(
+        ImDrawListPtr drawList, IReadOnlyList<DpsRow> rows, Vector2 origin, float width, float scale)
+    {
+        var lineHeight = ImGui.GetTextLineHeight();
+
+        // The original caps a cell at 140px plus 6px side margins and centres
+        // the group; a narrower window shrinks every cell equally (flex: 1).
+        var cellWidth = Math.Min(width / rows.Count, 152.0f * scale);
+        var stripLeft = origin.X + Math.Max((width - (cellWidth * rows.Count)) * 0.5f, 0.0f);
+
+        var barTop = origin.Y + lineHeight + (3.0f * scale);
+        var barHeight = lineHeight + (6.0f * scale);
+        var barSkew = SkewFactor * barHeight;
+        var stripTop = barTop + barHeight + scale;
+        var stripHeight = Math.Max(2.0f * scale, 1.5f);
+        var iconSize = 20.0f * scale;
+
+        var cellBottom = barTop + barHeight;
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-
-            // The last segment takes whatever is left so rounding never
-            // leaves a slit at the strip's right edge.
-            var segWidth = i == rows.Count - 1
-                ? origin.X + width - x
-                : totalShare > 0.0
-                    ? width * (float)(Math.Max(row.Share, 0.0) / totalShare)
-                    : width / rows.Count;
-
-            var segOrigin = new Vector2(x, origin.Y);
-            var segEnd = new Vector2(x + segWidth, origin.Y + height);
-
-            // A dark pixel between segments keeps adjacent job colours apart.
-            var fillEnd = i == rows.Count - 1 ? segEnd : segEnd - new Vector2(1.0f, 0.0f);
-            if (fillEnd.X > segOrigin.X)
+            var cellLeft = stripLeft + (i * cellWidth);
+            var barLeft = cellLeft + (6.0f * scale);
+            var barWidth = cellWidth - (12.0f * scale);
+            if (barWidth <= 1.0f)
             {
-                AddBarFill(drawList, segOrigin, fillEnd, JobColors.Get(row.Job), 0.0f);
+                continue;
             }
 
-            // Clip to the segment: a thin slice in a big party must not spill
-            // its text over the neighbours.
-            drawList.PushClipRect(segOrigin, segEnd, true);
+            var barColor = this.HorizBarColor(row);
 
-            var textX = x + TextPadding;
-            var textColor = this.Config.DpsTextColor;
+            // The two-tone "highlight" bar: faint overall, solid on the side
+            // of the relevant number — the dps side, or the hps side for a
+            // healer who out-heals their dps. Self and black-and-white bars
+            // stay solid. The seam slants with the bar's edges.
+            var role = JobColors.RoleOf(row.Job);
+            if (row.IsSelf || role == null || this.Config.DpsHorizTheme == HorizColorTheme.BlackWhite)
+            {
+                AddSkewedQuad(drawList, barLeft, barTop, barWidth, barHeight, barSkew, ToColor(barColor));
+            }
+            else
+            {
+                AddSkewedQuad(
+                    drawList, barLeft, barTop, barWidth, barHeight, barSkew,
+                    ToColor(new Vector4(barColor.X, barColor.Y, barColor.Z, 0.10f)));
+                var solidLeft = role == JobRole.Healer && row.Hps > row.Dps;
+                AddSkewedQuad(
+                    drawList,
+                    solidLeft ? barLeft : barLeft + (barWidth * HorizSeam),
+                    barTop,
+                    solidLeft ? barWidth * HorizSeam : barWidth * (1.0f - HorizSeam),
+                    barHeight,
+                    barSkew,
+                    ToColor(barColor));
+            }
+
+            // A cell narrower than two icons has no room for the name, icon
+            // or numbers: leave the bare bar rather than stacking them all
+            // into a few unreadable pixels.
+            if (barWidth < iconSize * 2.0f)
+            {
+                continue;
+            }
+
+            cellBottom = Math.Max(cellBottom, stripTop + stripHeight);
+
+            // Rank and name centred over the cell, white with the box's text
+            // effect, for the self bar too. The original lets a long name
+            // overflow into the margins rather than ellipsizing it.
+            var name = $"{i + 1}. {row.Name}";
+            var nameWidth = ImGui.CalcTextSize(name).X;
             this.DrawStyledText(
                 drawList,
-                new Vector2(textX, origin.Y + TextPadding),
-                textColor,
-                Elide($"{i + 1}. {row.Name}", Math.Max(segWidth - (TextPadding * 2.0f), 1.0f)));
+                new Vector2(cellLeft + ((cellWidth - nameWidth) * 0.5f), origin.Y),
+                this.Config.DpsTextColor,
+                name);
 
-            var numbers = string.IsNullOrWhiteSpace(row.Job)
-                ? $"{FormatDps(row.Dps)} DPS"
-                : $"{row.Job}  {FormatDps(row.Dps)} DPS";
-            this.DrawStyledText(
-                drawList, new Vector2(textX, origin.Y + TextPadding + lineHeight), textColor, numbers);
+            var icon = JobIcons.Get(row.Job);
+            if (icon != null)
+            {
+                var iconTopLeft = new Vector2(
+                    barLeft + ((barWidth - iconSize) * 0.5f),
+                    barTop - (5.0f * scale));
+                drawList.AddImage(icon.Handle, iconTopLeft, iconTopLeft + new Vector2(iconSize, iconSize));
+            }
 
-            var share = FormatShare(row.Share);
-            var shareWidth = ImGui.CalcTextSize(share).X;
-            this.DrawStyledText(
-                drawList,
-                new Vector2(
-                    Math.Max(x + segWidth - shareWidth - TextPadding, textX),
-                    origin.Y + TextPadding + (lineHeight * 2.0f)),
-                textColor,
-                share);
-
+            // hps on the left, dps on the right, each with its smaller unit
+            // label; clipped to the bar so a narrow cell cannot spill into
+            // its neighbours. The white self bar reads black without shadow.
+            drawList.PushClipRect(
+                new Vector2(barLeft - barSkew, barTop),
+                new Vector2(barLeft + barWidth, barTop + barHeight),
+                true);
+            var textTop = barTop + ((barHeight - lineHeight) * 0.5f);
+            this.DrawHorizStat(
+                drawList, barLeft + (8.0f * scale), textTop, false,
+                row.Hps.ToString("0.0", CultureInfo.InvariantCulture), "HPS", row.IsSelf);
+            this.DrawHorizStat(
+                drawList, barLeft + barWidth - (8.0f * scale), textTop, true,
+                row.Dps.ToString("0.00", CultureInfo.InvariantCulture), "DPS", row.IsSelf);
             drawList.PopClipRect();
 
-            x += segWidth;
+            // Damage share: the thin skewed strip under the bar, shifted left
+            // like the original's, plus the percent figure below its right end.
+            var stripLeftEdge = barLeft - (8.0f * scale);
+            AddSkewedQuad(
+                drawList, stripLeftEdge, stripTop, barWidth, stripHeight,
+                SkewFactor * stripHeight,
+                ToColor(HorizStripColor(barColor, row.IsSelf, foreground: false)));
+            var shareWidth = barWidth * Math.Clamp((float)row.Share / 100.0f, 0.0f, 1.0f);
+            if (shareWidth > 0.0f)
+            {
+                AddSkewedQuad(
+                    drawList, stripLeftEdge, stripTop, shareWidth, stripHeight,
+                    SkewFactor * stripHeight,
+                    ToColor(HorizStripColor(barColor, row.IsSelf, foreground: true)));
+            }
+
+            var pct = $"{(int)Math.Clamp(row.Share, 0.0, 999.0)}%";
+            var pctTop = stripTop + stripHeight - (2.0f * scale);
+            var pctRight = barLeft + barWidth - (10.0f * scale);
+            cellBottom = Math.Max(
+                cellBottom,
+                this.DrawSmallText(drawList, pct, pctRight, pctTop, this.Config.DpsTextColor) + (2.0f * scale));
         }
 
-        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
+        ImGui.Dummy(new Vector2(width, (cellBottom - origin.Y) + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
+    }
+
+    /// <summary>One statistic inside a horizoverlay bar: the number in the
+    /// body font with its unit label in the smaller caption font ("5450.30
+    /// DPS"). Left-aligned from x, or right-aligned ending at x when
+    /// rightAligned. The self bar's stats are plain black, no text effect.
+    /// </summary>
+    private void DrawHorizStat(
+        ImDrawListPtr drawList, float x, float top, bool rightAligned,
+        string number, string label, bool self)
+    {
+        var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var lineHeight = ImGui.GetTextLineHeight();
+        var color = self ? HorizSelfText : this.Config.DpsTextColor;
+
+        var numberWidth = ImGui.CalcTextSize(number).X;
+        var small = this.Fonts.Get(this.TextPx * 0.50f);
+        var labelWidth = 0.0f;
+        var labelTop = top;
+        if (small is { Available: true })
+        {
+            using (small.Push())
+            {
+                labelWidth = ImGui.CalcTextSize(label).X;
+                // Bottom-aligned with the number, like the original's caption.
+                labelTop = top + lineHeight - ImGui.GetTextLineHeight();
+            }
+        }
+        else
+        {
+            labelWidth = ImGui.CalcTextSize(label).X;
+        }
+
+        var startX = rightAligned
+            ? x - numberWidth - (1.0f * scale) - labelWidth
+            : x;
+        var labelLeft = startX + numberWidth + (1.0f * scale);
+
+        if (self)
+        {
+            drawList.AddText(new Vector2(startX, top), ToColor(color), number);
+        }
+        else
+        {
+            this.DrawStyledText(drawList, new Vector2(startX, top), color, number);
+        }
+
+        if (small is { Available: true })
+        {
+            using (small.Push())
+            {
+                if (self)
+                {
+                    drawList.AddText(new Vector2(labelLeft, labelTop), ToColor(color), label);
+                }
+                else
+                {
+                    this.DrawStyledText(drawList, new Vector2(labelLeft, labelTop), color, label);
+                }
+            }
+        }
+        else if (self)
+        {
+            drawList.AddText(new Vector2(labelLeft, labelTop), ToColor(color), label);
+        }
+        else
+        {
+            this.DrawStyledText(drawList, new Vector2(labelLeft, labelTop), color, label);
+        }
+    }
+
+    /// <summary>Small caption text (the damage percent figure), right-aligned
+    /// to end at right. Returns the bottom edge, so the strip can size the
+    /// cell.</summary>
+    private float DrawSmallText(ImDrawListPtr drawList, string text, float right, float top, Vector4 color)
+    {
+        var small = this.Fonts.Get(this.TextPx * 0.45f);
+        if (small is { Available: true })
+        {
+            using (small.Push())
+            {
+                this.DrawStyledText(
+                    drawList,
+                    new Vector2(right - ImGui.CalcTextSize(text).X, top),
+                    color,
+                    text);
+                return top + ImGui.GetTextLineHeight();
+            }
+        }
+
+        this.DrawStyledText(
+            drawList,
+            new Vector2(right - ImGui.CalcTextSize(text).X, top),
+            color,
+            text);
+
+        // Report the size the bucket will have rather than the fallback's:
+        // a stable cell height is worth the transient few frames where the
+        // fallback's larger text descends past what this reserves.
+        return top + (this.TextPx * 0.45f);
+    }
+
+    /// <summary>The bar tint for one member: white for the local player in
+    /// either theme, otherwise the role's tint — or the plain dark bar for
+    /// the black-and-white theme and for jobs we do not know.</summary>
+    private Vector4 HorizBarColor(DpsRow row)
+    {
+        if (row.IsSelf)
+        {
+            return HorizSelfBar;
+        }
+
+        if (this.Config.DpsHorizTheme == HorizColorTheme.BlackWhite)
+        {
+            return HorizDimBar;
+        }
+
+        return JobColors.RoleOf(row.Job) switch
+        {
+            JobRole.Tank => HorizTankBar,
+            JobRole.Healer => HorizHealerBar,
+            JobRole.Dps => HorizDpsBar,
+            _ => HorizDimBar,
+        };
+    }
+
+    /// <summary>The damage-share strip colours derive from the bar tint: the
+    /// background track at the original's 0.3 alpha (0.5 for the white self
+    /// bar), the filled share at 0.7 (solid white for self).</summary>
+    private static Vector4 HorizStripColor(Vector4 barColor, bool self, bool foreground)
+    {
+        var alpha = foreground ? (self ? 1.00f : 0.70f) : (self ? 0.50f : 0.30f);
+        return new Vector4(barColor.X, barColor.Y, barColor.Z, alpha);
+    }
+
+    /// <summary>The horizoverlay parallelogram: the top edge runs [x, x+w]
+    /// at y and the bottom edge shifts left by k, the original's
+    /// skew(-30deg) lean.</summary>
+    private static void AddSkewedQuad(ImDrawListPtr drawList, float x, float y, float w, float h, float k, uint color)
+    {
+        if (w <= 0.0f || h <= 0.0f)
+        {
+            return;
+        }
+
+        drawList.AddQuadFilled(
+            new Vector2(x, y),
+            new Vector2(x + w, y),
+            new Vector2(x + w - k, y + h),
+            new Vector2(x - k, y + h),
+            color);
     }
 
     /// <summary>Kagerou: no bars, just the text line — job acronym and name

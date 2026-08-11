@@ -18,6 +18,7 @@ internal sealed class ConfigWindow : Window
     private static readonly string[] OrderNames = { "Newest at top", "Oldest at top" };
     private static readonly string[] AlignNames = { "Left", "Center", "Right" };
     private static readonly string[] DpsStyleNames = { "Bars", "Horizoverlay", "Kagerou" };
+    private static readonly string[] HorizThemeNames = { "Color by role", "Black & white" };
 
     private readonly Configuration config;
     private readonly BridgeHost bridge;
@@ -293,6 +294,8 @@ internal sealed class ConfigWindow : Window
         ImGui.PushID("dps");
 
         this.Combo("Style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
+        this.Combo("Horizoverlay colors", HorizThemeNames,
+            () => this.config.DpsHorizTheme, v => this.config.DpsHorizTheme = v);
         this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
             () => this.config.DpsTextScale, v => this.config.DpsTextScale = v);
         this.PercentSlider("Background",
@@ -322,7 +325,7 @@ internal sealed class ConfigWindow : Window
         this.ColorRow("Bar border",
             () => this.config.DpsBarBorderColor, v => this.config.DpsBarBorderColor = v);
         this.ColorRow("Bar text", () => this.config.DpsTextColor, v => this.config.DpsTextColor = v);
-        ImGui.TextDisabled("Bars style only; Horizoverlay and Kagerou colour by job.");
+        ImGui.TextDisabled("Bars style only; Horizoverlay colours by role, Kagerou by job.");
 
         ImGui.Spacing();
 
@@ -394,7 +397,9 @@ internal sealed class ConfigWindow : Window
     private void Combo<T>(string label, string[] names, Func<T> get, Action<T> set)
         where T : struct, Enum
     {
-        var index = Convert.ToInt32(get());
+        // Clamped rather than trusted: a hand-edited or downgraded config can
+        // carry an enum value past the end of the names list.
+        var index = Math.Clamp(Convert.ToInt32(get()), 0, names.Length - 1);
         if (ImGui.Combo(label, ref index, names, names.Length))
         {
             set((T)Enum.ToObject(typeof(T), index));

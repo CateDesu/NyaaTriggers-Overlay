@@ -55,17 +55,18 @@ CALLOUTS = [
     (39.0, "Soak your tower", "alert"),
 ]
 
-# (name, job, base encdps) - the same shape the app's meter rows produce,
-# already close to sorted; each frame jitters and re-sorts them.
+# (name, job, base encdps, base enchps, is the local player) - the same
+# shape the app's meter rows produce, already close to sorted; each frame
+# jitters and re-sorts them.
 PARTY = [
-    ("Alphinaud L", "SGE", 10234.5),
-    ("Beta Tester", "DRG", 9876.0),
-    ("Cid Garlond", "MCH", 9450.0),
-    ("Dulia Chai", "WHM", 9012.0),
-    ("Estinien W", "DRG", 8780.0),
-    ("Five Heads", "BLM", 8540.0),
-    ("G'raha Tia", "RDM", 8100.0),
-    ("Hythlodaeus", "PLD", 7600.0),
+    ("Alphinaud L", "SGE", 10234.5, 9123.4, False),
+    ("Beta Tester", "DRG", 9876.0, 0.0, True),
+    ("Cid Garlond", "MCH", 9450.0, 0.0, False),
+    ("Dulia Chai", "WHM", 9012.0, 8456.0, False),
+    ("Estinien W", "DRG", 8780.0, 0.0, False),
+    ("Five Heads", "BLM", 8540.0, 0.0, False),
+    ("G'raha Tia", "RDM", 8100.0, 0.0, False),
+    ("Hythlodaeus", "PLD", 7600.0, 322.0, False),
 ]
 
 TICK_SECONDS = 0.25
@@ -136,9 +137,10 @@ async def run_dps(port: int) -> None:
         print(f"sending {DPS_FRAMES} dps frames, one per second (ctrl-c to stop)")
         for frame in range(DPS_FRAMES):
             rows = []
-            for name, job, base in PARTY:
+            for name, job, base, base_hps, is_self in PARTY:
                 dps = round(base * rng.uniform(0.95, 1.05), 1)
-                rows.append([name, job, dps, 0.0])
+                hps = round(base_hps * rng.uniform(0.95, 1.05), 1)
+                rows.append([name, job, dps, 0.0, hps, is_self])
 
             rows.sort(key=lambda row: row[2], reverse=True)
             total = sum(row[2] for row in rows)

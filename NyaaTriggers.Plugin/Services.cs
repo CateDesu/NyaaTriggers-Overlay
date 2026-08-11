@@ -16,6 +16,7 @@ internal sealed class Services
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IChatGui Chat { get; private set; } = null!;
+    [PluginService] internal static ITextureProvider Textures { get; private set; } = null!;
 
     internal static void Initialize(IDalamudPluginInterface pluginInterface)
         => pluginInterface.Create<Services>();

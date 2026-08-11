@@ -24,6 +24,15 @@ internal enum DpsMeterStyle
     Kagerou,
 }
 
+/// <summary>The horizoverlay bar palette: the original's red/blue/green by
+/// role, or its black &amp; white theme where only the local player's bar is
+/// white and everyone else is dark.</summary>
+internal enum HorizColorTheme
+{
+    ByRole,
+    BlackWhite,
+}
+
 /// <summary>Whether a bar shrinks toward empty as the cue arrives or grows
 /// toward full as time elapses.</summary>
 internal enum BarFillMode
@@ -59,7 +68,9 @@ internal enum TextAlign
 internal sealed class Configuration : IPluginConfiguration
 {
     /// <summary>Bumped only when a stored field changes meaning, so old configs
-    /// can be migrated rather than silently reinterpreted.</summary>
+    /// can be migrated rather than silently reinterpreted. Note the enums in
+    /// this file serialize as their integer values: never reorder or insert
+    /// members without bumping this and writing the migration.</summary>
     public int Version { get; set; } = 3;
 
     // ── link ──────────────────────────────────────────────────────────────
@@ -75,6 +86,10 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>How the dps meter draws its rows.</summary>
     public DpsMeterStyle DpsStyle { get; set; } = DpsMeterStyle.Bars;
+
+    /// <summary>The horizoverlay palette: by role (its red/blue/green) or the
+    /// black &amp; white theme. Only read by the horizoverlay style.</summary>
+    public HorizColorTheme DpsHorizTheme { get; set; } = HorizColorTheme.ByRole;
 
     /// <summary>Locked: chromeless and click-through, i.e. the raid-night state.
     /// Unlocked shows a frame and sample content so the boxes can be placed.</summary>
@@ -396,5 +411,6 @@ internal sealed class Configuration : IPluginConfiguration
         DpsBarBorderColor = fresh.DpsBarBorderColor;
         DpsBarRightToLeft = fresh.DpsBarRightToLeft;
         DpsStyle = fresh.DpsStyle;
+        DpsHorizTheme = fresh.DpsHorizTheme;
     }
 }

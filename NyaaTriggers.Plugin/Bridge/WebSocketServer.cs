@@ -193,6 +193,23 @@ internal sealed class WebSocketServer : IDisposable
                 Services.Log.Debug($"accept failed, still listening: {ex.SocketErrorCode}");
                 continue;
             }
+            catch (Exception ex)
+            {
+                // Anything unexpected must not kill the listener silently
+                // either: log it and keep accepting, with a breath so a
+                // persistent fault cannot spin the thread.
+                Services.Log.Warning($"accept trouble, still listening: {ex.Message}");
+                try
+                {
+                    await Task.Delay(1000, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                continue;
+            }
 
             if (!this.TryMakeRoomForNewcomer())
             {
@@ -215,9 +232,10 @@ internal sealed class WebSocketServer : IDisposable
     /// Only handshake-pending sessions are evictable. A peer that opens a
     /// socket and says nothing is what a connection flood looks like, and it
     /// is also what a dead session that has not unwound yet looks like, so
-    /// dropping those for a newcomer costs nothing real. Evicting an
-    /// established session instead would let anything on this machine kick
-    /// the app off the overlay just by reconnecting in a loop.</summary>
+    /// dropping those for a newcomer costs nothing real. An established
+    /// session is only ever replaced by a peer that completes the handshake,
+    /// so a bare connect-and-hold flood cannot push the app off the overlay
+    /// mid-fight.</summary>
     private bool TryMakeRoomForNewcomer()
     {
         while (true)
@@ -237,7 +255,16 @@ internal sealed class WebSocketServer : IDisposable
             }
 
             Services.Log.Debug($"evicting handshake-pending session {pending.Sequence} to admit a new connection");
-            pending.Dispose();
+            try
+            {
+                pending.Dispose();
+            }
+            catch (Exception ex)
+            {
+                // The disposed flag was set before anything that can throw,
+                // so the next pass still sees the room this made.
+                Services.Log.Debug($"eviction failed: {ex.Message}");
+            }
 
             // Its own finally removes it from the dictionary; the IsDisposed
             // flag is set synchronously above, so the next pass sees the room.
@@ -298,9 +325,13 @@ internal sealed class WebSocketServer : IDisposable
 
     private async Task ServeAsync(Session session)
     {
-        var token = session.Token;
         try
         {
+            // Read inside the try: an eviction or teardown can dispose the
+            // session before this task starts, and Token throws on a
+            // disposed source — escaping here would skip the cleanup below.
+            var token = session.Token;
+
             // A peer that connects and then says nothing must not hold its slot.
             using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             handshakeCts.CancelAfter(HandshakeTimeoutMs);
@@ -313,7 +344,9 @@ internal sealed class WebSocketServer : IDisposable
             // the slot can no longer be taken by a newcomer.
             session.MarkEstablished();
 
-            _ = Task.Run(() => PumpAsync(session));
+            // Tracked on the session so Dispose waits for the send side too:
+            // an untracked pump could outlive the plugin's teardown.
+            session.Pump = Task.Run(() => PumpAsync(session));
 
             // Queued before the session is published, so a concurrent Send
             // cannot overtake it. The protocol promises the app this frame is
@@ -827,7 +860,9 @@ internal sealed class WebSocketServer : IDisposable
         {
             this.disposed = true;
             open = this.sessions.Keys.ToArray();
-            running = this.sessions.Values.ToArray();
+            // The send pumps as well as the read loops: both run plugin code
+            // and neither may outlive the teardown below.
+            running = this.sessions.Values.Concat(open.Select(s => s.Pump)).ToArray();
         }
 
         try
@@ -856,10 +891,18 @@ internal sealed class WebSocketServer : IDisposable
 
         // Every session, not just the current one: a socket read in flight does
         // not honour a token, so closing the socket under it is the only way to
-        // end these tasks.
+        // end these tasks. One throwing session must not abort the teardown of
+        // the rest — anything skipped here keeps running past the load context.
         foreach (var session in open)
         {
-            session.Dispose();
+            try
+            {
+                session.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Debug($"session dispose failed: {ex.Message}");
+            }
         }
 
         // Returning while a session task is still mid-callback means plugin code
@@ -921,6 +964,10 @@ internal sealed class WebSocketServer : IDisposable
         /// queue or gave up.</summary>
         internal Task Drained => this.drained.Task;
 
+        /// <summary>The outbound pump, once started; completed before that.
+        /// Tracked so Dispose waits for the send side too, not just reads.</summary>
+        internal Task Pump { get; set; } = Task.CompletedTask;
+
         internal bool IsDisposed => Volatile.Read(ref this.disposedFlag) != 0;
 
         /// <summary>Set once the handshake succeeds. Only sessions without it
@@ -970,7 +1017,14 @@ internal sealed class WebSocketServer : IDisposable
                 Services.Log.Debug($"session close failed: {ex.Message}");
             }
 
-            this.client.Dispose();
+            try
+            {
+                this.client.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Debug($"session dispose failed: {ex.Message}");
+            }
 
             // Nothing is left to flush; anyone waiting on the close is released.
             this.drained.TrySetResult();

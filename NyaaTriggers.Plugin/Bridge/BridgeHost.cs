@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace NyaaTriggers.Plugin.Bridge;
 
@@ -14,7 +15,7 @@ internal enum Severity
 
 internal readonly record struct TimelineEntry(float Time, string Label);
 
-internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share);
+internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf);
 
 /// <summary>The app's latest dps frame. Replaced whole on every update rather
 /// than mutated, so the UI never reads a half-updated meter.</summary>
@@ -70,20 +71,40 @@ internal sealed class BridgeHost : IDisposable
     /// of stale callouts is worse than none.</summary>
     private const int MaxAlerts = 8;
 
-    /// <summary>Timeline entries kept. The window only ever draws a handful,
-    /// and the whole list is walked each frame.</summary>
-    private const int MaxTimelineEntries = 256;
+    /// <summary>Timeline entries kept. The app pushes its whole schedule, and
+    /// the stock timelines run past 300 entries for twenty-minute fights; the
+    /// window walks the list each frame, so the cap only bounds memory.</summary>
+    private const int MaxTimelineEntries = 1024;
 
     /// <summary>DPS rows kept. The app caps at a full party of eight; more
     /// would only ever be a bug, and the window walks the list each frame.</summary>
     private const int MaxDpsRows = 8;
+
+    /// <summary>Longest name, label or title kept from a frame. The wire cap
+    /// is 1 MiB, but every stored string is measured and drawn every frame,
+    /// and nothing legit is past a couple of lines.</summary>
+    private const int MaxTextChars = 256;
+
+    /// <summary>How long unload waits for background server drains. Bounded:
+    /// a wedged socket must not hang plugin teardown either.</summary>
+    private const int DrainWaitMs = 4000;
 
     private readonly Configuration config;
     private readonly ConcurrentQueue<string> inbox = new();
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
-    private WebSocketServer? server;
+    /// <summary>Guards server swaps and the drain list, so an old server's
+    /// background teardown cannot race a new one being published.</summary>
+    private readonly object serverLock = new();
+
+    /// <summary>Old servers draining in the background; unload waits on them,
+    /// since a session task outliving the load context runs freed code.</summary>
+    private readonly List<Task> pendingDrains = new();
+
+    /// <summary>Read unsynchronized from socket threads; volatile so a
+    /// detached server is seen as superseded at once.</summary>
+    private volatile WebSocketServer? server;
 
     /// <summary>Fight clock as of <see cref="clockStamp"/>, interpolated from
     /// there so bars move smoothly between the app's ticks.</summary>
@@ -130,8 +151,13 @@ internal sealed class BridgeHost : IDisposable
 
     internal void Stop()
     {
-        this.server?.Dispose();
-        this.server = null;
+        WebSocketServer? old;
+        lock (this.serverLock)
+        {
+            old = this.server;
+            this.server = null;
+        }
+
         this.ClearState();
         // Drain anything the old server queued (including a synthesised clear
         // from its disconnect) so a Restart / port change does not re-apply stale
@@ -141,6 +167,26 @@ internal sealed class BridgeHost : IDisposable
         // on a zone change, so draining there would discard the fresh frames.
         while (this.inbox.TryDequeue(out _))
         {
+        }
+
+        if (old == null)
+        {
+            return;
+        }
+
+        // Dispose waits up to DisposeDrainMs for the old sessions to unwind,
+        // and Stop runs on the render thread (port Apply), where that wait
+        // would freeze the game — so the teardown drains in the background.
+        // Detaching above already silenced it: its callbacks all check the
+        // source against the live server. Unload still waits, in Dispose.
+        // Apply is the only Restart caller and only fires on a port change.
+        // A rapid A→B→A flip can still outrun the drain and fail the rebind;
+        // that surfaces as a visible LastError and the next Apply heals it.
+        var drain = Task.Run(old.Dispose);
+        lock (this.serverLock)
+        {
+            this.pendingDrains.RemoveAll(t => t.IsCompleted);
+            this.pendingDrains.Add(drain);
         }
     }
 
@@ -172,8 +218,11 @@ internal sealed class BridgeHost : IDisposable
         {
             // The app going away must not leave a frozen timeline on screen
             // pretending the pull is still running. Queued so it lands on the
-            // draw thread with everything else.
-            this.Receive(source, "{\"c\":\"clear\"}");
+            // draw thread with everything else. Enqueued directly, past the
+            // depth cap: that cap exists to bound a flooding peer, and this
+            // one frame comes from us — dropping it would leave the peer's
+            // last frames frozen on screen forever.
+            this.inbox.Enqueue("{\"c\":\"clear\"}");
         }
     }
 
@@ -220,9 +269,15 @@ internal sealed class BridgeHost : IDisposable
         switch (command.GetString())
         {
             case "tick":
-                this.clockBase = ReadDouble(root, "t");
-                this.clockStamp = Environment.TickCount64;
-                this.clockRunning = true;
+                // A tick without a real time is dropped, not applied as zero:
+                // a malformed frame must not rewind the fight clock.
+                if (root.TryGetProperty("t", out var tick) && tick.ValueKind == JsonValueKind.Number)
+                {
+                    this.clockBase = tick.GetDouble();
+                    this.clockStamp = Environment.TickCount64;
+                    this.clockRunning = true;
+                }
+
                 break;
 
             case "timeline":
@@ -276,7 +331,7 @@ internal sealed class BridgeHost : IDisposable
                 continue;
             }
 
-            var text = label.GetString();
+            var text = SanitizeText(label.GetString(), MaxTextChars);
             if (!string.IsNullOrWhiteSpace(text))
             {
                 this.timeline.Add(new TimelineEntry((float)time.GetDouble(), text));
@@ -300,20 +355,15 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        var text = textElement.GetString();
+        // Clamp length and flatten: the wire cap is 1 MiB, but no callout
+        // needs that. AlertsWindow.WrapLines would otherwise Split(' ') the
+        // whole string every frame for the alert's lifetime, a GC-pressure
+        // foot-gun under a flood of max-length frames.
+        const int MaxAlertTextChars = 4096;
+        var text = SanitizeText(textElement.GetString(), MaxAlertTextChars);
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
-        }
-
-        // Clamp length: the wire cap is 1 MiB, but no callout needs that.
-        // AlertsWindow.WrapLines would otherwise Split(' ') the whole string
-        // every frame for the alert's lifetime, a GC-pressure foot-gun under a
-        // flood of max-length frames.
-        const int MaxAlertTextChars = 4096;
-        if (text.Length > MaxAlertTextChars)
-        {
-            text = text[..MaxAlertTextChars];
         }
 
         var severity = Severity.Info;
@@ -369,8 +419,8 @@ internal sealed class BridgeHost : IDisposable
         var encDps = 0.0;
         if (root.TryGetProperty("enc", out var enc) && enc.ValueKind == JsonValueKind.Object)
         {
-            title = ReadString(enc, "t");
-            duration = ReadString(enc, "d");
+            title = SanitizeText(ReadString(enc, "t"), MaxTextChars);
+            duration = SanitizeText(ReadString(enc, "d"), MaxTextChars);
             encDps = ReadDouble(enc, "dps");
         }
 
@@ -380,8 +430,10 @@ internal sealed class BridgeHost : IDisposable
         {
             foreach (var entry in rowsElement.EnumerateArray())
             {
-                // [name, job, encdps, share] rows, sorted by encdps desc,
-                // matching what the app's meter already produces.
+                // [name, job, encdps, share, hps, isSelf] rows, sorted by
+                // encdps desc, matching what the app's meter produces. The
+                // last two fields arrived with the horizoverlay look; an old
+                // app's 4-field rows just get the defaults.
                 if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
                 {
                     continue;
@@ -399,11 +451,25 @@ internal sealed class BridgeHost : IDisposable
                     continue;
                 }
 
+                var hps = 0.0;
+                var isSelf = false;
+                if (entry.GetArrayLength() > 4 && entry[4].ValueKind == JsonValueKind.Number)
+                {
+                    hps = entry[4].GetDouble();
+                }
+
+                if (entry.GetArrayLength() > 5 && entry[5].ValueKind == JsonValueKind.True)
+                {
+                    isSelf = true;
+                }
+
                 rows.Add(new DpsRow(
-                    name.GetString() ?? string.Empty,
-                    job.GetString() ?? string.Empty,
+                    SanitizeText(name.GetString(), MaxTextChars),
+                    SanitizeText(job.GetString(), MaxTextChars),
                     dps.GetDouble(),
-                    share.GetDouble()));
+                    share.GetDouble(),
+                    hps,
+                    isSelf));
 
                 if (rows.Count >= MaxDpsRows)
                 {
@@ -468,7 +534,52 @@ internal sealed class BridgeHost : IDisposable
             ? value.GetString() ?? string.Empty
             : string.Empty;
 
-    public void Dispose() => this.Stop();
+    /// <summary>Bound and flatten a wire string. Newlines go first: the
+    /// windows reserve one row per string, so an embedded one would draw
+    /// over the next row. Then the length cap, so a flood of max-length
+    /// frames cannot keep the render thread measuring novels.</summary>
+    private static string SanitizeText(string? text, int maxChars)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        text = text.Replace('\n', ' ').Replace('\r', ' ');
+        return text.Length > maxChars ? text[..maxChars] : text;
+    }
+
+    public void Dispose()
+    {
+        this.Stop();
+
+        // The background drains Stop started must finish before the load
+        // context goes away: a session task outliving it runs freed code.
+        // Bounded like the server's own drain, plus slack for the drain
+        // task to be scheduled at all.
+        Task[] drains;
+        lock (this.serverLock)
+        {
+            drains = this.pendingDrains.ToArray();
+        }
+
+        if (drains.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!Task.WhenAll(drains).Wait(DrainWaitMs))
+            {
+                Services.Log.Warning("a link session did not stop in time");
+            }
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Debug($"link drain: {ex.Message}");
+        }
+    }
 }
 
 internal static class PluginVersion
