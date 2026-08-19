@@ -247,6 +247,15 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Name and number colour.</summary>
     public Vector4 DpsTextColor { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
 
+    /// <summary>Show only the local player's row, the original's solo mode.
+    /// Applies to every dps style.</summary>
+    public bool DpsSoloOnly { get; set; }
+
+    /// <summary>How many members at most the meter shows, the original's
+    /// # combatants. The feed carries up to a 24-man alliance; eight covers
+    /// a full party. Applies to every dps style.</summary>
+    public int DpsMaxRows { get; set; } = 8;
+
     /// <summary>Bar row height before the text-scale multiplier.</summary>
     public float DpsBarHeight { get; set; } = 22.0f;
 
@@ -273,6 +282,43 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Anchor the share bars' fill to the right edge instead of the
     /// left.</summary>
     public bool DpsBarRightToLeft { get; set; }
+
+    // ── dps box: the horizoverlay style's own knobs ───────────────────────
+    /// <summary>Rank numbers before the names.</summary>
+    public bool DpsHorizShowRank { get; set; } = true;
+
+    /// <summary>The job icon straddling each bar's top edge.</summary>
+    public bool DpsHorizShowIcons { get; set; } = true;
+
+    /// <summary>HPS inside the bar. Off puts the job acronym in its slot,
+    /// which is what the original does.</summary>
+    public bool DpsHorizShowHps { get; set; } = true;
+
+    /// <summary>The two-tone bar: faint overall, solid on the side of the
+    /// member's relevant stat. Off is one flat tint.</summary>
+    public bool DpsHorizHighlight { get; set; } = true;
+
+    /// <summary>The thin damage-share strip under each bar, plus its percent
+    /// figure.</summary>
+    public bool DpsHorizShowPercent { get; set; } = true;
+
+    /// <summary>Empty space on either side of a cell. The original's margin
+    /// is 6px around a 140px bar.</summary>
+    public float DpsHorizCellPadding { get; set; } = 6.0f;
+
+    /// <summary>Alpha of a bar's solid side. The faint side of the two-tone
+    /// follows at a third of it.</summary>
+    public float DpsHorizBarOpacity { get; set; } = 0.30f;
+
+    // ── dps box: the encounter line, shared by every style ────────────────
+    /// <summary>The encounter line at all: title, duration and party dps.</summary>
+    public bool DpsShowHeader { get; set; } = true;
+
+    /// <summary>The fight clock in the encounter line.</summary>
+    public bool DpsHeaderDuration { get; set; } = true;
+
+    /// <summary>The party's dps in the encounter line.</summary>
+    public bool DpsHeaderTotalDps { get; set; } = true;
 
     // ── legacy: the shared pre-v3 look, kept only so MigrateFromV2 can read
     //     the old values, the same pattern as BgOpacity from v1 ────────────
@@ -401,6 +447,8 @@ internal sealed class Configuration : IPluginConfiguration
         DpsEffectThickness = fresh.DpsEffectThickness;
         DpsEffectColor = fresh.DpsEffectColor;
         DpsTextColor = fresh.DpsTextColor;
+        DpsSoloOnly = fresh.DpsSoloOnly;
+        DpsMaxRows = fresh.DpsMaxRows;
         DpsBarHeight = fresh.DpsBarHeight;
         DpsBarSpacing = fresh.DpsBarSpacing;
         DpsBarRounding = fresh.DpsBarRounding;
@@ -412,5 +460,15 @@ internal sealed class Configuration : IPluginConfiguration
         DpsBarRightToLeft = fresh.DpsBarRightToLeft;
         DpsStyle = fresh.DpsStyle;
         DpsHorizTheme = fresh.DpsHorizTheme;
+        DpsHorizShowRank = fresh.DpsHorizShowRank;
+        DpsHorizShowIcons = fresh.DpsHorizShowIcons;
+        DpsHorizShowHps = fresh.DpsHorizShowHps;
+        DpsHorizHighlight = fresh.DpsHorizHighlight;
+        DpsHorizShowPercent = fresh.DpsHorizShowPercent;
+        DpsHorizCellPadding = fresh.DpsHorizCellPadding;
+        DpsHorizBarOpacity = fresh.DpsHorizBarOpacity;
+        DpsShowHeader = fresh.DpsShowHeader;
+        DpsHeaderDuration = fresh.DpsHeaderDuration;
+        DpsHeaderTotalDps = fresh.DpsHeaderTotalDps;
     }
 }

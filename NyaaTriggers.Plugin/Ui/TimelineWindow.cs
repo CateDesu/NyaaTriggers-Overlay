@@ -90,7 +90,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.TimelineBarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var height = this.Config.TimelineBarHeight * ClampTextScale(this.TextScale);
         var rounding = Math.Min(Math.Max(this.Config.TimelineBarRounding, 0.0f), height * 0.5f);
 
         // Depleting bars shrink toward zero as the cue arrives, so the bar

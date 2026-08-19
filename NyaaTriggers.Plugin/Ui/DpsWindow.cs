@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility;
 using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Ui;
@@ -23,14 +24,14 @@ internal sealed class DpsWindow : OverlayWindow
     /// left per pixel of height, the original's skew(-30deg) lean.</summary>
     private const float SkewFactor = 0.57735f;
 
-    // The ACT horizoverlay's own rgb() values. The bar alpha is 0.30, not the
-    // master branch's 0.50: the reference screenshots read at ~0.3 over their
-    // scenes (the hosted build's highlight gradient uses the 0.3 config
-    // colours). The faint side of the two-tone bar is 0.10.
+    // The ACT horizoverlay's own rgb() values, at full alpha: the configured
+    // bar opacity scales them at draw time (0.30 by default, not the master
+    // branch's 0.50: the reference screenshots read at ~0.3 over their
+    // scenes). The faint side of the two-tone bar is a third of that.
     private static readonly Vector4 HorizSelfBar = new(1.000f, 1.000f, 1.000f, 0.80f);
-    private static readonly Vector4 HorizDpsBar = new(0.957f, 0.263f, 0.212f, 0.30f);
-    private static readonly Vector4 HorizTankBar = new(0.129f, 0.588f, 0.953f, 0.30f);
-    private static readonly Vector4 HorizHealerBar = new(0.545f, 0.765f, 0.290f, 0.30f);
+    private static readonly Vector4 HorizDpsBar = new(0.957f, 0.263f, 0.212f, 1.00f);
+    private static readonly Vector4 HorizTankBar = new(0.129f, 0.588f, 0.953f, 1.00f);
+    private static readonly Vector4 HorizHealerBar = new(0.545f, 0.765f, 0.290f, 1.00f);
     private static readonly Vector4 HorizDimBar = new(0.000f, 0.000f, 0.000f, 0.30f);
     private static readonly Vector4 HorizSelfText = new(0.000f, 0.000f, 0.000f, 1.00f);
     private static readonly Vector4 HorizChip = new(0.000f, 0.000f, 0.000f, 0.25f);
@@ -54,10 +55,44 @@ internal sealed class DpsWindow : OverlayWindow
 
     private readonly BridgeHost bridge;
 
+    /// <summary>How tall the last frame's content was, window padding
+    /// included. The locked horizoverlay sizes its window to this: a strip
+    /// has exactly one right height, and a taller configured box only ever
+    /// clipped the encounter line or trapped dead space.</summary>
+    private float contentHeight;
+
+    /// <summary>Tracks the lock edge so unlocking once re-applies the stored
+    /// height. Without it imgui's remembered size is the auto-fit one, and
+    /// the geometry capture would save that over the user's own.</summary>
+    private bool wasLocked;
+
     internal DpsWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
         : base("NyaaTriggers DPS###nyaaDps", config, fonts)
     {
         this.bridge = bridge;
+    }
+
+    public override void PreDraw()
+    {
+        base.PreDraw();
+
+        if (this.Config.DpsStyle == DpsMeterStyle.Horizoverlay)
+        {
+            if (this.Config.Locked && this.contentHeight > 1.0f)
+            {
+                this.Size = new Vector2(
+                    this.StoredSize.X / ImGuiHelpers.GlobalScale,
+                    this.contentHeight / ImGuiHelpers.GlobalScale);
+            }
+            else if (!this.Config.Locked && this.wasLocked)
+            {
+                // Back from the auto-fit height to the stored one, this once.
+                // FirstUseEver would keep imgui's remembered auto-fit size.
+                this.SizeCondition = ImGuiCond.Always;
+            }
+        }
+
+        this.wasLocked = this.Config.Locked;
     }
 
     protected override Vector2 StoredPosition
@@ -87,26 +122,61 @@ internal sealed class DpsWindow : OverlayWindow
         var dps = this.bridge.Dps;
         if (dps.Show && dps.Rows.Count > 0)
         {
-            this.DrawMeter(dps.Title, dps.Duration, dps.EncDps, dps.Rows);
-            return;
+            this.DrawMeter(dps.Title, dps.Duration, dps.EncDps, this.FilterRows(dps.Rows));
         }
-
-        if (!this.Config.Locked)
+        else if (!this.Config.Locked)
         {
             // Placeholder so an unlocked box being positioned is never blank.
-            this.DrawMeter("Sample Encounter", "03:12", 81234.5, SampleRows);
+            this.DrawMeter("Sample Encounter", "03:12", 81234.5, this.FilterRows(SampleRows));
         }
+
+        // Where the content ended, bottom padding included: the locked
+        // horizoverlay's next PreDraw sizes the window to this.
+        this.contentHeight = ImGui.GetCursorScreenPos().Y - ImGui.GetWindowPos().Y
+            + ImGui.GetStyle().WindowPadding.Y;
+    }
+
+    /// <summary>The rows after the solo-only and max-combatants filters, in
+    /// rank order. The common case, neither filter biting, hands the input
+    /// back without a copy.
+    /// </summary>
+    private IReadOnlyList<DpsRow> FilterRows(IReadOnlyList<DpsRow> rows)
+    {
+        var max = Math.Clamp(this.Config.DpsMaxRows, 1, 24);
+        if (!this.Config.DpsSoloOnly && rows.Count <= max)
+        {
+            return rows;
+        }
+
+        var kept = new List<DpsRow>(Math.Min(rows.Count, max));
+        foreach (var row in rows)
+        {
+            if (this.Config.DpsSoloOnly && !row.IsSelf)
+            {
+                continue;
+            }
+
+            kept.Add(row);
+            if (kept.Count >= max)
+            {
+                break;
+            }
+        }
+
+        return kept;
     }
 
     private void DrawMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
     {
         // Horizoverlay is one strip across the top with the members side by
         // side; like the ACT original, its header reads centred underneath,
-        // on its own little skewed chip.
+        // on its own little skewed chip, a 5px margin below the strip.
         if (this.Config.DpsStyle == DpsMeterStyle.Horizoverlay)
         {
             this.DrawHorizoverlayStrip(rows);
-            this.DrawHeader(title, duration, encDps, centered: true, chip: true);
+            this.DrawHeader(
+                title, duration, encDps,
+                centered: true, chip: true, topGap: 5.0f * ClampTextScale(this.TextScale));
             return;
         }
 
@@ -139,22 +209,30 @@ internal sealed class DpsWindow : OverlayWindow
         }
     }
 
-    private void DrawHeader(string title, string duration, double encDps, bool centered = false, bool chip = false)
+    private void DrawHeader(
+        string title, string duration, double encDps,
+        bool centered = false, bool chip = false, float topGap = 0.0f)
     {
-        // Skip whichever parts the frame did not carry rather than printing
-        // dangling separators; with none of them there is no header at all.
+        if (!this.Config.DpsShowHeader)
+        {
+            return;
+        }
+
+        // Skip whichever parts the frame did not carry or the user turned
+        // off rather than printing dangling separators; with none of them
+        // there is no header at all.
         var parts = new List<string>(3);
         if (!string.IsNullOrWhiteSpace(title))
         {
             parts.Add(title);
         }
 
-        if (!string.IsNullOrWhiteSpace(duration))
+        if (this.Config.DpsHeaderDuration && !string.IsNullOrWhiteSpace(duration))
         {
             parts.Add(duration);
         }
 
-        if (encDps > 0.0)
+        if (this.Config.DpsHeaderTotalDps && encDps > 0.0)
         {
             parts.Add(FormatDps(encDps));
         }
@@ -162,6 +240,11 @@ internal sealed class DpsWindow : OverlayWindow
         if (parts.Count == 0)
         {
             return;
+        }
+
+        if (topGap > 0.0f)
+        {
+            ImGui.Dummy(new Vector2(1.0f, topGap));
         }
 
         var drawList = ImGui.GetWindowDrawList();
@@ -178,7 +261,7 @@ internal sealed class DpsWindow : OverlayWindow
         {
             // The original's encounter line sits on a fit-content chip with
             // the same skew(-30deg) as the bars.
-            var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
+            var scale = ClampTextScale(this.TextScale);
             var chipTop = origin.Y - (2.0f * scale);
             var chipHeight = textSize.Y + (4.0f * scale);
             AddSkewedQuad(
@@ -193,10 +276,12 @@ internal sealed class DpsWindow : OverlayWindow
 
         this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, text);
 
-        // Reserve the line like a bar row, so the first row lands underneath.
+        // Reserve the line like a bar row. The row styles draw the header
+        // above the rows, so it also carries the gap onto the first row; the
+        // horizoverlay chip sits last and needs none.
         ImGui.Dummy(new Vector2(
             Math.Max(ImGui.GetContentRegionAvail().X, 1.0f),
-            ImGui.GetTextLineHeight() + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
+            ImGui.GetTextLineHeight() + (chip ? 0.0f : Math.Max(this.Config.DpsBarSpacing, 0.0f))));
     }
 
     /// <summary>Bars: the damage share filled into a dark full-length slot
@@ -207,7 +292,7 @@ internal sealed class DpsWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.DpsBarHeight * Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var height = this.Config.DpsBarHeight * ClampTextScale(this.TextScale);
         var rounding = Math.Min(Math.Max(this.Config.DpsBarRounding, 0.0f), height * 0.5f);
 
         drawList.AddRectFilled(
@@ -281,7 +366,7 @@ internal sealed class DpsWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var scale = ClampTextScale(this.TextScale);
 
         // The original's own proportions come from a 13px body font: the name
         // and the in-bar numbers share it, the unit labels are 8px and the
@@ -326,9 +411,11 @@ internal sealed class DpsWindow : OverlayWindow
     {
         var lineHeight = ImGui.GetTextLineHeight();
 
-        // The original caps a cell at 140px plus 6px side margins and centres
-        // the group; a narrower window shrinks every cell equally (flex: 1).
-        var cellWidth = Math.Min(width / rows.Count, 152.0f * scale);
+        // The original caps a bar at 140px with 6px of empty space on either
+        // side and centres the group; a narrower window shrinks every cell
+        // equally (flex: 1). The side space is ours to configure.
+        var padding = Math.Max(this.Config.DpsHorizCellPadding, 0.0f) * scale;
+        var cellWidth = Math.Min(width / rows.Count, (140.0f * scale) + (2.0f * padding));
         var stripLeft = origin.X + Math.Max((width - (cellWidth * rows.Count)) * 0.5f, 0.0f);
 
         var barTop = origin.Y + lineHeight + (3.0f * scale);
@@ -338,13 +425,20 @@ internal sealed class DpsWindow : OverlayWindow
         var stripHeight = Math.Max(2.0f * scale, 1.5f);
         var iconSize = 20.0f * scale;
 
+        var showRank = this.Config.DpsHorizShowRank;
+        var showIcons = this.Config.DpsHorizShowIcons;
+        var showHps = this.Config.DpsHorizShowHps;
+        var showPercent = this.Config.DpsHorizShowPercent;
+        var twoTone = this.Config.DpsHorizHighlight
+            && this.Config.DpsHorizTheme != HorizColorTheme.BlackWhite;
+
         var cellBottom = barTop + barHeight;
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
             var cellLeft = stripLeft + (i * cellWidth);
-            var barLeft = cellLeft + (6.0f * scale);
-            var barWidth = cellWidth - (12.0f * scale);
+            var barLeft = cellLeft + padding;
+            var barWidth = cellWidth - (2.0f * padding);
             if (barWidth <= 1.0f)
             {
                 continue;
@@ -354,18 +448,19 @@ internal sealed class DpsWindow : OverlayWindow
 
             // The two-tone "highlight" bar: faint overall, solid on the side
             // of the relevant number — the dps side, or the hps side for a
-            // healer who out-heals their dps. Self and black-and-white bars
-            // stay solid. The seam slants with the bar's edges.
+            // healer who out-heals their dps. Self bars and unknown jobs stay
+            // solid, as does the whole strip with the highlight turned off.
             var role = JobColors.RoleOf(row.Job);
-            if (row.IsSelf || role == null || this.Config.DpsHorizTheme == HorizColorTheme.BlackWhite)
+            if (!twoTone || row.IsSelf || role == null)
             {
                 AddSkewedQuad(drawList, barLeft, barTop, barWidth, barHeight, barSkew, ToColor(barColor));
             }
             else
             {
+                var faint = barColor.W / 3.0f;
                 AddSkewedQuad(
                     drawList, barLeft, barTop, barWidth, barHeight, barSkew,
-                    ToColor(new Vector4(barColor.X, barColor.Y, barColor.Z, 0.10f)));
+                    ToColor(new Vector4(barColor.X, barColor.Y, barColor.Z, faint)));
                 var solidLeft = role == JobRole.Healer && row.Hps > row.Dps;
                 AddSkewedQuad(
                     drawList,
@@ -385,12 +480,15 @@ internal sealed class DpsWindow : OverlayWindow
                 continue;
             }
 
-            cellBottom = Math.Max(cellBottom, stripTop + stripHeight);
+            if (showPercent)
+            {
+                cellBottom = Math.Max(cellBottom, stripTop + stripHeight);
+            }
 
             // Rank and name centred over the cell, white with the box's text
             // effect, for the self bar too. The original lets a long name
             // overflow into the margins rather than ellipsizing it.
-            var name = $"{i + 1}. {row.Name}";
+            var name = showRank ? $"{i + 1}. {row.Name}" : row.Name;
             var nameWidth = ImGui.CalcTextSize(name).X;
             this.DrawStyledText(
                 drawList,
@@ -398,30 +496,50 @@ internal sealed class DpsWindow : OverlayWindow
                 this.Config.DpsTextColor,
                 name);
 
-            var icon = JobIcons.Get(row.Job);
-            if (icon != null)
+            if (showIcons)
             {
-                var iconTopLeft = new Vector2(
-                    barLeft + ((barWidth - iconSize) * 0.5f),
-                    barTop - (5.0f * scale));
-                drawList.AddImage(icon.Handle, iconTopLeft, iconTopLeft + new Vector2(iconSize, iconSize));
+                var icon = JobIcons.Get(row.Job);
+                if (icon != null)
+                {
+                    var iconTopLeft = new Vector2(
+                        barLeft + ((barWidth - iconSize) * 0.5f),
+                        barTop - (5.0f * scale));
+                    drawList.AddImage(icon.Handle, iconTopLeft, iconTopLeft + new Vector2(iconSize, iconSize));
+                }
             }
 
             // hps on the left, dps on the right, each with its smaller unit
             // label; clipped to the bar so a narrow cell cannot spill into
-            // its neighbours. The white self bar reads black without shadow.
+            // its neighbours. With hps off the job acronym takes its slot,
+            // like the original. The white self bar reads black without
+            // shadow.
             drawList.PushClipRect(
                 new Vector2(barLeft - barSkew, barTop),
                 new Vector2(barLeft + barWidth, barTop + barHeight),
                 true);
             var textTop = barTop + ((barHeight - lineHeight) * 0.5f);
-            this.DrawHorizStat(
-                drawList, barLeft + (8.0f * scale), textTop, false,
-                row.Hps.ToString("0.0", CultureInfo.InvariantCulture), "HPS", row.IsSelf);
+            if (showHps)
+            {
+                this.DrawHorizStat(
+                    drawList, barLeft + (8.0f * scale), textTop, false,
+                    row.Hps.ToString("0.0", CultureInfo.InvariantCulture), "HPS", row.IsSelf);
+            }
+            else if (!string.IsNullOrWhiteSpace(row.Job))
+            {
+                this.DrawHorizStat(
+                    drawList, barLeft + (8.0f * scale), textTop, false,
+                    row.Job.ToUpperInvariant(), string.Empty, row.IsSelf);
+            }
+
             this.DrawHorizStat(
                 drawList, barLeft + barWidth - (8.0f * scale), textTop, true,
                 row.Dps.ToString("0.00", CultureInfo.InvariantCulture), "DPS", row.IsSelf);
             drawList.PopClipRect();
+
+            if (!showPercent)
+            {
+                continue;
+            }
 
             // Damage share: the thin skewed strip under the bar, shifted left
             // like the original's, plus the percent figure below its right end.
@@ -447,7 +565,9 @@ internal sealed class DpsWindow : OverlayWindow
                 this.DrawSmallText(drawList, pct, pctRight, pctTop, this.Config.DpsTextColor) + (2.0f * scale));
         }
 
-        ImGui.Dummy(new Vector2(width, (cellBottom - origin.Y) + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
+        // Reserve exactly what the strip drew: the gap onto the encounter
+        // line is the header's own, not the bar spacing knob's.
+        ImGui.Dummy(new Vector2(width, cellBottom - origin.Y));
     }
 
     /// <summary>One statistic inside a horizoverlay bar: the number in the
@@ -459,7 +579,7 @@ internal sealed class DpsWindow : OverlayWindow
         ImDrawListPtr drawList, float x, float top, bool rightAligned,
         string number, string label, bool self)
     {
-        var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var scale = ClampTextScale(this.TextScale);
         var lineHeight = ImGui.GetTextLineHeight();
         var color = self ? HorizSelfText : this.Config.DpsTextColor;
 
@@ -552,7 +672,8 @@ internal sealed class DpsWindow : OverlayWindow
 
     /// <summary>The bar tint for one member: white for the local player in
     /// either theme, otherwise the role's tint — or the plain dark bar for
-    /// the black-and-white theme and for jobs we do not know.</summary>
+    /// the black-and-white theme and for jobs we do not know. The role
+    /// tint's alpha is the configured bar opacity.</summary>
     private Vector4 HorizBarColor(DpsRow row)
     {
         if (row.IsSelf)
@@ -565,11 +686,12 @@ internal sealed class DpsWindow : OverlayWindow
             return HorizDimBar;
         }
 
+        var opacity = Math.Clamp(this.Config.DpsHorizBarOpacity, 0.05f, 1.0f);
         return JobColors.RoleOf(row.Job) switch
         {
-            JobRole.Tank => HorizTankBar,
-            JobRole.Healer => HorizHealerBar,
-            JobRole.Dps => HorizDpsBar,
+            JobRole.Tank => WithAlpha(HorizTankBar, opacity),
+            JobRole.Healer => WithAlpha(HorizHealerBar, opacity),
+            JobRole.Dps => WithAlpha(HorizDpsBar, opacity),
             _ => HorizDimBar,
         };
     }

@@ -53,35 +53,44 @@ internal sealed class ConfigWindow : Window
 
     public override void Draw()
     {
-        if (ImGui.CollapsingHeader("Link", ImGuiTreeNodeFlags.DefaultOpen))
+        // The sections scroll in their own region, the reset button pinned
+        // below it. Scrolling at the window level instead let a collapsed
+        // header land on the window's bottom resize border, where most of
+        // the bar dragged a resize and only the arrow toggled the section.
+        if (ImGui.BeginChild("##sections", new Vector2(0.0f, -ImGui.GetFrameHeightWithSpacing())))
         {
-            this.DrawLink();
-            ImGui.Spacing();
+            if (ImGui.CollapsingHeader("Link", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                this.DrawLink();
+                ImGui.Spacing();
+            }
+
+            if (ImGui.CollapsingHeader("Boxes", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                this.DrawBoxes();
+                ImGui.Spacing();
+            }
+
+            if (ImGui.CollapsingHeader("Timeline"))
+            {
+                this.DrawTimeline();
+                ImGui.Spacing();
+            }
+
+            if (ImGui.CollapsingHeader("Alerts"))
+            {
+                this.DrawAlerts();
+                ImGui.Spacing();
+            }
+
+            if (ImGui.CollapsingHeader("DPS meter"))
+            {
+                this.DrawDps();
+                ImGui.Spacing();
+            }
         }
 
-        if (ImGui.CollapsingHeader("Boxes", ImGuiTreeNodeFlags.DefaultOpen))
-        {
-            this.DrawBoxes();
-            ImGui.Spacing();
-        }
-
-        if (ImGui.CollapsingHeader("Timeline"))
-        {
-            this.DrawTimeline();
-            ImGui.Spacing();
-        }
-
-        if (ImGui.CollapsingHeader("Alerts"))
-        {
-            this.DrawAlerts();
-            ImGui.Spacing();
-        }
-
-        if (ImGui.CollapsingHeader("DPS meter"))
-        {
-            this.DrawDps();
-            ImGui.Spacing();
-        }
+        ImGui.EndChild();
 
         if (ImGui.Button("Reset appearance"))
         {
@@ -191,7 +200,7 @@ internal sealed class ConfigWindow : Window
         // keeps ImGui from folding them into one widget.
         ImGui.PushID("timeline");
 
-        this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
+        this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
             () => this.config.TimelineTextScale, v => this.config.TimelineTextScale = v);
         this.PercentSlider("Background",
             () => this.config.TimelineBgOpacity, v => this.config.TimelineBgOpacity = v);
@@ -256,7 +265,7 @@ internal sealed class ConfigWindow : Window
     {
         ImGui.PushID("alerts");
 
-        this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
+        this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
             () => this.config.AlertsTextScale, v => this.config.AlertsTextScale = v);
         this.PercentSlider("Background",
             () => this.config.AlertsBgOpacity, v => this.config.AlertsBgOpacity = v);
@@ -296,10 +305,43 @@ internal sealed class ConfigWindow : Window
         this.Combo("Style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
         this.Combo("Horizoverlay colors", HorizThemeNames,
             () => this.config.DpsHorizTheme, v => this.config.DpsHorizTheme = v);
-        this.Slider("Text size", 0.5f, 3.0f, "%.2fx",
+        this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
             () => this.config.DpsTextScale, v => this.config.DpsTextScale = v);
         this.PercentSlider("Background",
             () => this.config.DpsBgOpacity, v => this.config.DpsBgOpacity = v);
+        this.Check("Only show yourself",
+            () => this.config.DpsSoloOnly, v => this.config.DpsSoloOnly = v);
+        this.SliderInt("Max combatants", 1, 24,
+            () => this.config.DpsMaxRows, v => this.config.DpsMaxRows = v);
+
+        ImGui.Spacing();
+
+        ImGui.TextDisabled("Horizoverlay style.");
+        this.Check("Rank numbers",
+            () => this.config.DpsHorizShowRank, v => this.config.DpsHorizShowRank = v);
+        this.Check("Job icons",
+            () => this.config.DpsHorizShowIcons, v => this.config.DpsHorizShowIcons = v);
+        this.Check("HPS",
+            () => this.config.DpsHorizShowHps, v => this.config.DpsHorizShowHps = v);
+        ImGui.TextDisabled("Off shows the job acronym in its slot.");
+        this.Check("Two-tone highlight",
+            () => this.config.DpsHorizHighlight, v => this.config.DpsHorizHighlight = v);
+        this.Check("Damage %",
+            () => this.config.DpsHorizShowPercent, v => this.config.DpsHorizShowPercent = v);
+        this.Slider("Cell padding", 0.0f, 24.0f, "%.0f px",
+            () => this.config.DpsHorizCellPadding, v => this.config.DpsHorizCellPadding = v);
+        this.PercentSlider("Bar opacity",
+            () => this.config.DpsHorizBarOpacity, v => this.config.DpsHorizBarOpacity = v);
+
+        ImGui.Spacing();
+
+        ImGui.TextDisabled("The encounter line, above the rows and under the strip.");
+        this.Check("Encounter line",
+            () => this.config.DpsShowHeader, v => this.config.DpsShowHeader = v);
+        this.Check("Duration",
+            () => this.config.DpsHeaderDuration, v => this.config.DpsHeaderDuration = v);
+        this.Check("Total DPS",
+            () => this.config.DpsHeaderTotalDps, v => this.config.DpsHeaderTotalDps = v);
 
         ImGui.Spacing();
 

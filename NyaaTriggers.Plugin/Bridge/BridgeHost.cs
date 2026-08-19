@@ -76,9 +76,10 @@ internal sealed class BridgeHost : IDisposable
     /// window walks the list each frame, so the cap only bounds memory.</summary>
     private const int MaxTimelineEntries = 1024;
 
-    /// <summary>DPS rows kept. The app caps at a full party of eight; more
-    /// would only ever be a bug, and the window walks the list each frame.</summary>
-    private const int MaxDpsRows = 8;
+    /// <summary>DPS rows kept. The app caps at a full alliance of 24; more
+    /// would only ever be a bug, and the window walks the list each frame.
+    /// The user's Max combatants setting narrows this down for display.</summary>
+    private const int MaxDpsRows = 24;
 
     /// <summary>Longest name, label or title kept from a frame. The wire cap
     /// is 1 MiB, but every stored string is measured and drawn every frame,

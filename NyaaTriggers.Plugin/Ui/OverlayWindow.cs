@@ -83,6 +83,11 @@ internal abstract class OverlayWindow : Window
     /// should read smaller than the body text derive their font from it.</summary>
     protected float TextPx { get; private set; }
 
+    /// <summary>Clamp a text scale to the range the settings sliders offer,
+    /// 0.5x to 6x. Every window draws through this so a hand-edited config
+    /// cannot push text past what the font buckets cover.</summary>
+    protected static float ClampTextScale(float scale) => Math.Clamp(scale, 0.5f, 6.0f);
+
     public override void PreDraw()
     {
         var locked = this.Config.Locked;
@@ -109,7 +114,7 @@ internal abstract class OverlayWindow : Window
 
     public override void Draw()
     {
-        var scale = Math.Clamp(this.TextScale, 0.5f, 3.0f);
+        var scale = ClampTextScale(this.TextScale);
 
         // The current font here is the window's default: its size already
         // includes Dalamud's UI scale, so it is the honest base for what the
