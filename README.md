@@ -24,8 +24,6 @@ in the game without it, so you need both.
 Then type `/nyaa` in game chat to set it up. The boxes start unlocked so you can drag them where you
 want. Tick **Lock** when you are happy and clicks pass through to the game again.
 
-Nothing is listed yet. The first release has not been tagged.
-
 ## Notes
 
 This is a custom repository and will never be on the official plugin list. Dalamud's rules do not

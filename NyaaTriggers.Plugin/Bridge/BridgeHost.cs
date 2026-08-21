@@ -95,8 +95,9 @@ internal sealed class BridgeHost : IDisposable
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
-    /// <summary>Guards server swaps and the drain list, so an old server's
-    /// background teardown cannot race a new one being published.</summary>
+    /// <summary>Guards server swaps, the drain list and the source check in
+    /// Receive, so an old server's background teardown cannot race a new one
+    /// being published and its frames cannot land after Stop drains.</summary>
     private readonly object serverLock = new();
 
     /// <summary>Old servers draining in the background; unload waits on them,
@@ -192,16 +193,21 @@ internal sealed class BridgeHost : IDisposable
     }
 
     /// <summary>Socket thread: queue only, never touch the state the UI reads.
-    /// Guarded on the source so a leaked or superseded server cannot keep
-    /// injecting into the live session's inbox.</summary>
+    /// Guarded on the source under serverLock so the check and the enqueue are
+    /// atomic with Stop's detach and drain: a frame from a superseded server
+    /// lands before the drain or not at all, never after it onto freshly
+    /// cleared state.</summary>
     private void Receive(WebSocketServer source, string raw)
     {
-        if (!ReferenceEquals(source, this.server) || this.inbox.Count >= MaxInboxDepth)
+        lock (this.serverLock)
         {
-            return;
-        }
+            if (!ReferenceEquals(source, this.server) || this.inbox.Count >= MaxInboxDepth)
+            {
+                return;
+            }
 
-        this.inbox.Enqueue(raw);
+            this.inbox.Enqueue(raw);
+        }
     }
 
     /// <summary>Rebind after a port change.</summary>
@@ -585,7 +591,9 @@ internal sealed class BridgeHost : IDisposable
 
 internal static class PluginVersion
 {
+    /// <summary>All four components: rolling builds differ only in the last
+    /// one, and the program shows this string in its status label.</summary>
     internal static readonly string Value =
-        typeof(PluginVersion).Assembly.GetName().Version?.ToString(3)
+        typeof(PluginVersion).Assembly.GetName().Version?.ToString(4)
         ?? "0.0.0";
 }

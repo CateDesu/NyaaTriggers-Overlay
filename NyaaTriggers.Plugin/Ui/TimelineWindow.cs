@@ -48,12 +48,13 @@ internal sealed class TimelineWindow : OverlayWindow
     protected override void DrawContent()
     {
         var window = Math.Max(this.Config.TimelineWindow, 1.0f);
+        var max = Math.Clamp(this.Config.TimelineRows, 1, 12);
         var clock = this.bridge.Clock;
         var drawn = 0;
 
         foreach (var entry in this.bridge.Timeline)
         {
-            if (drawn >= this.Config.TimelineRows)
+            if (drawn >= max)
             {
                 break;
             }

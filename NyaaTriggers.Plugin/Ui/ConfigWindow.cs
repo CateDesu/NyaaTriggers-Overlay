@@ -107,7 +107,8 @@ internal sealed class ConfigWindow : Window
             ImGui.TextColored(Bad, $"Not listening: {error}");
             ImGui.TextWrapped(
                 "Another program is probably already on this port. Pick a different " +
-                "one here and set the same port in the app.");
+                "one here and set the same port in the app, on its Settings page " +
+                "under In-Game Overlay.");
         }
         else if (this.bridge.IsConnected)
         {

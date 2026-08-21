@@ -66,6 +66,12 @@ internal sealed class DpsWindow : OverlayWindow
     /// the geometry capture would save that over the user's own.</summary>
     private bool wasLocked;
 
+    /// <summary>The 1 based places the kept rows held in the full list, filled
+    /// by FilterRows. Empty means no filter bit and the rank is the row index
+    /// plus one. Solo mode keeps one middle row, and renumbering it to 1
+    /// would claim a first place the player did not earn.</summary>
+    private readonly List<int> keptRanks = new();
+
     internal DpsWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
         : base("NyaaTriggers DPS###nyaaDps", config, fonts)
     {
@@ -138,25 +144,29 @@ internal sealed class DpsWindow : OverlayWindow
 
     /// <summary>The rows after the solo-only and max-combatants filters, in
     /// rank order. The common case, neither filter biting, hands the input
-    /// back without a copy.
+    /// back without a copy. keptRanks records where each kept row sat in the
+    /// full list so the solo filter cannot renumber the row to 1.
     /// </summary>
     private IReadOnlyList<DpsRow> FilterRows(IReadOnlyList<DpsRow> rows)
     {
         var max = Math.Clamp(this.Config.DpsMaxRows, 1, 24);
+        this.keptRanks.Clear();
         if (!this.Config.DpsSoloOnly && rows.Count <= max)
         {
             return rows;
         }
 
         var kept = new List<DpsRow>(Math.Min(rows.Count, max));
-        foreach (var row in rows)
+        for (var i = 0; i < rows.Count; i++)
         {
+            var row = rows[i];
             if (this.Config.DpsSoloOnly && !row.IsSelf)
             {
                 continue;
             }
 
             kept.Add(row);
+            this.keptRanks.Add(i + 1);
             if (kept.Count >= max)
             {
                 break;
@@ -165,6 +175,11 @@ internal sealed class DpsWindow : OverlayWindow
 
         return kept;
     }
+
+    /// <summary>The 1 based rank of kept row i: its place in the full list
+    /// when a filter ran, else its own index.</summary>
+    private int RankOf(int i)
+        => this.keptRanks.Count == 0 ? i + 1 : this.keptRanks[i];
 
     private void DrawMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
     {
@@ -202,7 +217,7 @@ internal sealed class DpsWindow : OverlayWindow
             default:
                 for (var i = 0; i < rows.Count; i++)
                 {
-                    this.DrawBarsRow(i + 1, rows[i]);
+                    this.DrawBarsRow(this.RankOf(i), rows[i]);
                 }
 
                 break;
@@ -488,7 +503,7 @@ internal sealed class DpsWindow : OverlayWindow
             // Rank and name centred over the cell, white with the box's text
             // effect, for the self bar too. The original lets a long name
             // overflow into the margins rather than ellipsizing it.
-            var name = showRank ? $"{i + 1}. {row.Name}" : row.Name;
+            var name = showRank ? $"{this.RankOf(i)}. {row.Name}" : row.Name;
             var nameWidth = ImGui.CalcTextSize(name).X;
             this.DrawStyledText(
                 drawList,
