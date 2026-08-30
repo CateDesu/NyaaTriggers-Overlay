@@ -180,7 +180,7 @@ internal sealed class ConfigWindow : Window
         ImGui.TextDisabled(
             locked
                 ? "Locked: no frame, clicks pass through to the game."
-                : "Unlocked: drag and resize the boxes. The timeline and DPS boxes show sample content while idle.");
+                : "Unlocked: drag and resize the boxes. They show sample content while idle.");
 
         if (ImGui.Button("Test callout"))
         {

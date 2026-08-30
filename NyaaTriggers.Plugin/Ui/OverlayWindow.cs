@@ -11,9 +11,8 @@ namespace NyaaTriggers.Plugin.Ui;
 ///
 /// Locked is the raid-night state: no chrome, no background, no input, so the
 /// box is invisible except for what it draws and clicks land on the game.
-/// Unlocked gives back a frame and a title bar so the box can be dragged and
-/// stays visible while empty. The timeline and DPS boxes also draw sample
-/// content while idle; the alerts box is reserved for real callouts.
+/// Unlocked gives back a frame and a title bar so it can be dragged, and the
+/// owner fills it with sample content so it is never an invisible empty box.
 /// </summary>
 internal abstract class OverlayWindow : Window
 {
