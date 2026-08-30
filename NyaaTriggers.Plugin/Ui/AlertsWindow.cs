@@ -59,12 +59,8 @@ internal sealed class AlertsWindow : OverlayWindow
         var alerts = this.bridge.Alerts;
         if (alerts.Count == 0)
         {
-            if (!this.Config.Locked)
-            {
-                this.DrawAlert("Sample callout", this.Config.ColorAlarm, 1.0f);
-                this.DrawAlert("Sample callout", this.Config.ColorAlert, 1.0f);
-            }
-
+            // No idle placeholder here: this box is for real callouts only.
+            // Unlocked still shows the frame and title bar for placement.
             return;
         }
 

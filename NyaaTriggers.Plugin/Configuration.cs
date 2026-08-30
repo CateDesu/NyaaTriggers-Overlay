@@ -92,7 +92,8 @@ internal sealed class Configuration : IPluginConfiguration
     public HorizColorTheme DpsHorizTheme { get; set; } = HorizColorTheme.ByRole;
 
     /// <summary>Locked: chromeless and click-through, i.e. the raid-night state.
-    /// Unlocked shows a frame and sample content so the boxes can be placed.</summary>
+    /// Unlocked shows a frame so the boxes can be placed, and the timeline and
+    /// DPS boxes draw sample content while idle.</summary>
     public bool Locked { get; set; }
 
     /// <summary>Hide both boxes outside of combat and duties, so they are not

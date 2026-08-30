@@ -505,9 +505,9 @@ internal sealed class BridgeHost : IDisposable
         this.clockRunning = false;
     }
 
-    /// <summary>Sample content for the unlocked state, so an overlay being
-    /// placed is never an invisible empty box.</summary>
-    internal void ShowPlaceholder()
+    /// <summary>The Test callout button in the config window: push one sample
+    /// alert so the box and its colours can be checked outside a fight.</summary>
+    internal void PushTestAlert()
     {
         var now = Environment.TickCount64;
         this.Push(new ActiveAlert
