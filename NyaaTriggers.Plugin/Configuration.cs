@@ -14,20 +14,21 @@ internal enum TextEffectStyle
     Glow,
 }
 
-/// <summary>How the dps meter draws its rows: timeline-style share bars,
-/// horizoverlay's side-by-side job-coloured segments, or kagerou's
-/// underlined text.</summary>
+/// <summary>How the dps meter draws its rows: timeline-style share bars, the
+/// Horizon Overlay's side-by-side job-coloured segments, or kagerou's
+/// underlined text. The members serialize as their integer values, so the
+/// rename from Horizoverlay did not disturb stored configs.</summary>
 internal enum DpsMeterStyle
 {
     Bars,
-    Horizoverlay,
+    HorizonOverlay,
     Kagerou,
 }
 
-/// <summary>The horizoverlay bar palette: the original's red/blue/green by
-/// role, or its black &amp; white theme where only the local player's bar is
+/// <summary>The Horizon Overlay bar palette: the ACT original's red/blue/green
+/// by role, or its black &amp; white theme where only the local player's bar is
 /// white and everyone else is dark.</summary>
-internal enum HorizColorTheme
+internal enum HorizonColorTheme
 {
     ByRole,
     BlackWhite,
@@ -87,9 +88,9 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>How the dps meter draws its rows.</summary>
     public DpsMeterStyle DpsStyle { get; set; } = DpsMeterStyle.Bars;
 
-    /// <summary>The horizoverlay palette: by role (its red/blue/green) or the
-    /// black &amp; white theme. Only read by the horizoverlay style.</summary>
-    public HorizColorTheme DpsHorizTheme { get; set; } = HorizColorTheme.ByRole;
+    /// <summary>The Horizon Overlay palette: by role (red/blue/green) or the
+    /// black &amp; white theme. Only read by the Horizon Overlay style.</summary>
+    public HorizonColorTheme DpsHorizTheme { get; set; } = HorizonColorTheme.ByRole;
 
     /// <summary>Locked: chromeless and click-through, i.e. the raid-night state.
     /// Unlocked shows a frame so the boxes can be placed, and the timeline and
@@ -284,7 +285,14 @@ internal sealed class Configuration : IPluginConfiguration
     /// left.</summary>
     public bool DpsBarRightToLeft { get; set; }
 
-    // ── dps box: the horizoverlay style's own knobs ───────────────────────
+    // ── dps box: the Horizon Overlay style's own knobs ────────────────────
+    // The serialized names keep the Horiz stem from before the rename so
+    // configs written by older builds still load.
+
+    /// <summary>The member name centred above each bar. Off reclaims the line
+    /// and lifts the bars to the top of the box.</summary>
+    public bool DpsHorizShowNames { get; set; } = true;
+
     /// <summary>Rank numbers before the names.</summary>
     public bool DpsHorizShowRank { get; set; } = true;
 
@@ -292,7 +300,7 @@ internal sealed class Configuration : IPluginConfiguration
     public bool DpsHorizShowIcons { get; set; } = true;
 
     /// <summary>HPS inside the bar. Off puts the job acronym in its slot,
-    /// which is what the original does.</summary>
+    /// which is what the ACT original does.</summary>
     public bool DpsHorizShowHps { get; set; } = true;
 
     /// <summary>The two-tone bar: faint overall, solid on the side of the
@@ -303,13 +311,63 @@ internal sealed class Configuration : IPluginConfiguration
     /// figure.</summary>
     public bool DpsHorizShowPercent { get; set; } = true;
 
-    /// <summary>Empty space on either side of a cell. The original's margin
-    /// is 6px around a 140px bar.</summary>
+    /// <summary>Widest a single member's bar may grow, before the text-scale
+    /// multiplier. A narrower window still shrinks every cell equally. The ACT
+    /// original caps at 140px.</summary>
+    public float DpsHorizMaxBarWidth { get; set; } = 140.0f;
+
+    /// <summary>Bar thickness before the text-scale multiplier. Tall enough by
+    /// default that the bottom-anchored stats sit clear of the job icon
+    /// straddling the top edge.</summary>
+    public float DpsHorizBarHeight { get; set; } = 32.0f;
+
+    /// <summary>The parallelogram lean in degrees, 0 being a plain rectangle.
+    /// The ACT original leans 30.</summary>
+    public float DpsHorizSkew { get; set; } = 30.0f;
+
+    /// <summary>Edge length of the job icon before the text-scale multiplier.</summary>
+    public float DpsHorizIconSize { get; set; } = 20.0f;
+
+    /// <summary>Empty space on either side of a cell. The ACT original's
+    /// margin is 6px around a 140px bar.</summary>
     public float DpsHorizCellPadding { get; set; } = 6.0f;
+
+    /// <summary>Size of the in-bar hps and dps figures relative to the box's
+    /// body text, 0.4 to 1.5. The names share it.</summary>
+    public float DpsHorizStatScale { get; set; } = 0.80f;
+
+    /// <summary>Decimal places on the in-bar dps figure, 0 to 2.</summary>
+    public int DpsHorizDecimals { get; set; } = 2;
+
+    /// <summary>Shorten the in-bar dps figure to the header's compact shape,
+    /// 10234.50 becoming 10.2k.</summary>
+    public bool DpsHorizCompact { get; set; }
 
     /// <summary>Alpha of a bar's solid side. The faint side of the two-tone
     /// follows at a third of it.</summary>
     public float DpsHorizBarOpacity { get; set; } = 0.30f;
+
+    // The default bar tints are the ACT original's own rgb() values at full
+    // alpha; the configured bar opacity scales the role tints at draw time.
+    /// <summary>The local player's bar, white in both themes.</summary>
+    public Vector4 DpsHorizSelfColor { get; set; } = new(1.000f, 1.000f, 1.000f, 0.80f);
+
+    /// <summary>Stat text on the local player's bar, plain black against the
+    /// white bar, drawn without the text effect.</summary>
+    public Vector4 DpsHorizSelfTextColor { get; set; } = new(0.000f, 0.000f, 0.000f, 1.00f);
+
+    /// <summary>Bar tint for dps jobs in the by-role theme.</summary>
+    public Vector4 DpsHorizDpsColor { get; set; } = new(0.957f, 0.263f, 0.212f, 1.00f);
+
+    /// <summary>Bar tint for tanks in the by-role theme.</summary>
+    public Vector4 DpsHorizTankColor { get; set; } = new(0.129f, 0.588f, 0.953f, 1.00f);
+
+    /// <summary>Bar tint for healers in the by-role theme.</summary>
+    public Vector4 DpsHorizHealerColor { get; set; } = new(0.545f, 0.765f, 0.290f, 1.00f);
+
+    /// <summary>Bar for jobs we do not know, and for everyone but the local
+    /// player in the black &amp; white theme.</summary>
+    public Vector4 DpsHorizDimColor { get; set; } = new(0.000f, 0.000f, 0.000f, 0.30f);
 
     // ── dps box: the encounter line, shared by every style ────────────────
     /// <summary>The encounter line at all: title, duration and party dps.</summary>
@@ -461,13 +519,27 @@ internal sealed class Configuration : IPluginConfiguration
         DpsBarRightToLeft = fresh.DpsBarRightToLeft;
         DpsStyle = fresh.DpsStyle;
         DpsHorizTheme = fresh.DpsHorizTheme;
+        DpsHorizShowNames = fresh.DpsHorizShowNames;
         DpsHorizShowRank = fresh.DpsHorizShowRank;
         DpsHorizShowIcons = fresh.DpsHorizShowIcons;
         DpsHorizShowHps = fresh.DpsHorizShowHps;
         DpsHorizHighlight = fresh.DpsHorizHighlight;
         DpsHorizShowPercent = fresh.DpsHorizShowPercent;
+        DpsHorizMaxBarWidth = fresh.DpsHorizMaxBarWidth;
+        DpsHorizBarHeight = fresh.DpsHorizBarHeight;
+        DpsHorizSkew = fresh.DpsHorizSkew;
+        DpsHorizIconSize = fresh.DpsHorizIconSize;
         DpsHorizCellPadding = fresh.DpsHorizCellPadding;
+        DpsHorizStatScale = fresh.DpsHorizStatScale;
+        DpsHorizDecimals = fresh.DpsHorizDecimals;
+        DpsHorizCompact = fresh.DpsHorizCompact;
         DpsHorizBarOpacity = fresh.DpsHorizBarOpacity;
+        DpsHorizSelfColor = fresh.DpsHorizSelfColor;
+        DpsHorizSelfTextColor = fresh.DpsHorizSelfTextColor;
+        DpsHorizDpsColor = fresh.DpsHorizDpsColor;
+        DpsHorizTankColor = fresh.DpsHorizTankColor;
+        DpsHorizHealerColor = fresh.DpsHorizHealerColor;
+        DpsHorizDimColor = fresh.DpsHorizDimColor;
         DpsShowHeader = fresh.DpsShowHeader;
         DpsHeaderDuration = fresh.DpsHeaderDuration;
         DpsHeaderTotalDps = fresh.DpsHeaderTotalDps;

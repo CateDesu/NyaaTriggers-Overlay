@@ -1,8 +1,8 @@
 # NyaaTriggers Overlay
 
 This is a companion plugin for [NyaaTriggers](https://github.com/CateDesu/NyaaTriggers). It draws the
-timeline bars, callouts, and a DPS meter in the game. The meter has three looks: share bars,
-horizoverlay-style job bars, or kagerou-style text rows. It does not work on its own, and NyaaTriggers does not draw
+timeline bars, callouts, and a DPS meter in the game. The meter has three looks: share bars, the
+Horizon Overlay's job bars, or kagerou-style text rows. It does not work on its own, and NyaaTriggers does not draw
 in the game without it, so you need both.
 
 ## Installing

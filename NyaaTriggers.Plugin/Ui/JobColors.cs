@@ -4,9 +4,9 @@ using System.Numerics;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>The three horizoverlay colour groups. Tanks and healers are
-/// listed; every other combat job is dps, matching the original's jobRoles
-/// table.</summary>
+/// <summary>The three Horizon Overlay colour groups. Tanks and healers are
+/// listed; every other combat job is dps, matching the ACT original's
+/// jobRoles table.</summary>
 internal enum JobRole
 {
     Dps,
@@ -16,8 +16,8 @@ internal enum JobRole
 
 /// <summary>
 /// Job accent colours for the dps meter styles where the colour carries the
-/// job (horizoverlay's segments, kagerou's underlines) instead of printing the
-/// acronym. The values are the cactbot-standard job colours; anything unknown
+/// job (the Horizon Overlay's segments, kagerou's underlines) instead of
+/// printing the acronym. The values are the cactbot-standard job colours; anything unknown
 /// gets a neutral grey rather than a wrong colour.
 /// </summary>
 internal static class JobColors
@@ -41,8 +41,8 @@ internal static class JobColors
         "BST",
     };
 
-    /// <summary>The job's horizoverlay role, or null for an acronym we do not
-    /// know: the original leaves unknown jobs on the plain dark bar rather
+    /// <summary>The job's Horizon Overlay role, or null for an acronym we do
+    /// not know: the original leaves unknown jobs on the plain dark bar rather
     /// than guessing a colour.</summary>
     internal static JobRole? RoleOf(string job)
     {

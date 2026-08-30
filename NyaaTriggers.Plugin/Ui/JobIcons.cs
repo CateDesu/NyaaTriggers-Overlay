@@ -6,8 +6,8 @@ namespace NyaaTriggers.Plugin.Ui;
 
 /// <summary>
 /// The metallic gold job icons, loaded from the game's own icon pack
-/// (ui/icon/062000). The dps meter's horizoverlay style centres one on each
-/// bar like the ACT original; nothing else uses them. The wire format carries
+/// (ui/icon/062000). The dps meter's Horizon Overlay style centres one on
+/// each bar like the ACT original; nothing else uses them. The wire format carries
 /// the acronym, so the map is acronym to icon id: classes are 062301 onward,
 /// jobs are 062400 + the ClassJob sheet's JobIndex (062401 PLD through 062423
 /// BST, verified against the game files). Hi-res variants exist for the whole

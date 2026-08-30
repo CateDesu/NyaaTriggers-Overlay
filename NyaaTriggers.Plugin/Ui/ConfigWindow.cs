@@ -17,8 +17,8 @@ internal sealed class ConfigWindow : Window
     private static readonly string[] CountdownNames = { "Hidden", "Whole seconds", "Tenths" };
     private static readonly string[] OrderNames = { "Newest at top", "Oldest at top" };
     private static readonly string[] AlignNames = { "Left", "Center", "Right" };
-    private static readonly string[] DpsStyleNames = { "Bars", "Horizoverlay", "Kagerou" };
-    private static readonly string[] HorizThemeNames = { "Color by role", "Black & white" };
+    private static readonly string[] DpsStyleNames = { "Bars", "Horizon Overlay", "Kagerou" };
+    private static readonly string[] HorizonThemeNames = { "Color by role", "Black & white" };
 
     private readonly Configuration config;
     private readonly BridgeHost bridge;
@@ -86,6 +86,12 @@ internal sealed class ConfigWindow : Window
             if (ImGui.CollapsingHeader("DPS meter"))
             {
                 this.DrawDps();
+                ImGui.Spacing();
+            }
+
+            if (ImGui.CollapsingHeader("Horizon Overlay"))
+            {
+                this.DrawHorizon();
                 ImGui.Spacing();
             }
         }
@@ -304,8 +310,7 @@ internal sealed class ConfigWindow : Window
         ImGui.PushID("dps");
 
         this.Combo("Style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
-        this.Combo("Horizoverlay colors", HorizThemeNames,
-            () => this.config.DpsHorizTheme, v => this.config.DpsHorizTheme = v);
+        ImGui.TextDisabled("The Horizon Overlay style has its own section below.");
         this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
             () => this.config.DpsTextScale, v => this.config.DpsTextScale = v);
         this.PercentSlider("Background",
@@ -314,25 +319,6 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsSoloOnly, v => this.config.DpsSoloOnly = v);
         this.SliderInt("Max combatants", 1, 24,
             () => this.config.DpsMaxRows, v => this.config.DpsMaxRows = v);
-
-        ImGui.Spacing();
-
-        ImGui.TextDisabled("Horizoverlay style.");
-        this.Check("Rank numbers",
-            () => this.config.DpsHorizShowRank, v => this.config.DpsHorizShowRank = v);
-        this.Check("Job icons",
-            () => this.config.DpsHorizShowIcons, v => this.config.DpsHorizShowIcons = v);
-        this.Check("HPS",
-            () => this.config.DpsHorizShowHps, v => this.config.DpsHorizShowHps = v);
-        ImGui.TextDisabled("Off shows the job acronym in its slot.");
-        this.Check("Two-tone highlight",
-            () => this.config.DpsHorizHighlight, v => this.config.DpsHorizHighlight = v);
-        this.Check("Damage %",
-            () => this.config.DpsHorizShowPercent, v => this.config.DpsHorizShowPercent = v);
-        this.Slider("Cell padding", 0.0f, 24.0f, "%.0f px",
-            () => this.config.DpsHorizCellPadding, v => this.config.DpsHorizCellPadding = v);
-        this.PercentSlider("Bar opacity",
-            () => this.config.DpsHorizBarOpacity, v => this.config.DpsHorizBarOpacity = v);
 
         ImGui.Spacing();
 
@@ -368,7 +354,7 @@ internal sealed class ConfigWindow : Window
         this.ColorRow("Bar border",
             () => this.config.DpsBarBorderColor, v => this.config.DpsBarBorderColor = v);
         this.ColorRow("Bar text", () => this.config.DpsTextColor, v => this.config.DpsTextColor = v);
-        ImGui.TextDisabled("Bars style only; Horizoverlay colours by role, Kagerou by job.");
+        ImGui.TextDisabled("Bars style only; Horizon Overlay colours by role, Kagerou by job.");
 
         ImGui.Spacing();
 
@@ -376,6 +362,75 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsTextEffect, v => this.config.DpsTextEffect = v,
             () => this.config.DpsEffectThickness, v => this.config.DpsEffectThickness = v,
             () => this.config.DpsEffectColor, v => this.config.DpsEffectColor = v);
+
+        ImGui.PopID();
+    }
+
+    /// <summary>The Horizon Overlay's own section: the toggles, the geometry
+    /// and text sizing, and the bar palette. Everything applies live to the
+    /// sample strip an unlocked meter box draws.</summary>
+    private void DrawHorizon()
+    {
+        ImGui.PushID("horizon");
+
+        this.Combo("Colors", HorizonThemeNames,
+            () => this.config.DpsHorizTheme, v => this.config.DpsHorizTheme = v);
+
+        this.Check("Show names",
+            () => this.config.DpsHorizShowNames, v => this.config.DpsHorizShowNames = v);
+        this.Check("Rank numbers",
+            () => this.config.DpsHorizShowRank, v => this.config.DpsHorizShowRank = v);
+        this.Check("Job icons",
+            () => this.config.DpsHorizShowIcons, v => this.config.DpsHorizShowIcons = v);
+        this.Check("HPS",
+            () => this.config.DpsHorizShowHps, v => this.config.DpsHorizShowHps = v);
+        ImGui.TextDisabled("Off shows the job acronym in its slot.");
+        this.Check("Two-tone highlight",
+            () => this.config.DpsHorizHighlight, v => this.config.DpsHorizHighlight = v);
+        this.Check("Damage %",
+            () => this.config.DpsHorizShowPercent, v => this.config.DpsHorizShowPercent = v);
+
+        ImGui.Spacing();
+
+        this.Slider("Max bar width", 40.0f, 400.0f, "%.0f px",
+            () => this.config.DpsHorizMaxBarWidth, v => this.config.DpsHorizMaxBarWidth = v);
+        this.Slider("Bar height", 10.0f, 60.0f, "%.0f px",
+            () => this.config.DpsHorizBarHeight, v => this.config.DpsHorizBarHeight = v);
+        this.Slider("Skew", 0.0f, 45.0f, "%.0f°",
+            () => this.config.DpsHorizSkew, v => this.config.DpsHorizSkew = v);
+        this.Slider("Icon size", 8.0f, 64.0f, "%.0f px",
+            () => this.config.DpsHorizIconSize, v => this.config.DpsHorizIconSize = v);
+        this.Slider("Cell padding", 0.0f, 24.0f, "%.0f px",
+            () => this.config.DpsHorizCellPadding, v => this.config.DpsHorizCellPadding = v);
+        this.PercentSlider("Stat text size",
+            () => this.config.DpsHorizStatScale, v => this.config.DpsHorizStatScale = v,
+            40.0f, 150.0f);
+        ImGui.TextDisabled("The hps and dps figures inside the bars, and the names above them.");
+        this.SliderInt("DPS decimals", 0, 2,
+            () => this.config.DpsHorizDecimals, v => this.config.DpsHorizDecimals = v);
+        this.Check("Compact numbers",
+            () => this.config.DpsHorizCompact, v => this.config.DpsHorizCompact = v);
+        ImGui.TextDisabled("10.2k instead of 10234.50.");
+        this.PercentSlider("Bar opacity",
+            () => this.config.DpsHorizBarOpacity, v => this.config.DpsHorizBarOpacity = v);
+
+        ImGui.Spacing();
+
+        this.ColorRow("Self bar",
+            () => this.config.DpsHorizSelfColor, v => this.config.DpsHorizSelfColor = v);
+        this.ColorRow("Self bar text",
+            () => this.config.DpsHorizSelfTextColor, v => this.config.DpsHorizSelfTextColor = v);
+        this.ColorRow("DPS bars",
+            () => this.config.DpsHorizDpsColor, v => this.config.DpsHorizDpsColor = v);
+        this.ColorRow("Tank bars",
+            () => this.config.DpsHorizTankColor, v => this.config.DpsHorizTankColor = v);
+        this.ColorRow("Healer bars",
+            () => this.config.DpsHorizHealerColor, v => this.config.DpsHorizHealerColor = v);
+        this.ColorRow("Unknown jobs",
+            () => this.config.DpsHorizDimColor, v => this.config.DpsHorizDimColor = v);
+        ImGui.TextDisabled(
+            "The role tints need the Color by role theme. Black & white uses " +
+            "Self bar and Unknown jobs for everyone else.");
 
         ImGui.PopID();
     }
@@ -415,11 +470,13 @@ internal sealed class ConfigWindow : Window
     }
 
     /// <summary>Stored 0..1 but shown as a percent (SliderFloat formats the
-    /// raw value).</summary>
-    private void PercentSlider(string label, Func<float> get, Action<float> set)
+    /// raw value). Some knobs legitimately pass 100%, like a stat text
+    /// larger than the body, so the range is a parameter.</summary>
+    private void PercentSlider(
+        string label, Func<float> get, Action<float> set, float min = 0.0f, float max = 100.0f)
     {
         var value = get() * 100.0f;
-        if (ImGui.SliderFloat(label, ref value, 0.0f, 100.0f, "%.0f%%"))
+        if (ImGui.SliderFloat(label, ref value, min, max, "%.0f%%"))
         {
             set(value / 100.0f);
         }

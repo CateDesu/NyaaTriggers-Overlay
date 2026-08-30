@@ -439,8 +439,8 @@ internal sealed class BridgeHost : IDisposable
             {
                 // [name, job, encdps, share, hps, isSelf] rows, sorted by
                 // encdps desc, matching what the app's meter produces. The
-                // last two fields arrived with the horizoverlay look; an old
-                // app's 4-field rows just get the defaults.
+                // last two fields arrived with the Horizon Overlay look; an
+                // old app's 4-field rows just get the defaults.
                 if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
                 {
                     continue;
