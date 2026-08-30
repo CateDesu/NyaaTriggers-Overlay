@@ -14,6 +14,7 @@ internal sealed class PluginUi : IDisposable
     private readonly BridgeHost bridge;
     private readonly ScaledFonts fonts;
     private readonly WindowSystem windows = new("NyaaTriggers");
+    private readonly FlashWindow flash;
     private readonly TimelineWindow timeline;
     private readonly AlertsWindow alerts;
     private readonly DpsWindow dps;
@@ -25,11 +26,14 @@ internal sealed class PluginUi : IDisposable
         this.bridge = bridge;
         this.fonts = fonts;
 
+        this.flash = new FlashWindow(config);
         this.timeline = new TimelineWindow(config, bridge, fonts);
         this.alerts = new AlertsWindow(config, bridge, fonts);
         this.dps = new DpsWindow(config, bridge, fonts);
         this.configWindow = new ConfigWindow(config, bridge, this);
 
+        // The flash is added first so the boxes draw over the glow, not under.
+        this.windows.AddWindow(this.flash);
         this.windows.AddWindow(this.timeline);
         this.windows.AddWindow(this.alerts);
         this.windows.AddWindow(this.dps);
@@ -68,7 +72,27 @@ internal sealed class PluginUi : IDisposable
         this.dps.IsOpen = this.OverlayVisible && this.config.ShowDps &&
             (!this.config.Locked || (dps.Show && dps.Rows.Count > 0));
 
+        // The screen flash is strictly the raid-night state: locked, alerts
+        // on, an alarm live and not filtered out. While unlocked the boxes
+        // are being placed and a full screen glow would only annoy.
+        this.flash.IsOpen = this.OverlayVisible && this.config.Locked &&
+            this.config.ShowAlerts && this.config.AlarmScreenFlash &&
+            this.config.AlertsShowAlarm && this.HasLiveAlarm();
+
         this.windows.Draw();
+    }
+
+    private bool HasLiveAlarm()
+    {
+        foreach (var alert in this.bridge.Alerts)
+        {
+            if (alert.Severity == Severity.Alarm)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool ShouldShowOverlay()
@@ -91,6 +115,11 @@ internal sealed class PluginUi : IDisposable
         }
 
         if (this.config.OnlyInDuty && !Services.Condition[ConditionFlag.BoundByDuty])
+        {
+            return false;
+        }
+
+        if (this.config.OnlyInCombat && !Services.Condition[ConditionFlag.InCombat])
         {
             return false;
         }

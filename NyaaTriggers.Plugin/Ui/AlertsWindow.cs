@@ -54,42 +54,100 @@ internal sealed class AlertsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Config.AlertsEffectColor;
 
+    /// <summary>One callout laid out for drawing: the wrapped or elided
+    /// lines, the severity colour, the fade, and whether it is an alarm.
+    /// Lines are resolved up front so the bottom-anchored layout can total
+    /// the stack's height before anything is placed.</summary>
+    private readonly record struct DrawItem(List<string> Lines, Vector4 Color, float Alpha, bool IsAlarm);
+
+    /// <summary>Scratch for the collect-then-draw pass, cleared each frame.
+    /// The per-callout line lists still allocate, as the wrapped draw always
+    /// did; the outer list no longer does.</summary>
+    private readonly List<DrawItem> items = new();
+
     protected override void DrawContent()
     {
+        var items = this.CollectItems();
+
+        if (this.Config.AlertsAnchorBottom && items.Count > 0)
+        {
+            var lineHeight = ImGui.GetTextLineHeight();
+            var total = 0.0f;
+            foreach (var item in items)
+            {
+                total += (item.Lines.Count * lineHeight) + BlockSpacing;
+            }
+
+            var slack = ImGui.GetContentRegionAvail().Y - total;
+            if (slack > 0.0f)
+            {
+                ImGui.Dummy(new Vector2(1.0f, slack));
+            }
+        }
+
+        // The box border pulses while an alarm is up, fading with the alarm
+        // itself rather than cutting out at the expiry tick.
+        var alarmAlpha = 0.0f;
+        foreach (var item in items)
+        {
+            this.DrawAlert(item);
+            if (item.IsAlarm)
+            {
+                alarmAlpha = Math.Max(alarmAlpha, item.Alpha);
+            }
+        }
+
+        if (alarmAlpha > 0.0f && this.Config.AlertsAlarmFlash)
+        {
+            var drawList = ImGui.GetWindowDrawList();
+            var pos = ImGui.GetWindowPos();
+            var phase = (float)((Math.Sin(Environment.TickCount64 / 140.0) * 0.3) + 0.7);
+            drawList.AddRect(
+                pos,
+                pos + ImGui.GetWindowSize(),
+                ToColor(WithAlpha(this.Config.ColorAlarm, alarmAlpha * phase)),
+                4.0f,
+                ImDrawFlags.None,
+                2.0f);
+        }
+    }
+
+    /// <summary>The visible callouts in draw order, filters applied. An empty
+    /// stack draws samples while unlocked so the box is never a blank frame.</summary>
+    private List<DrawItem> CollectItems()
+    {
+        var items = this.items;
+        items.Clear();
         var alerts = this.bridge.Alerts;
         if (alerts.Count == 0)
         {
             if (!this.Config.Locked)
             {
-                // Placeholder so an unlocked box being positioned is never blank.
-                this.DrawAlert("Sample callout", this.Config.ColorAlarm, 1.0f);
-                this.DrawAlert("Sample callout", this.Config.ColorAlert, 1.0f);
+                items.Add(this.MakeItem("Sample callout", this.Config.ColorAlarm, 1.0f, false));
+                items.Add(this.MakeItem("Sample callout", this.Config.ColorAlert, 1.0f, false));
             }
 
-            return;
+            return items;
         }
 
-        // The newest alert lives at the end of the list. The order setting
-        // picks which end of the stack it is drawn at; either way only the
-        // most recent few are shown.
+        // The newest alert lives at the end of the list. Either way the stack
+        // is the most recent few, filtered severities costing no slot; the
+        // order setting only picks which way up they stack.
         var max = Math.Clamp(this.Config.AlertsMaxVisible, 1, 8);
-        if (this.Config.AlertOrder == AlertOrder.NewestFirst)
+        for (var i = alerts.Count - 1; i >= 0 && items.Count < max; i--)
         {
-            for (var i = alerts.Count - 1; i >= 0 && alerts.Count - i <= max; i--)
-            {
-                this.DrawWithFade(alerts[i]);
-            }
+            this.AddItem(items, alerts[i]);
         }
-        else
+
+        if (this.Config.AlertOrder == AlertOrder.OldestFirst)
         {
-            for (var i = Math.Max(alerts.Count - max, 0); i < alerts.Count; i++)
-            {
-                this.DrawWithFade(alerts[i]);
-            }
+            items.Reverse();
         }
+
+        return items;
     }
 
-    private void DrawWithFade(ActiveAlert alert)
+    private void AddItem(List<DrawItem> items, ActiveAlert alert)
     {
         var color = alert.Severity switch
         {
@@ -97,6 +155,18 @@ internal sealed class AlertsWindow : OverlayWindow
             Severity.Alert => this.Config.ColorAlert,
             _ => this.Config.ColorInfo,
         };
+
+        var visible = alert.Severity switch
+        {
+            Severity.Alarm => this.Config.AlertsShowAlarm,
+            Severity.Alert => this.Config.AlertsShowAlert,
+            _ => this.Config.AlertsShowInfo,
+        };
+
+        if (!visible)
+        {
+            return;
+        }
 
         var alpha = 1.0f;
         if (this.Config.AlertsAnimate)
@@ -109,18 +179,47 @@ internal sealed class AlertsWindow : OverlayWindow
                 age >= RiseSeconds ? 1.0f : Math.Max(age, 0.0f) / RiseSeconds);
         }
 
-        this.DrawAlert(alert.Text, color, alpha);
+        var text = alert.Text;
+        if (this.Config.AlertsCollapseDupes && alert.Count > 1)
+        {
+            text = $"{text} ×{Math.Min(alert.Count, 99)}";
+        }
+
+        items.Add(this.MakeItem(text, color, alpha, alert.Severity == Severity.Alarm));
     }
 
-    private void DrawAlert(string text, Vector4 color, float alpha)
+    /// <summary>Resolve one callout's lines: wrapped to the box width, or one
+    /// elided line when wrapping is off.</summary>
+    private DrawItem MakeItem(string text, Vector4 color, float alpha, bool isAlarm)
+    {
+        var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
+        var lines = this.Config.AlertsWrap
+            ? WrapLines(text, width)
+            : new List<string> { Elide(text, width) };
+        return new DrawItem(lines, color, alpha, isAlarm);
+    }
+
+    private void DrawAlert(DrawItem item)
     {
         var drawList = ImGui.GetWindowDrawList();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
         var origin = ImGui.GetCursorScreenPos();
         var lineHeight = ImGui.GetTextLineHeight();
-        var y = 0.0f;
 
-        foreach (var line in WrapLines(text, width))
+        if (this.Config.AlertsSeverityTint)
+        {
+            var plate = WithAlpha(
+                item.Color,
+                Math.Clamp(this.Config.AlertsSeverityTintOpacity, 0.0f, 1.0f) * item.Alpha);
+            drawList.AddRectFilled(
+                origin,
+                origin + new Vector2(width, item.Lines.Count * lineHeight),
+                ToColor(plate),
+                4.0f);
+        }
+
+        var y = 0.0f;
+        foreach (var line in item.Lines)
         {
             var lineWidth = ImGui.CalcTextSize(line).X;
             var x = this.Config.AlertsAlign switch
@@ -133,7 +232,7 @@ internal sealed class AlertsWindow : OverlayWindow
             this.DrawStyledText(
                 drawList,
                 origin + new Vector2(x, y),
-                WithAlpha(color, alpha),
+                WithAlpha(item.Color, item.Alpha),
                 line);
             y += lineHeight;
         }

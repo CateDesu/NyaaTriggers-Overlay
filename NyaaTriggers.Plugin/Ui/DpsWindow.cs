@@ -320,8 +320,13 @@ internal sealed class DpsWindow : OverlayWindow
             var fillOrigin = this.Config.DpsBarRightToLeft
                 ? origin + new Vector2(width - fillWidth, 0.0f)
                 : origin;
+            // Job coloured bars keep the configured bar colour's alpha so the
+            // tint knob still governs how loud the fill reads.
+            var fill = this.Config.DpsBarJobColors
+                ? WithAlpha(JobColors.Get(row.Job), Math.Clamp(this.Config.DpsBarColor.W, 0.0f, 1.0f))
+                : this.Config.DpsBarColor;
             AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height),
-                this.Config.DpsBarColor, rounding);
+                fill, rounding);
         }
 
         if (this.Config.DpsBarBorderThickness > 0.0f)
@@ -338,7 +343,9 @@ internal sealed class DpsWindow : OverlayWindow
         var label = string.IsNullOrWhiteSpace(row.Job)
             ? $"{rank}  {row.Name}"
             : $"{rank}  {row.Name} · {row.Job}";
-        var dpsText = FormatDps(row.Dps);
+        var dpsText = this.Config.DpsBarsShowShare
+            ? $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}"
+            : FormatDps(row.Dps);
         var dpsWidth = ImGui.CalcTextSize(dpsText).X;
 
         // The name ends in an ellipsis rather than running into the pinned

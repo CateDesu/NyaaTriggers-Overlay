@@ -38,10 +38,17 @@ internal sealed class ActiveAlert
 
     internal required Severity Severity { get; init; }
 
-    /// <summary>Monotonic milliseconds at which this alert stops drawing.</summary>
-    internal required long ExpiresAt { get; init; }
+    /// <summary>Monotonic milliseconds at which this alert stops drawing.
+    /// Settable so a merged repeat can push the expiry out.</summary>
+    internal required long ExpiresAt { get; set; }
 
-    internal required long ShownAt { get; init; }
+    /// <summary>Settable so a merged repeat re-runs the rise-in and reads as
+    /// fired again rather than sitting unchanged.</summary>
+    internal required long ShownAt { get; set; }
+
+    /// <summary>How many times this callout has fired while it stayed on top.
+    /// One means shown as-is; above one the window appends a times counter.</summary>
+    internal int Count { get; set; } = 1;
 }
 
 /// <summary>
@@ -134,6 +141,10 @@ internal sealed class BridgeHost : IDisposable
     internal double Clock => this.clockRunning
         ? this.clockBase + ((Environment.TickCount64 - this.clockStamp) / 1000.0)
         : this.clockBase;
+
+    /// <summary>Whether a tick has ever landed, so the timeline box's clock
+    /// line can stay hidden until a fight clock actually exists.</summary>
+    internal bool ClockRunning => this.clockRunning;
 
     internal void Start()
     {
@@ -521,9 +532,27 @@ internal sealed class BridgeHost : IDisposable
 
     /// <summary>Add an alert and hold the stack to its cap, oldest out first: a
     /// burst inside one alert's lifetime must not grow the display without
-    /// limit. Every alert goes through here so no path can skip the trim.</summary>
+    /// limit. Every alert goes through here so no path can skip the trim.
+    /// With merge repeats on, a repeat of the callout already on top bumps its
+    /// counter and expiry instead of stacking another row.</summary>
     private void Push(ActiveAlert alert)
     {
+        if (this.config.AlertsCollapseDupes && this.alerts.Count > 0)
+        {
+            var last = this.alerts[^1];
+            if (last.Text == alert.Text && last.Severity == alert.Severity)
+            {
+                last.Count++;
+                last.ShownAt = alert.ShownAt;
+
+                // Max, not a straight take: the wire allows a per-alert ttl,
+                // so a repeat carrying a shorter one must not clip the life
+                // the showing callout has left.
+                last.ExpiresAt = Math.Max(last.ExpiresAt, alert.ExpiresAt);
+                return;
+            }
+        }
+
         this.alerts.Add(alert);
         while (this.alerts.Count > MaxAlerts)
         {

@@ -96,9 +96,13 @@ internal sealed class Configuration : IPluginConfiguration
     /// Unlocked shows a frame and sample content so the boxes can be placed.</summary>
     public bool Locked { get; set; }
 
-    /// <summary>Hide both boxes outside of combat and duties, so they are not
+    /// <summary>Hide both boxes outside of duties, so they are not
     /// sitting over the overworld doing nothing.</summary>
     public bool OnlyInDuty { get; set; }
+
+    /// <summary>Hide the boxes while out of combat. Stacks with OnlyInDuty:
+    /// both ticked means the boxes only show for a fight inside a duty.</summary>
+    public bool OnlyInCombat { get; set; }
 
     // ── geometry (screen pixels, persisted ourselves: the overlay windows use
     //     NoSavedSettings so imgui.ini never fights us) ────────────────────
@@ -187,6 +191,19 @@ internal sealed class Configuration : IPluginConfiguration
     /// past its configured height.</summary>
     public int TimelineRows { get; set; } = 6;
 
+    /// <summary>The fight clock as a line above the bars, mm:ss. Off by
+    /// default: the meter's encounter line already carries a duration, and
+    /// this is for layouts that hide the meter.</summary>
+    public bool TimelineShowClock { get; set; }
+
+    /// <summary>Bars hug the box's bottom edge and the stack grows upward,
+    /// for boxes parked just above the hotbars.</summary>
+    public bool TimelineAnchorBottom { get; set; }
+
+    /// <summary>A cue that reaches zero flashes as a full bar for a beat
+    /// instead of vanishing, so the moment it fires reads on screen.</summary>
+    public bool TimelineFireFlash { get; set; } = true;
+
     /// <summary>Fill colour for bars about to fire.</summary>
     public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
 
@@ -224,6 +241,43 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Rise-in and fade-out animation. Off pins callouts at full
     /// opacity for their whole life.</summary>
     public bool AlertsAnimate { get; set; } = true;
+
+    /// <summary>Per-severity filters. Hiding info callouts is the common one:
+    /// they are spoken anyway, and the box stays quiet for everything but
+    /// what must be seen.</summary>
+    public bool AlertsShowInfo { get; set; } = true;
+    public bool AlertsShowAlert { get; set; } = true;
+    public bool AlertsShowAlarm { get; set; } = true;
+
+    /// <summary>Callouts hug the box's bottom edge and the stack grows
+    /// upward, for boxes parked low on the screen.</summary>
+    public bool AlertsAnchorBottom { get; set; }
+
+    /// <summary>Wrap long callouts inside the box. Off draws each callout as
+    /// one line ending in an ellipsis, so the box stays one row per callout.</summary>
+    public bool AlertsWrap { get; set; } = true;
+
+    /// <summary>A repeat of the callout already on top folds into it as a
+    /// times counter instead of stacking another row. Chatty triggers that
+    /// refire the same text stay one line.</summary>
+    public bool AlertsCollapseDupes { get; set; } = true;
+
+    /// <summary>A faint plate in the callout's severity colour behind each
+    /// callout, so the colour reads in peripheral vision.</summary>
+    public bool AlertsSeverityTint { get; set; }
+
+    /// <summary>Opacity of the severity plate, scaled by the callout's own
+    /// fade.</summary>
+    public float AlertsSeverityTintOpacity { get; set; } = 0.30f;
+
+    /// <summary>Pulse a border around the alerts box while an alarm callout
+    /// is up.</summary>
+    public bool AlertsAlarmFlash { get; set; } = true;
+
+    /// <summary>Glow the screen edges in the alarm colour while an alarm
+    /// callout is up. Loud and locked to the raid-night state, so it never
+    /// fires over the settings boxes.</summary>
+    public bool AlarmScreenFlash { get; set; }
 
     public Vector4 ColorInfo { get; set; } = new(0.89f, 0.74f, 0.42f, 1.00f);
     public Vector4 ColorAlert { get; set; } = new(0.98f, 0.62f, 0.35f, 1.00f);
@@ -283,6 +337,15 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Anchor the share bars' fill to the right edge instead of the
     /// left.</summary>
     public bool DpsBarRightToLeft { get; set; }
+
+    /// <summary>Bars style only: fill each bar in the member's job colour at
+    /// the configured bar colour's alpha, like kagerou's underlines, instead
+    /// of the single shared tint.</summary>
+    public bool DpsBarJobColors { get; set; }
+
+    /// <summary>Bars style only: put the damage share beside the dps figure
+    /// pinned to the right edge.</summary>
+    public bool DpsBarsShowShare { get; set; }
 
     // ── dps box: the Horizon Overlay style's own knobs ────────────────────
     // The serialized names keep the Horiz stem from before the rename so
@@ -485,6 +548,9 @@ internal sealed class Configuration : IPluginConfiguration
         CountdownSplit = fresh.CountdownSplit;
         TimelineWindow = fresh.TimelineWindow;
         TimelineRows = fresh.TimelineRows;
+        TimelineShowClock = fresh.TimelineShowClock;
+        TimelineAnchorBottom = fresh.TimelineAnchorBottom;
+        TimelineFireFlash = fresh.TimelineFireFlash;
         ColorImminent = fresh.ColorImminent;
         AlertsTextScale = fresh.AlertsTextScale;
         AlertsBgOpacity = fresh.AlertsBgOpacity;
@@ -496,6 +562,16 @@ internal sealed class Configuration : IPluginConfiguration
         AlertOrder = fresh.AlertOrder;
         AlertsAlign = fresh.AlertsAlign;
         AlertsAnimate = fresh.AlertsAnimate;
+        AlertsShowInfo = fresh.AlertsShowInfo;
+        AlertsShowAlert = fresh.AlertsShowAlert;
+        AlertsShowAlarm = fresh.AlertsShowAlarm;
+        AlertsAnchorBottom = fresh.AlertsAnchorBottom;
+        AlertsWrap = fresh.AlertsWrap;
+        AlertsCollapseDupes = fresh.AlertsCollapseDupes;
+        AlertsSeverityTint = fresh.AlertsSeverityTint;
+        AlertsSeverityTintOpacity = fresh.AlertsSeverityTintOpacity;
+        AlertsAlarmFlash = fresh.AlertsAlarmFlash;
+        AlarmScreenFlash = fresh.AlarmScreenFlash;
         ColorInfo = fresh.ColorInfo;
         ColorAlert = fresh.ColorAlert;
         ColorAlarm = fresh.ColorAlarm;
@@ -516,6 +592,8 @@ internal sealed class Configuration : IPluginConfiguration
         DpsBarTrackColor = fresh.DpsBarTrackColor;
         DpsBarBorderColor = fresh.DpsBarBorderColor;
         DpsBarRightToLeft = fresh.DpsBarRightToLeft;
+        DpsBarJobColors = fresh.DpsBarJobColors;
+        DpsBarsShowShare = fresh.DpsBarsShowShare;
         DpsStyle = fresh.DpsStyle;
         DpsHorizTheme = fresh.DpsHorizTheme;
         DpsHorizShowNames = fresh.DpsHorizShowNames;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -15,7 +16,14 @@ internal sealed class TimelineWindow : OverlayWindow
 {
     private const float TextPadding = 6.0f;
 
+    /// <summary>How long a fired cue stays up as a full flashing bar.</summary>
+    private const float FireFlashSeconds = 0.6f;
+
     private readonly BridgeHost bridge;
+
+    /// <summary>Scratch for the collect-then-draw pass, cleared each frame so
+    /// the bar walk stays allocation free like the streaming draw before it.</summary>
+    private readonly List<(string Label, float Remaining, bool Fired)> rows = new();
 
     internal TimelineWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
         : base("NyaaTriggers Timeline###nyaaTimeline", config, fonts)
@@ -50,21 +58,28 @@ internal sealed class TimelineWindow : OverlayWindow
         var window = Math.Max(this.Config.TimelineWindow, 1.0f);
         var max = Math.Clamp(this.Config.TimelineRows, 1, 12);
         var clock = this.bridge.Clock;
-        var drawn = 0;
 
+        // Collect first, draw second: anchoring the stack to the bottom edge
+        // needs the total height before anything is placed.
+        var rows = this.rows;
+        rows.Clear();
         foreach (var entry in this.bridge.Timeline)
         {
-            if (drawn >= max)
+            if (rows.Count >= max)
             {
                 break;
             }
 
             var remaining = entry.Time - clock;
 
-            // Past cues fall off; anything beyond the window is not yet worth
-            // the row. The schedule is sorted, so the first one past the window
-            // means every later one is too.
-            if (remaining < 0)
+            // Past cues fall off, except a just-fired one when the fire flash
+            // is on: it stays for a beat as a full bar so the moment it lands
+            // reads on screen. Anything beyond the window is not yet worth
+            // the row. The schedule is sorted, so the first one past the
+            // window means every later one is too.
+            var fired = this.Config.TimelineFireFlash
+                && remaining < 0.0 && remaining >= -FireFlashSeconds;
+            if (remaining < 0.0 && !fired)
             {
                 continue;
             }
@@ -74,19 +89,70 @@ internal sealed class TimelineWindow : OverlayWindow
                 break;
             }
 
-            this.DrawBar(entry.Label, (float)remaining, window);
-            drawn++;
+            rows.Add((entry.Label, (float)Math.Max(remaining, 0.0), fired));
         }
 
-        if (drawn == 0 && !this.Config.Locked)
+        if (rows.Count == 0 && !this.Config.Locked)
         {
             // Placeholder so an unlocked box being positioned is never blank.
-            this.DrawBar("Sample mechanic", window * 0.6f, window);
-            this.DrawBar("Sample mechanic", this.Config.ImminentSeconds * 0.5f, window);
+            rows.Add(("Sample mechanic", window * 0.6f, false));
+            rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false));
+        }
+
+        // The clock line needs a fight clock; an unlocked box gets a stand-in
+        // so the line can still be placed.
+        var clockLine = this.Config.TimelineShowClock
+            && (this.bridge.ClockRunning || !this.Config.Locked);
+
+        if (this.Config.TimelineAnchorBottom)
+        {
+            var spacing = Math.Max(this.Config.TimelineBarSpacing, 0.0f);
+            var total = rows.Count *
+                ((this.Config.TimelineBarHeight * ClampTextScale(this.TextScale)) + spacing);
+            if (clockLine)
+            {
+                total += ImGui.GetTextLineHeight() + spacing;
+            }
+
+            var slack = ImGui.GetContentRegionAvail().Y - total;
+            if (slack > 0.0f)
+            {
+                ImGui.Dummy(new Vector2(1.0f, slack));
+            }
+        }
+
+        if (clockLine)
+        {
+            this.DrawClockLine();
+        }
+
+        foreach (var row in rows)
+        {
+            this.DrawBar(row.Label, row.Remaining, window, row.Fired);
         }
     }
 
-    private void DrawBar(string label, float remaining, float window)
+    /// <summary>The fight clock as a plain line above the bars, mm:ss.</summary>
+    private void DrawClockLine()
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        var origin = ImGui.GetCursorScreenPos();
+        var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
+        var text = this.bridge.ClockRunning ? FormatClock(this.bridge.Clock) : "12:34";
+        this.DrawAlignedText(drawList, text, origin, width, origin.Y);
+        ImGui.Dummy(new Vector2(width, ImGui.GetTextLineHeight() + Math.Max(this.Config.TimelineBarSpacing, 0.0f)));
+    }
+
+    private static string FormatClock(double seconds)
+    {
+        var total = Math.Max((int)seconds, 0);
+        return string.Concat(
+            (total / 60).ToString("D2", CultureInfo.InvariantCulture),
+            ":",
+            (total % 60).ToString("D2", CultureInfo.InvariantCulture));
+    }
+
+    private void DrawBar(string label, float remaining, float window, bool fired)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
@@ -95,14 +161,16 @@ internal sealed class TimelineWindow : OverlayWindow
         var rounding = Math.Min(Math.Max(this.Config.TimelineBarRounding, 0.0f), height * 0.5f);
 
         // Depleting bars shrink toward zero as the cue arrives, so the bar
-        // reads as time left; filling bars invert that and grow instead.
-        var fraction = Math.Clamp(remaining / window, 0.0f, 1.0f);
-        if (this.Config.BarFill == BarFillMode.Fill)
+        // reads as time left; filling bars invert that and grow instead. A
+        // fired cue flashes as a full bar for its beat, whichever way the
+        // fill runs.
+        var fraction = fired ? 1.0f : Math.Clamp(remaining / window, 0.0f, 1.0f);
+        if (!fired && this.Config.BarFill == BarFillMode.Fill)
         {
             fraction = 1.0f - fraction;
         }
 
-        var imminent = remaining <= Math.Max(this.Config.ImminentSeconds, 0.0f);
+        var imminent = fired || remaining <= Math.Max(this.Config.ImminentSeconds, 0.0f);
         var fill = imminent ? this.Config.ColorImminent : this.Config.TimelineBarColor;
 
         if (imminent && this.Config.ImminentPulse)

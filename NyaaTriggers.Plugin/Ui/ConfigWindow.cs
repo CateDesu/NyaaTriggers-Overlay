@@ -168,6 +168,8 @@ internal sealed class ConfigWindow : Window
         this.Check("Alert pop-ups", () => this.config.ShowAlerts, v => this.config.ShowAlerts = v);
         this.Check("DPS meter", () => this.config.ShowDps, v => this.config.ShowDps = v);
         this.Check("Only inside duties", () => this.config.OnlyInDuty, v => this.config.OnlyInDuty = v);
+        this.Check("Only in combat", () => this.config.OnlyInCombat, v => this.config.OnlyInCombat = v);
+        ImGui.TextDisabled("Both visibility filters stack: ticked together, the boxes show only for a fight inside a duty.");
 
         ImGui.Spacing();
 
@@ -194,10 +196,15 @@ internal sealed class ConfigWindow : Window
             ImGui.SameLine();
             ImGui.TextColored(Waiting, "Alert pop-ups are off.");
         }
-        else if (this.config.Locked && this.config.OnlyInDuty && !this.ui.OverlayVisible)
+        else if (!this.config.AlertsShowInfo && !this.config.AlertsShowAlert && !this.config.AlertsShowAlarm)
         {
             ImGui.SameLine();
-            ImGui.TextColored(Waiting, "Hidden outside duties.");
+            ImGui.TextColored(Waiting, "All severities are filtered out.");
+        }
+        else if (this.config.Locked && (this.config.OnlyInDuty || this.config.OnlyInCombat) && !this.ui.OverlayVisible)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Waiting, "Hidden by the visibility filters.");
         }
     }
 
@@ -246,6 +253,14 @@ internal sealed class ConfigWindow : Window
             () => this.config.TimelineWindow, v => this.config.TimelineWindow = v);
         this.SliderInt("Max bars", 1, 12,
             () => this.config.TimelineRows, v => this.config.TimelineRows = v);
+        this.Check("Show the fight clock",
+            () => this.config.TimelineShowClock, v => this.config.TimelineShowClock = v);
+        ImGui.TextDisabled("A mm:ss line above the bars.");
+        this.Check("Anchor bars to the bottom",
+            () => this.config.TimelineAnchorBottom, v => this.config.TimelineAnchorBottom = v);
+        this.Check("Flash bars as they fire",
+            () => this.config.TimelineFireFlash, v => this.config.TimelineFireFlash = v);
+        ImGui.TextDisabled("A cue that reaches zero stays a beat as a full flashing bar.");
 
         ImGui.Spacing();
 
@@ -288,6 +303,35 @@ internal sealed class ConfigWindow : Window
         this.Combo("Text alignment", AlignNames,
             () => this.config.AlertsAlign, v => this.config.AlertsAlign = v);
         this.Check("Fade in and out", () => this.config.AlertsAnimate, v => this.config.AlertsAnimate = v);
+        this.Check("Anchor to the bottom",
+            () => this.config.AlertsAnchorBottom, v => this.config.AlertsAnchorBottom = v);
+        this.Check("Wrap long callouts",
+            () => this.config.AlertsWrap, v => this.config.AlertsWrap = v);
+        ImGui.TextDisabled("Off draws one line per callout, ending in an ellipsis.");
+        this.Check("Merge repeats into a counter",
+            () => this.config.AlertsCollapseDupes, v => this.config.AlertsCollapseDupes = v);
+        ImGui.TextDisabled("A repeat of the callout on top becomes a ×2, ×3 and so on.");
+
+        ImGui.Spacing();
+
+        ImGui.TextDisabled("Which callouts show at all:");
+        this.Check("Info", () => this.config.AlertsShowInfo, v => this.config.AlertsShowInfo = v);
+        ImGui.SameLine();
+        this.Check("Alert", () => this.config.AlertsShowAlert, v => this.config.AlertsShowAlert = v);
+        ImGui.SameLine();
+        this.Check("Alarm", () => this.config.AlertsShowAlarm, v => this.config.AlertsShowAlarm = v);
+
+        ImGui.Spacing();
+
+        this.Check("Tint behind each callout",
+            () => this.config.AlertsSeverityTint, v => this.config.AlertsSeverityTint = v);
+        this.PercentSlider("Tint opacity",
+            () => this.config.AlertsSeverityTintOpacity, v => this.config.AlertsSeverityTintOpacity = v);
+        this.Check("Flash the box on alarms",
+            () => this.config.AlertsAlarmFlash, v => this.config.AlertsAlarmFlash = v);
+        this.Check("Flash the screen edges on alarms",
+            () => this.config.AlarmScreenFlash, v => this.config.AlarmScreenFlash = v);
+        ImGui.TextDisabled("Only while locked, so it never fires over the settings boxes.");
 
         ImGui.Spacing();
 
@@ -345,6 +389,11 @@ internal sealed class ConfigWindow : Window
         ImGui.TextDisabled("The full-length slot under the fill.");
         this.Check("Anchor fill to the right",
             () => this.config.DpsBarRightToLeft, v => this.config.DpsBarRightToLeft = v);
+        this.Check("Job colored bars",
+            () => this.config.DpsBarJobColors, v => this.config.DpsBarJobColors = v);
+        this.Check("Show damage share",
+            () => this.config.DpsBarsShowShare, v => this.config.DpsBarsShowShare = v);
+        ImGui.TextDisabled("Both apply to the Bars style only.");
 
         ImGui.Spacing();
 
