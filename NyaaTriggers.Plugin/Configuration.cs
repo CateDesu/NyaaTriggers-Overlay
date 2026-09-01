@@ -72,7 +72,7 @@ internal sealed class Configuration : IPluginConfiguration
     /// can be migrated rather than silently reinterpreted. Note the enums in
     /// this file serialize as their integer values: never reorder or insert
     /// members without bumping this and writing the migration.</summary>
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
 
     // ── link ──────────────────────────────────────────────────────────────
     /// <summary>Loopback port the desktop app connects to. Not exposed off the
@@ -96,13 +96,17 @@ internal sealed class Configuration : IPluginConfiguration
     /// Unlocked shows a frame and sample content so the boxes can be placed.</summary>
     public bool Locked { get; set; }
 
-    /// <summary>Hide both boxes outside of duties, so they are not
-    /// sitting over the overworld doing nothing.</summary>
-    public bool OnlyInDuty { get; set; }
-
-    /// <summary>Hide the boxes while out of combat. Stacks with OnlyInDuty:
-    /// both ticked means the boxes only show for a fight inside a duty.</summary>
-    public bool OnlyInCombat { get; set; }
+    // ── visibility, per box ───────────────────────────────────────────────
+    // The duty and combat filters were shared by every box before version 4.
+    // Per box so the meter can ride every pull while the timeline only shows
+    // inside duties, or any other mix. Each pair stacks on its own box: both
+    // ticked means that box shows only for a fight inside a duty.
+    public bool TimelineOnlyInDuty { get; set; }
+    public bool TimelineOnlyInCombat { get; set; }
+    public bool AlertsOnlyInDuty { get; set; }
+    public bool AlertsOnlyInCombat { get; set; }
+    public bool DpsOnlyInDuty { get; set; }
+    public bool DpsOnlyInCombat { get; set; }
 
     // ── geometry (screen pixels, persisted ourselves: the overlay windows use
     //     NoSavedSettings so imgui.ini never fights us) ────────────────────
@@ -224,8 +228,16 @@ internal sealed class Configuration : IPluginConfiguration
     /// by the callout's own fade.</summary>
     public Vector4 AlertsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    /// <summary>Seconds an alert stays up when the app does not specify one.</summary>
+    /// <summary>Seconds an info callout stays up when the app does not specify
+    /// one. The field keeps the pre-v4 name so stored configs still load.</summary>
     public float AlertSeconds { get; set; } = 4.0f;
+
+    /// <summary>Seconds an alert callout stays up, same fallback rule.</summary>
+    public float AlertSecondsAlert { get; set; } = 4.0f;
+
+    /// <summary>Seconds an alarm callout stays up. Longer than the rest by
+    /// default: the loudest callout should linger. Same fallback rule.</summary>
+    public float AlertSecondsAlarm { get; set; } = 6.0f;
 
     /// <summary>Most callouts shown at once. The bridge keeps a few more than
     /// this; the cap only limits what is drawn.</summary>
@@ -278,6 +290,10 @@ internal sealed class Configuration : IPluginConfiguration
     /// callout is up. Loud and locked to the raid-night state, so it never
     /// fires over the settings boxes.</summary>
     public bool AlarmScreenFlash { get; set; }
+
+    /// <summary>How far the screen flash reaches in from each edge, as a share
+    /// of the screen's shorter side.</summary>
+    public float AlarmScreenFlashSize { get; set; } = 0.15f;
 
     public Vector4 ColorInfo { get; set; } = new(0.89f, 0.74f, 0.42f, 1.00f);
     public Vector4 ColorAlert { get; set; } = new(0.98f, 0.62f, 0.35f, 1.00f);
@@ -346,6 +362,17 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Bars style only: put the damage share beside the dps figure
     /// pinned to the right edge.</summary>
     public bool DpsBarsShowShare { get; set; }
+
+    /// <summary>Bars and Kagerou styles: append the member's hps to the row
+    /// numbers. Rows with no healing recorded skip it.</summary>
+    public bool DpsRowsShowHps { get; set; }
+
+    /// <summary>Bars style only: fill the local player's bar with its own
+    /// colour so it reads at a glance. Wins over job coloured bars.</summary>
+    public bool DpsBarSelfHighlight { get; set; }
+
+    /// <summary>The local player's bar fill when DpsBarSelfHighlight is on.</summary>
+    public Vector4 DpsBarSelfColor { get; set; } = new(1.00f, 1.00f, 1.00f, 0.85f);
 
     // ── dps box: the Horizon Overlay style's own knobs ────────────────────
     // The serialized names keep the Horiz stem from before the rename so
@@ -458,6 +485,11 @@ internal sealed class Configuration : IPluginConfiguration
     /// 2. Kept only so the migration can read the old value.</summary>
     public float BgOpacity { get; set; }
 
+    /// <summary>Version 3's shared visibility filters, per box in version 4.
+    /// Kept only so MigrateFromV3 can read the old values.</summary>
+    public bool OnlyInDuty { get; set; }
+    public bool OnlyInCombat { get; set; }
+
     /// <summary>Saves reach here from the render thread (settings widgets), the
     /// framework thread (/nyaa lock) and the plugin-manager thread (unload).
     /// Concurrent writes to one file throw and lose the write, so they queue.</summary>
@@ -520,6 +552,24 @@ internal sealed class Configuration : IPluginConfiguration
         Version = 3;
     }
 
+    /// <summary>Carry a version 3 config forward: the shared visibility filters
+    /// become each box's own, and the single alert time seeds the per severity
+    /// times so the on screen rhythm does not change for an upgrader.</summary>
+    public void MigrateFromV3()
+    {
+        TimelineOnlyInDuty = OnlyInDuty;
+        AlertsOnlyInDuty = OnlyInDuty;
+        DpsOnlyInDuty = OnlyInDuty;
+        TimelineOnlyInCombat = OnlyInCombat;
+        AlertsOnlyInCombat = OnlyInCombat;
+        DpsOnlyInCombat = OnlyInCombat;
+
+        AlertSecondsAlert = AlertSeconds;
+        AlertSecondsAlarm = AlertSeconds;
+
+        Version = 4;
+    }
+
     /// <summary>Restore the shipped palette and sizing, leaving the link
     /// settings and window placement alone.</summary>
     public void ResetAppearance()
@@ -558,6 +608,8 @@ internal sealed class Configuration : IPluginConfiguration
         AlertsEffectThickness = fresh.AlertsEffectThickness;
         AlertsEffectColor = fresh.AlertsEffectColor;
         AlertSeconds = fresh.AlertSeconds;
+        AlertSecondsAlert = fresh.AlertSecondsAlert;
+        AlertSecondsAlarm = fresh.AlertSecondsAlarm;
         AlertsMaxVisible = fresh.AlertsMaxVisible;
         AlertOrder = fresh.AlertOrder;
         AlertsAlign = fresh.AlertsAlign;
@@ -572,6 +624,7 @@ internal sealed class Configuration : IPluginConfiguration
         AlertsSeverityTintOpacity = fresh.AlertsSeverityTintOpacity;
         AlertsAlarmFlash = fresh.AlertsAlarmFlash;
         AlarmScreenFlash = fresh.AlarmScreenFlash;
+        AlarmScreenFlashSize = fresh.AlarmScreenFlashSize;
         ColorInfo = fresh.ColorInfo;
         ColorAlert = fresh.ColorAlert;
         ColorAlarm = fresh.ColorAlarm;
@@ -594,6 +647,9 @@ internal sealed class Configuration : IPluginConfiguration
         DpsBarRightToLeft = fresh.DpsBarRightToLeft;
         DpsBarJobColors = fresh.DpsBarJobColors;
         DpsBarsShowShare = fresh.DpsBarsShowShare;
+        DpsRowsShowHps = fresh.DpsRowsShowHps;
+        DpsBarSelfHighlight = fresh.DpsBarSelfHighlight;
+        DpsBarSelfColor = fresh.DpsBarSelfColor;
         DpsStyle = fresh.DpsStyle;
         DpsHorizTheme = fresh.DpsHorizTheme;
         DpsHorizShowNames = fresh.DpsHorizShowNames;

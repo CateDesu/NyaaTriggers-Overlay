@@ -109,6 +109,14 @@ internal sealed class DpsWindow : OverlayWindow
         set => this.Config.DpsSize = value;
     }
 
+    internal override void ResetGeometry()
+    {
+        var fresh = new Configuration();
+        this.StoredPosition = fresh.DpsPos;
+        this.StoredSize = fresh.DpsSize;
+        this.ForceGeometry();
+    }
+
     protected override float TextScale => this.Config.DpsTextScale;
 
     protected override float BgOpacity => this.Config.DpsBgOpacity;
@@ -320,11 +328,14 @@ internal sealed class DpsWindow : OverlayWindow
             var fillOrigin = this.Config.DpsBarRightToLeft
                 ? origin + new Vector2(width - fillWidth, 0.0f)
                 : origin;
-            // Job coloured bars keep the configured bar colour's alpha so the
-            // tint knob still governs how loud the fill reads.
-            var fill = this.Config.DpsBarJobColors
-                ? WithAlpha(JobColors.Get(row.Job), Math.Clamp(this.Config.DpsBarColor.W, 0.0f, 1.0f))
-                : this.Config.DpsBarColor;
+            // The self highlight wins over job coloured bars. Job colours keep
+            // the configured bar colour's alpha so the tint knob still governs
+            // how loud the fill reads.
+            var fill = this.Config.DpsBarSelfHighlight && row.IsSelf
+                ? this.Config.DpsBarSelfColor
+                : this.Config.DpsBarJobColors
+                    ? WithAlpha(JobColors.Get(row.Job), Math.Clamp(this.Config.DpsBarColor.W, 0.0f, 1.0f))
+                    : this.Config.DpsBarColor;
             AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height),
                 fill, rounding);
         }
@@ -346,6 +357,11 @@ internal sealed class DpsWindow : OverlayWindow
         var dpsText = this.Config.DpsBarsShowShare
             ? $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}"
             : FormatDps(row.Dps);
+        if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
+        {
+            dpsText += $" · {FormatDps(row.Hps)} hps";
+        }
+
         var dpsWidth = ImGui.CalcTextSize(dpsText).X;
 
         // The name ends in an ellipsis rather than running into the pinned
@@ -861,6 +877,11 @@ internal sealed class DpsWindow : OverlayWindow
         var underline = Math.Clamp(this.Config.DpsBarHeight * 0.15f, 2.0f, 4.0f);
 
         var numbers = $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}";
+        if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
+        {
+            numbers += $" · {FormatDps(row.Hps)} hps";
+        }
+
         var numbersWidth = ImGui.CalcTextSize(numbers).X;
         var nameWidth = Math.Max(width - numbersWidth - (TextPadding * 2.0f), 1.0f);
 

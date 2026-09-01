@@ -21,11 +21,6 @@ internal sealed class FlashWindow : Window
         ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav |
         ImGuiWindowFlags.NoDocking;
 
-    /// <summary>How far the glow reaches in from each edge, as a share of the
-    /// screen's shorter side, clamped so ultrawide and tiny windows both stay
-    /// sensible.</summary>
-    private const float EdgeShare = 0.15f;
-
     private readonly Configuration config;
 
     internal FlashWindow(Configuration config)
@@ -64,7 +59,11 @@ internal sealed class FlashWindow : Window
         var edge = ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, color.W * pulse));
         var clear = ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.0f));
 
-        var depth = Math.Clamp(Math.Min(size.X, size.Y) * EdgeShare, 60.0f, 220.0f);
+        // The configured share of the shorter side, clamped twice: the share
+        // so a hand-edited config stays sane, then the pixels so ultrawide
+        // and tiny windows both stay sensible.
+        var share = Math.Clamp(this.config.AlarmScreenFlashSize, 0.02f, 0.50f);
+        var depth = Math.Clamp(Math.Min(size.X, size.Y) * share, 60.0f, 220.0f);
 
         // Top and bottom first, then the sides between them so the corners
         // are not painted twice at double strength.

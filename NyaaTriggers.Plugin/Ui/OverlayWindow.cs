@@ -7,7 +7,7 @@ using Dalamud.Interface.Windowing;
 namespace NyaaTriggers.Plugin.Ui;
 
 /// <summary>
-/// Shared behaviour for the two overlay boxes.
+/// Shared behaviour for the overlay boxes.
 ///
 /// Locked is the raid-night state: no chrome, no background, no input, so the
 /// box is invisible except for what it draws and clicks land on the game.
@@ -32,6 +32,12 @@ internal abstract class OverlayWindow : Window
     /// <summary>Ignore sub-pixel jitter so a window that is merely being drawn
     /// does not rewrite the config file every frame.</summary>
     private const float GeometryEpsilon = 0.5f;
+
+    /// <summary>Set by ResetGeometry so the next PreDraw force-applies the
+    /// stored geometry even while unlocked, where FirstUseEver would keep the
+    /// window wherever it currently sits. A closed window never runs PreDraw,
+    /// so the flag simply waits there until the box is shown again.</summary>
+    private bool forceGeometry;
 
     protected OverlayWindow(string name, Configuration config, ScaledFonts fonts)
         : base(name)
@@ -107,10 +113,20 @@ internal abstract class OverlayWindow : Window
 
         // Pinned while locked; while unlocked the stored value is only a
         // starting point, or dragging would snap straight back every frame.
-        var condition = locked ? ImGuiCond.Always : ImGuiCond.FirstUseEver;
+        // A geometry reset forces one Always pass so it also lands unlocked.
+        var condition = locked || this.forceGeometry ? ImGuiCond.Always : ImGuiCond.FirstUseEver;
+        this.forceGeometry = false;
         this.PositionCondition = condition;
         this.SizeCondition = condition;
     }
+
+    /// <summary>Back to the shipped position and size, for a box dragged off
+    /// screen or stranded by a resolution change.</summary>
+    internal abstract void ResetGeometry();
+
+    /// <summary>Arm the one-shot force PreDraw honors. Called by the subclass
+    /// once the stored geometry holds the fresh defaults.</summary>
+    protected void ForceGeometry() => this.forceGeometry = true;
 
     public override void Draw()
     {

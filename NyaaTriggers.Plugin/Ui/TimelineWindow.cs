@@ -43,6 +43,14 @@ internal sealed class TimelineWindow : OverlayWindow
         set => this.Config.TimelineSize = value;
     }
 
+    internal override void ResetGeometry()
+    {
+        var fresh = new Configuration();
+        this.StoredPosition = fresh.TimelinePos;
+        this.StoredSize = fresh.TimelineSize;
+        this.ForceGeometry();
+    }
+
     protected override float TextScale => this.Config.TimelineTextScale;
 
     protected override float BgOpacity => this.Config.TimelineBgOpacity;

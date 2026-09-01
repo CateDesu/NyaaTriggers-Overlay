@@ -44,6 +44,14 @@ internal sealed class AlertsWindow : OverlayWindow
         set => this.Config.AlertsSize = value;
     }
 
+    internal override void ResetGeometry()
+    {
+        var fresh = new Configuration();
+        this.StoredPosition = fresh.AlertsPos;
+        this.StoredSize = fresh.AlertsSize;
+        this.ForceGeometry();
+    }
+
     protected override float TextScale => this.Config.AlertsTextScale;
 
     protected override float BgOpacity => this.Config.AlertsBgOpacity;

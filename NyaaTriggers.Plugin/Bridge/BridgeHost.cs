@@ -395,7 +395,15 @@ internal sealed class BridgeHost : IDisposable
             };
         }
 
-        var seconds = this.config.AlertSeconds;
+        // Each severity falls back to its own configured time. An explicit ttl
+        // on the wire still wins over all three.
+        var seconds = severity switch
+        {
+            Severity.Alarm => this.config.AlertSecondsAlarm,
+            Severity.Alert => this.config.AlertSecondsAlert,
+            _ => this.config.AlertSeconds,
+        };
+
         if (root.TryGetProperty("ttl", out var ttl) && ttl.ValueKind == JsonValueKind.Number)
         {
             seconds = (float)ttl.GetDouble();

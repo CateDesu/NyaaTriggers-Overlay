@@ -44,7 +44,7 @@ internal sealed class PluginUi : IDisposable
 
     internal void OpenConfig() => this.configWindow.IsOpen = true;
 
-    /// <summary>Lock or unlock both boxes. Geometry is only written back while
+    /// <summary>Lock or unlock the boxes. Geometry is only written back while
     /// unlocked, so this is the moment it is worth persisting.</summary>
     internal void SetLocked(bool locked)
     {
@@ -52,9 +52,9 @@ internal sealed class PluginUi : IDisposable
         this.config.Save();
     }
 
-    /// <summary>Whether the boxes were drawable on the last frame, for the
+    /// <summary>Whether the alerts box was drawable on the last frame, for the
     /// settings window to explain a test callout that goes nowhere.</summary>
-    internal bool OverlayVisible { get; private set; } = true;
+    internal bool AlertsVisible { get; private set; } = true;
 
     internal void Draw()
     {
@@ -62,20 +62,24 @@ internal sealed class PluginUi : IDisposable
         // thread, before anything reads it.
         this.bridge.Update();
 
-        this.OverlayVisible = this.ShouldShowOverlay();
-        this.timeline.IsOpen = this.OverlayVisible && this.config.ShowTimeline;
-        this.alerts.IsOpen = this.OverlayVisible && this.config.ShowAlerts;
+        this.AlertsVisible = this.ShouldShow(this.config.AlertsOnlyInDuty, this.config.AlertsOnlyInCombat);
+        this.alerts.IsOpen = this.AlertsVisible && this.config.ShowAlerts;
+        this.timeline.IsOpen = this.ShouldShow(this.config.TimelineOnlyInDuty, this.config.TimelineOnlyInCombat)
+            && this.config.ShowTimeline;
 
         // The meter only exists while an encounter runs; unlocked keeps it up
         // anyway, since that is when the box is being positioned.
         var dps = this.bridge.Dps;
-        this.dps.IsOpen = this.OverlayVisible && this.config.ShowDps &&
+        this.dps.IsOpen = this.ShouldShow(this.config.DpsOnlyInDuty, this.config.DpsOnlyInCombat)
+            && this.config.ShowDps &&
             (!this.config.Locked || (dps.Show && dps.Rows.Count > 0));
 
         // The screen flash is strictly the raid-night state: locked, alerts
         // on, an alarm live and not filtered out. While unlocked the boxes
-        // are being placed and a full screen glow would only annoy.
-        this.flash.IsOpen = this.OverlayVisible && this.config.Locked &&
+        // are being placed and a full screen glow would only annoy. It follows
+        // the alerts box's visibility: a suppressed alerts box means its flash
+        // is just as unwanted.
+        this.flash.IsOpen = this.AlertsVisible && this.config.Locked &&
             this.config.ShowAlerts && this.config.AlarmScreenFlash &&
             this.config.AlertsShowAlarm && this.HasLiveAlarm();
 
@@ -95,7 +99,7 @@ internal sealed class PluginUi : IDisposable
         return false;
     }
 
-    private bool ShouldShowOverlay()
+    private bool ShouldShow(bool onlyInDuty, bool onlyInCombat)
     {
         // While unlocked the boxes must stay up regardless: that is the state
         // the user is in when positioning them, and hiding them there means
@@ -114,17 +118,27 @@ internal sealed class PluginUi : IDisposable
             return false;
         }
 
-        if (this.config.OnlyInDuty && !Services.Condition[ConditionFlag.BoundByDuty])
+        if (onlyInDuty && !Services.Condition[ConditionFlag.BoundByDuty])
         {
             return false;
         }
 
-        if (this.config.OnlyInCombat && !Services.Condition[ConditionFlag.InCombat])
+        if (onlyInCombat && !Services.Condition[ConditionFlag.InCombat])
         {
             return false;
         }
 
         return true;
+    }
+
+    /// <summary>Put every box back at its shipped position and size, for a box
+    /// dragged off screen or stranded by a resolution change.</summary>
+    internal void ResetPlacement()
+    {
+        this.timeline.ResetGeometry();
+        this.alerts.ResetGeometry();
+        this.dps.ResetGeometry();
+        this.config.Save();
     }
 
     public void Dispose()

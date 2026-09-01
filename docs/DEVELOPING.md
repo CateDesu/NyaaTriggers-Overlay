@@ -111,7 +111,7 @@ The app already had reconnect handling for talking to IINACT, and the same code 
 |---|---|
 | `{"c":"tick","t":12.5}` | Fight clock, in timeline seconds. The plugin interpolates from here, so this only has to beat drift, not the frame rate. |
 | `{"c":"timeline","v":[[18.0,"Wing"],[24.5,"Dive"]]}` | Replace the schedule. `[time, label]` pairs in timeline seconds, same shape as the app's `TimelineEngine.upcoming()`. |
-| `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured alert time. |
+| `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured time for that severity. |
 | `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true]]}` | DPS meter snapshot; see below. |
 | `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and fight end. |
 | `{"c":"ping"}` | Liveness check; answered with `{"ev":"pong"}`. |

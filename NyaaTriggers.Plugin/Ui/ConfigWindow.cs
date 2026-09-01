@@ -103,6 +103,14 @@ internal sealed class ConfigWindow : Window
             this.config.ResetAppearance();
             this.config.Save();
         }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Reset placement"))
+        {
+            this.ui.ResetPlacement();
+        }
+
+        ImGui.TextDisabled("Appearance is the palette and sizing. Placement is where the boxes sit.");
     }
 
     private void DrawLink()
@@ -167,9 +175,20 @@ internal sealed class ConfigWindow : Window
         this.Check("Timeline bars", () => this.config.ShowTimeline, v => this.config.ShowTimeline = v);
         this.Check("Alert pop-ups", () => this.config.ShowAlerts, v => this.config.ShowAlerts = v);
         this.Check("DPS meter", () => this.config.ShowDps, v => this.config.ShowDps = v);
-        this.Check("Only inside duties", () => this.config.OnlyInDuty, v => this.config.OnlyInDuty = v);
-        this.Check("Only in combat", () => this.config.OnlyInCombat, v => this.config.OnlyInCombat = v);
-        ImGui.TextDisabled("Both visibility filters stack: ticked together, the boxes show only for a fight inside a duty.");
+
+        ImGui.Spacing();
+
+        ImGui.TextDisabled("Show a box only in a duty or only in combat, per box:");
+        this.VisibilityRow("Timeline",
+            () => this.config.TimelineOnlyInDuty, v => this.config.TimelineOnlyInDuty = v,
+            () => this.config.TimelineOnlyInCombat, v => this.config.TimelineOnlyInCombat = v);
+        this.VisibilityRow("Alerts",
+            () => this.config.AlertsOnlyInDuty, v => this.config.AlertsOnlyInDuty = v,
+            () => this.config.AlertsOnlyInCombat, v => this.config.AlertsOnlyInCombat = v);
+        this.VisibilityRow("DPS meter",
+            () => this.config.DpsOnlyInDuty, v => this.config.DpsOnlyInDuty = v,
+            () => this.config.DpsOnlyInCombat, v => this.config.DpsOnlyInCombat = v);
+        ImGui.TextDisabled("Both ticked on one box means it shows only for a fight inside a duty.");
 
         ImGui.Spacing();
 
@@ -201,10 +220,11 @@ internal sealed class ConfigWindow : Window
             ImGui.SameLine();
             ImGui.TextColored(Waiting, "All severities are filtered out.");
         }
-        else if (this.config.Locked && (this.config.OnlyInDuty || this.config.OnlyInCombat) && !this.ui.OverlayVisible)
+        else if (this.config.Locked && !this.ui.AlertsVisible &&
+            (this.config.AlertsOnlyInDuty || this.config.AlertsOnlyInCombat))
         {
             ImGui.SameLine();
-            ImGui.TextColored(Waiting, "Hidden by the visibility filters.");
+            ImGui.TextColored(Waiting, "Hidden by the alerts box's visibility filters.");
         }
     }
 
@@ -294,8 +314,13 @@ internal sealed class ConfigWindow : Window
 
         ImGui.Spacing();
 
-        this.Slider("Alert time", 0.5f, 15.0f, "%.1f s",
+        this.Slider("Info time", 0.5f, 15.0f, "%.1f s",
             () => this.config.AlertSeconds, v => this.config.AlertSeconds = v);
+        this.Slider("Alert time", 0.5f, 15.0f, "%.1f s",
+            () => this.config.AlertSecondsAlert, v => this.config.AlertSecondsAlert = v);
+        this.Slider("Alarm time", 0.5f, 15.0f, "%.1f s",
+            () => this.config.AlertSecondsAlarm, v => this.config.AlertSecondsAlarm = v);
+        ImGui.TextDisabled("How long a callout stays up when the app does not say.");
         this.SliderInt("Max visible", 1, 8,
             () => this.config.AlertsMaxVisible, v => this.config.AlertsMaxVisible = v);
         this.Combo("Stack order", OrderNames,
@@ -331,6 +356,8 @@ internal sealed class ConfigWindow : Window
             () => this.config.AlertsAlarmFlash, v => this.config.AlertsAlarmFlash = v);
         this.Check("Flash the screen edges on alarms",
             () => this.config.AlarmScreenFlash, v => this.config.AlarmScreenFlash = v);
+        this.PercentSlider("Screen flash size",
+            () => this.config.AlarmScreenFlashSize, v => this.config.AlarmScreenFlashSize = v, 2.0f, 50.0f);
         ImGui.TextDisabled("Only while locked, so it never fires over the settings boxes.");
 
         ImGui.Spacing();
@@ -393,7 +420,12 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsBarJobColors, v => this.config.DpsBarJobColors = v);
         this.Check("Show damage share",
             () => this.config.DpsBarsShowShare, v => this.config.DpsBarsShowShare = v);
-        ImGui.TextDisabled("Both apply to the Bars style only.");
+        this.Check("Highlight your own bar",
+            () => this.config.DpsBarSelfHighlight, v => this.config.DpsBarSelfHighlight = v);
+        ImGui.TextDisabled("All three apply to the Bars style only.");
+        this.Check("Show HPS",
+            () => this.config.DpsRowsShowHps, v => this.config.DpsRowsShowHps = v);
+        ImGui.TextDisabled("Bars and Kagerou rows: append the member's hps to the numbers.");
 
         ImGui.Spacing();
 
@@ -403,7 +435,9 @@ internal sealed class ConfigWindow : Window
         this.ColorRow("Bar border",
             () => this.config.DpsBarBorderColor, v => this.config.DpsBarBorderColor = v);
         this.ColorRow("Bar text", () => this.config.DpsTextColor, v => this.config.DpsTextColor = v);
-        ImGui.TextDisabled("Bars style only; Horizon Overlay colours by role, Kagerou by job.");
+        this.ColorRow("Self bar",
+            () => this.config.DpsBarSelfColor, v => this.config.DpsBarSelfColor = v);
+        ImGui.TextDisabled("Bars style only; Horizon Overlay colours by role, Kagerou by job. Self bar needs Highlight your own bar.");
 
         ImGui.Spacing();
 
@@ -481,6 +515,22 @@ internal sealed class ConfigWindow : Window
             "The role tints need the Color by role theme. Black & white uses " +
             "Self bar and Unknown jobs for everyone else.");
 
+        ImGui.PopID();
+    }
+
+    /// <summary>One box's duty and combat filters on a single row. The fixed
+    /// column keeps the pairs lined up across the boxes.</summary>
+    private void VisibilityRow(
+        string label,
+        Func<bool> getDuty, Action<bool> setDuty,
+        Func<bool> getCombat, Action<bool> setCombat)
+    {
+        ImGui.PushID(label);
+        ImGui.TextUnformatted(label);
+        ImGui.SameLine(110.0f);
+        this.Check("in a duty", getDuty, setDuty);
+        ImGui.SameLine();
+        this.Check("in combat", getCombat, setCombat);
         ImGui.PopID();
     }
 
