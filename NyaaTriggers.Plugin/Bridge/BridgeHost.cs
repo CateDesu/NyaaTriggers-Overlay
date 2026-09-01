@@ -267,20 +267,27 @@ internal sealed class BridgeHost : IDisposable
     private void OnConnectionChanged(WebSocketServer source, bool connected)
     {
         // A superseded server tearing down must not touch the live one's state.
-        if (!ReferenceEquals(source, this.server))
+        // The check and the enqueue stay under serverLock so they are atomic
+        // with Stop's swap and drain, same as Receive: without it a callback
+        // preempted between the two could land a stale clear on the fresh
+        // server's inbox.
+        lock (this.serverLock)
         {
-            return;
-        }
+            if (!ReferenceEquals(source, this.server))
+            {
+                return;
+            }
 
-        if (!connected)
-        {
-            // The app going away must not leave a frozen timeline on screen
-            // pretending the pull is still running. Queued so it lands on the
-            // draw thread with everything else. Enqueued directly, past the
-            // depth cap: that cap exists to bound a flooding peer, and this
-            // one frame comes from us — dropping it would leave the peer's
-            // last frames frozen on screen forever.
-            this.inbox.Enqueue("{\"c\":\"clear\"}");
+            if (!connected)
+            {
+                // The app going away must not leave a frozen timeline on screen
+                // pretending the pull is still running. Queued so it lands on the
+                // draw thread with everything else. Enqueued directly, past the
+                // depth cap: that cap exists to bound a flooding peer, and this
+                // one frame comes from us — dropping it would leave the peer's
+                // last frames frozen on screen forever.
+                this.inbox.Enqueue("{\"c\":\"clear\"}");
+            }
         }
     }
 
@@ -655,7 +662,20 @@ internal sealed class BridgeHost : IDisposable
         }
 
         text = text.Replace('\n', ' ').Replace('\r', ' ');
-        return text.Length > maxChars ? text[..maxChars] : text;
+        if (text.Length <= maxChars)
+        {
+            return text;
+        }
+
+        // Never split a surrogate pair at the cap: a lone half draws as a
+        // replacement glyph, so the cut backs off the leading half.
+        var cut = maxChars;
+        if (cut > 0 && char.IsHighSurrogate(text[cut - 1]) && char.IsLowSurrogate(text[cut]))
+        {
+            cut--;
+        }
+
+        return text[..cut];
     }
 
     public void Dispose()

@@ -216,7 +216,13 @@ internal sealed class IinactClient : IDisposable
         {
             if (!loop.Wait(StopWaitMs))
             {
+                // Leave stop undisposed: the loop is still out there reading
+                // its Token, and a disposed source turns that read into an
+                // ObjectDisposedException instead of the clean cancel. The
+                // cancel is already in flight, so the loop still unwinds and
+                // the GC reclaims the source once it is done.
                 Services.Log.Warning("an IINACT feed session did not stop in time");
+                return;
             }
         }
         catch (Exception ex)

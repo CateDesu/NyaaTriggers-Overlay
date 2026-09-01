@@ -156,6 +156,20 @@ internal sealed class WebSocketServer : IDisposable
             _ = Task.Run(() => this.AcceptLoopAsync(listener, token), token);
         }
 
+        // A v4 failure is fatal in practice even when ::1 bound fine: the app
+        // dials 127.0.0.1 explicitly, so a v6-only listener serves no one.
+        // Tear it down rather than leave a link up that the config window
+        // then reports as dead.
+        if (ipv4Error != null)
+        {
+            foreach (var listener in this.listeners)
+            {
+                listener.Stop();
+            }
+
+            this.listeners.Clear();
+        }
+
         this.LastError = bound == 0
             ? ipv4Error ?? $"could not bind port {this.port}"
             : ipv4Error;
@@ -190,7 +204,18 @@ internal sealed class WebSocketServer : IDisposable
             {
                 // A peer that resets between SYN and accept, or a momentary
                 // descriptor shortage, must not permanently stop us listening.
+                // Take the same breath the generic path does, so a persistent
+                // accept fault like descriptor exhaustion cannot spin either.
                 Services.Log.Debug($"accept failed, still listening: {ex.SocketErrorCode}");
+                try
+                {
+                    await Task.Delay(1000, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
                 continue;
             }
             catch (Exception ex)

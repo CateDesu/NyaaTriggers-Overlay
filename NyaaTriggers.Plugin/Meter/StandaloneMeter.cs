@@ -240,15 +240,35 @@ internal sealed class StandaloneMeter : IDisposable
         this.wasLive = false;
         this.nextPush = 0;
 
-        var created = new IinactClient(uri, this.Receive);
-        this.client = created;
+        // The callback needs to know which client it came from, so a late
+        // frame from one already stopped can be ignored.
+        IinactClient? created = null;
+        created = new IinactClient(uri, raw => this.Receive(created!, raw));
+        lock (this.gate)
+        {
+            this.client = created;
+        }
+
         created.Start();
     }
 
     private void StopClient()
     {
-        var old = this.client;
-        this.client = null;
+        IinactClient? old;
+        lock (this.gate)
+        {
+            old = this.client;
+            this.client = null;
+        }
+
+        // Drain what the detached client queued before the swap. The Receive
+        // guard keeps new frames out from here on, but a backlog already in
+        // the inbox would be applied onto the fresh engine the next Update
+        // builds. Same drain the bridge's Stop does after a server swap.
+        while (this.inbox.TryDequeue(out _))
+        {
+        }
+
         if (old == null)
         {
             return;
@@ -265,11 +285,19 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Socket thread: queue only, never touch the state the UI reads.</summary>
-    private void Receive(string raw)
+    /// <summary>Socket thread: queue only, never touch the state the UI reads.
+    /// Guarded on the source under gate so the check and the enqueue are atomic
+    /// with StopClient's detach: a frame from a superseded client lands before
+    /// the swap or not at all, never after it onto the fresh engine.</summary>
+    private void Receive(IinactClient source, string raw)
     {
-        if (this.inbox.Count < MaxInboxDepth)
+        lock (this.gate)
         {
+            if (!ReferenceEquals(source, this.client) || this.inbox.Count >= MaxInboxDepth)
+            {
+                return;
+            }
+
             this.inbox.Enqueue(raw);
         }
     }

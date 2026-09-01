@@ -599,9 +599,16 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>Bring a SnapshotAppearance blob's appearance knobs in. False
     /// on a blob that does not parse, so a mangled stored profile leaves the
-    /// current look alone.</summary>
+    /// current look alone. A hand edited config can put a JSON null in the
+    /// dictionary, which materializes as a null blob, so that is refused up
+    /// front rather than trusted to the parser.</summary>
     public bool ApplyAppearanceProfile(string json)
     {
+        if (string.IsNullOrEmpty(json))
+        {
+            return false;
+        }
+
         Configuration? snapshot;
         try
         {

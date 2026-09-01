@@ -99,6 +99,9 @@ internal static class JobColors
         ["RDM"] = Hex(0xE87B7B),
         ["BLU"] = Hex(0x2459FF),
         ["PCT"] = Hex(0xFCA8E0),
+        // No upstream colour for the new limited job yet, so this copper is
+        // ours: warm and earthy like the job, clear of every hue already taken.
+        ["BST"] = Hex(0xA65E2E),
     };
 
     /// <summary>The job's accent colour, or neutral grey for an acronym we do

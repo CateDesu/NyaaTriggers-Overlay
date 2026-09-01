@@ -303,6 +303,14 @@ internal abstract class OverlayWindow : Window
             }
         }
 
+        // One char less always fits, so a cut that would split a surrogate
+        // pair backs off the leading half rather than draw a lone one as a
+        // replacement glyph.
+        if (fits > 0 && char.IsHighSurrogate(text[fits - 1]) && char.IsLowSurrogate(text[fits]))
+        {
+            fits--;
+        }
+
         return string.Concat(text.AsSpan(0, fits), Ellipsis);
     }
 
