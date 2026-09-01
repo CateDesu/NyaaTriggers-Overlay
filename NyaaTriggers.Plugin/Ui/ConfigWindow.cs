@@ -41,6 +41,10 @@ internal sealed class ConfigWindow : Window
     /// it is the editor's scratch, not a setting.</summary>
     private string profileName = string.Empty;
 
+    /// <summary>Result of the last import attempt, so a clipboard that did
+    /// not hold a profile says so instead of failing silently.</summary>
+    private string? importNote;
+
     internal ConfigWindow(Configuration config, BridgeHost bridge, PluginUi ui)
         : base("NyaaTriggers###nyaaConfig")
     {
@@ -382,11 +386,13 @@ internal sealed class ConfigWindow : Window
 
         this.Check("Color bars by kind",
             () => this.config.TimelineKindColors, v => this.config.TimelineKindColors = v);
-        ImGui.TextDisabled("The app tags timeline labels that say tankbuster or raidwide; everything else keeps the Bar colour.");
+        ImGui.TextDisabled("The app tags every timeline label tankbuster, raidwide or mechanic. Untagged labels keep the Bar colour.");
         this.ColorRow("Tankbuster",
             () => this.config.TimelineTankbusterColor, v => this.config.TimelineTankbusterColor = v);
         this.ColorRow("Raidwide",
             () => this.config.TimelineRaidwideColor, v => this.config.TimelineRaidwideColor = v);
+        this.ColorRow("Mechanic",
+            () => this.config.TimelineMechanicColor, v => this.config.TimelineMechanicColor = v);
 
         ImGui.Spacing();
 
@@ -426,6 +432,12 @@ internal sealed class ConfigWindow : Window
         this.Combo("Text alignment", AlignNames,
             () => this.config.AlertsAlign, v => this.config.AlertsAlign = v);
         this.Check("Fade in and out", () => this.config.AlertsAnimate, v => this.config.AlertsAnimate = v);
+        this.Slider("Alarm scale", 1.0f, 2.0f, "%.2fx",
+            () => this.config.AlertsAlarmScale, v => this.config.AlertsAlarmScale = v);
+        ImGui.TextDisabled("Alarm callouts draw this much bigger than the rest. Preview with Test callout.");
+        this.Check("Lifeline under each callout",
+            () => this.config.AlertsLifeline, v => this.config.AlertsLifeline = v);
+        ImGui.TextDisabled("A thin strip that empties as the callout's time runs out.");
         this.Check("Anchor to the bottom",
             () => this.config.AlertsAnchorBottom, v => this.config.AlertsAnchorBottom = v);
         this.Check("Wrap long callouts",
@@ -678,9 +690,33 @@ internal sealed class ConfigWindow : Window
             this.config.Save();
         }
 
+        ImGui.SameLine();
+
+        // The clipboard route shares a look between machines or with static
+        // members: Copy on one end, a name and Import on the other.
+        if (ImGui.Button("Import"))
+        {
+            var blob = Configuration.ValidateProfileBlob(ImGui.GetClipboardText());
+            if (blob != null)
+            {
+                this.config.AppearanceProfiles[name] = blob;
+                this.config.Save();
+                this.importNote = $"Imported \"{name}\". Apply it below.";
+            }
+            else
+            {
+                this.importNote = "The clipboard does not hold a profile. Copy one first.";
+            }
+        }
+
         if (name.Length == 0)
         {
             ImGui.EndDisabled();
+        }
+
+        if (this.importNote != null)
+        {
+            ImGui.TextDisabled(this.importNote);
         }
 
         // A copy of the entries: Apply and Delete mutate the dictionary mid
@@ -694,6 +730,12 @@ internal sealed class ConfigWindow : Window
                 {
                     this.config.Save();
                 }
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Copy"))
+            {
+                ImGui.SetClipboardText(blob);
             }
 
             ImGui.SameLine();

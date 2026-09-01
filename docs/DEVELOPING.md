@@ -110,7 +110,7 @@ The app already had reconnect handling for talking to IINACT, and the same code 
 | Message | Meaning |
 |---|---|
 | `{"c":"tick","t":12.5}` | Fight clock, in timeline seconds. The plugin interpolates from here, so this only has to beat drift, not the frame rate. |
-| `{"c":"timeline","v":[[18.0,"Wing","mechanic"],[24.5,"Dive","tankbuster"]]}` | Replace the schedule. `[time, label, kind]` entries in timeline seconds; the time and label are the app's `TimelineEngine.upcoming()` shape and `kind` is the tag the app derives from the label text: `tankbuster`, `raidwide` or `mechanic`. The kind is optional and free-form; an absent or unknown kind draws as a plain mechanic. |
+| `{"c":"timeline","v":[[18.0,"Wing","mechanic"],[24.5,"Dive","tankbuster"]]}` | Replace the schedule. `[time, label, kind]` entries in timeline seconds; the time and label are the app's `TimelineEngine.upcoming()` shape and `kind` is the tag the app derives from the label text: `tankbuster`, `raidwide` or `mechanic`. The kind is optional and free-form; an absent or unknown kind draws with the shared bar colour. |
 | `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured time for that severity. |
 | `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true,0]]}` | DPS meter snapshot; see below. |
 | `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and on wipes, not on a normal fight end; see below. |

@@ -107,9 +107,9 @@ internal sealed class TimelineWindow : OverlayWindow
         if (rows.Count == 0 && !this.Config.Locked)
         {
             // Placeholder so an unlocked box being positioned is never blank.
-            // One tagged kind too, so the kind colours preview live.
+            // Tagged kinds too, so the kind colours preview live.
             rows.Add(("Sample tankbuster", window * 0.6f, false, "tankbuster"));
-            rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false, string.Empty));
+            rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false, "mechanic"));
         }
 
         // The clock line needs a fight clock; an unlocked box gets a stand-in
@@ -169,6 +169,7 @@ internal sealed class TimelineWindow : OverlayWindow
         {
             "tankbuster" => this.Config.TimelineTankbusterColor,
             "raidwide" => this.Config.TimelineRaidwideColor,
+            "mechanic" => this.Config.TimelineMechanicColor,
             _ => this.Config.TimelineBarColor,
         };
     }

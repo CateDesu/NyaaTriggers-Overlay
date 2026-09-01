@@ -244,8 +244,8 @@ internal sealed class Configuration : IPluginConfiguration
     public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
 
     /// <summary>Colour each bar by the kind the app tagged its label with:
-    /// tankbuster or raidwide get their own fill, everything else keeps the
-    /// shared bar colour. The imminent colour still wins near zero.</summary>
+    /// tankbuster, raidwide and mechanic get their own fill, anything untagged
+    /// keeps the shared bar colour. The imminent colour still wins near zero.</summary>
     public bool TimelineKindColors { get; set; }
 
     /// <summary>Bar fill for cues the app tagged tankbuster.</summary>
@@ -253,6 +253,12 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>Bar fill for cues the app tagged raidwide.</summary>
     public Vector4 TimelineRaidwideColor { get; set; } = new(0.35f, 0.62f, 0.92f, 0.85f);
+
+    /// <summary>Bar fill for cues the app tagged mechanic. Ships matching the
+    /// shared bar colour, so turning kind colours on only moves the tankbuster
+    /// and raidwide bars until this one is recoloured. Untagged and unknown
+    /// kinds keep the shared bar colour.</summary>
+    public Vector4 TimelineMechanicColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
 
     // ── alerts box ────────────────────────────────────────────────────────
     /// <summary>Text scale inside the alerts box.</summary>
@@ -299,6 +305,15 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Rise-in and fade-out animation. Off pins callouts at full
     /// opacity for their whole life.</summary>
     public bool AlertsAnimate { get; set; } = true;
+
+    /// <summary>How much bigger an alarm callout draws than the box's body
+    /// text, 1.0 keeping it level. The loudest line earning the most pixels is
+    /// the point of an alarm.</summary>
+    public float AlertsAlarmScale { get; set; } = 1.0f;
+
+    /// <summary>A thin strip under each callout that empties as its time runs
+    /// out, so the eye can tell a stale callout from a fresh one.</summary>
+    public bool AlertsLifeline { get; set; }
 
     /// <summary>Per-severity filters. Hiding info callouts is the common one:
     /// they are spoken anyway, and the box stays quiet for everything but
@@ -628,6 +643,32 @@ internal sealed class Configuration : IPluginConfiguration
         return true;
     }
 
+    /// <summary>Clipboard text to a clean profile blob, or null when it is not
+    /// one. The parse is validated then re-serialized, so an imported profile
+    /// carries only what SnapshotAppearance would have written and never a
+    /// hand edited oddity like a nested profiles dictionary. The size cap
+    /// keeps a clipboard stuffed with something huge out of the parser.</summary>
+    public static string? ValidateProfileBlob(string? json)
+    {
+        const int MaxBlobChars = 64 * 1024;
+        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxBlobChars)
+        {
+            return null;
+        }
+
+        Configuration? snapshot;
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<Configuration>(json, ProfileOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return snapshot?.SnapshotAppearance();
+    }
+
     // ── legacy: the shared pre-v3 look, kept only so MigrateFromV2 can read
     //     the old values, the same pattern as BgOpacity from v1 ────────────
     public TextEffectStyle TextEffect { get; set; } = TextEffectStyle.Outline;
@@ -770,6 +811,7 @@ internal sealed class Configuration : IPluginConfiguration
         TimelineKindColors = fresh.TimelineKindColors;
         TimelineTankbusterColor = fresh.TimelineTankbusterColor;
         TimelineRaidwideColor = fresh.TimelineRaidwideColor;
+        TimelineMechanicColor = fresh.TimelineMechanicColor;
         AlertsTextScale = fresh.AlertsTextScale;
         AlertsBgOpacity = fresh.AlertsBgOpacity;
         AlertsFade = fresh.AlertsFade;
@@ -783,6 +825,8 @@ internal sealed class Configuration : IPluginConfiguration
         AlertOrder = fresh.AlertOrder;
         AlertsAlign = fresh.AlertsAlign;
         AlertsAnimate = fresh.AlertsAnimate;
+        AlertsAlarmScale = fresh.AlertsAlarmScale;
+        AlertsLifeline = fresh.AlertsLifeline;
         AlertsShowInfo = fresh.AlertsShowInfo;
         AlertsShowAlert = fresh.AlertsShowAlert;
         AlertsShowAlarm = fresh.AlertsShowAlarm;
