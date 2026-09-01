@@ -67,12 +67,13 @@ internal sealed class PluginUi : IDisposable
         this.timeline.IsOpen = this.ShouldShow(this.config.TimelineOnlyInDuty, this.config.TimelineOnlyInCombat)
             && this.config.ShowTimeline;
 
-        // The meter only exists while an encounter runs; unlocked keeps it up
+        // The meter only exists while an encounter runs, or just ran when the
+        // hold-last option keeps the final numbers up. Unlocked keeps it up
         // anyway, since that is when the box is being positioned.
         var dps = this.bridge.Dps;
         this.dps.IsOpen = this.ShouldShow(this.config.DpsOnlyInDuty, this.config.DpsOnlyInCombat)
             && this.config.ShowDps &&
-            (!this.config.Locked || (dps.Show && dps.Rows.Count > 0));
+            (!this.config.Locked || (dps.Show && dps.Rows.Count > 0) || this.dps.HasHeldContent);
 
         // The screen flash is strictly the raid-night state: locked, alerts
         // on, an alarm live and not filtered out. While unlocked the boxes

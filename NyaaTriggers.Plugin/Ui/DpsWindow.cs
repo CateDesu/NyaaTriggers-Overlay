@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
+using System.Text;
+using System.Text.RegularExpressions;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ManagedFontAtlas;
 using Dalamud.Interface.Utility;
@@ -38,18 +40,28 @@ internal sealed class DpsWindow : OverlayWindow
     private static readonly float[] StatFitRatios = { 1.0f, 0.85f, 0.7f, 0.55f };
 
     /// <summary>What an unlocked box draws while no encounter is running, so
-    /// every style shows its own look instead of a blank frame.</summary>
+    /// every style shows its own look instead of a blank frame. A couple of
+    /// deaths sprinkled in so the deaths marker previews too.</summary>
     private static readonly DpsRow[] SampleRows =
     {
-        new("Y'shtola R", "BLM", 10234.5, 21.4, 14.0, true),
-        new("Curious Gorge", "WAR", 9876.0, 20.1, 322.0, false),
-        new("Beta Tester", "DRG", 9012.0, 17.8, 0.0, false),
-        new("Cid Garlond", "MCH", 8456.0, 15.9, 0.0, false),
-        new("Thancred W", "DNC", 7890.0, 13.8, 0.0, false),
-        new("Alphinaud L", "SGE", 6543.0, 10.9, 9123.4, false),
+        new("Y'shtola R", "BLM", 10234.5, 21.4, 14.0, true, 0),
+        new("Curious Gorge", "WAR", 9876.0, 20.1, 322.0, false, 1),
+        new("Beta Tester", "DRG", 9012.0, 17.8, 0.0, false, 0),
+        new("Cid Garlond", "MCH", 8456.0, 15.9, 0.0, false, 0),
+        new("Thancred W", "DNC", 7890.0, 13.8, 0.0, false, 2),
+        new("Alphinaud L", "SGE", 6543.0, 10.9, 9123.4, false, 0),
     };
 
     private readonly BridgeHost bridge;
+
+    /// <summary>The deaths marker's red. Fixed rather than a knob: it is a
+    /// count of mistakes, it should read like one.</summary>
+    private static readonly Vector4 DeathsColor = new(0.95f, 0.42f, 0.42f, 1.00f);
+
+    /// <summary>The last live snapshot, replaced every frame one is running.
+    /// The hold-last option draws it after the encounter ends, so the final
+    /// numbers stay up until the next pull or a zone change.</summary>
+    private DpsState? held;
 
     /// <summary>How tall the last frame's content was, window padding
     /// included. The locked Horizon Overlay sizes its window to this: a strip
@@ -121,18 +133,35 @@ internal sealed class DpsWindow : OverlayWindow
 
     protected override float BgOpacity => this.Config.DpsBgOpacity;
 
+    protected override float FadeOpacity => this.Config.DpsFade;
+
     protected override TextEffectStyle TextEffect => this.Config.DpsTextEffect;
 
     protected override int EffectThickness => this.Config.DpsEffectThickness;
 
     protected override Vector4 EffectColor => this.Config.DpsEffectColor;
 
+    /// <summary>Whether the held final meter should stay on screen right now:
+    /// hold-last on, the encounter ended rather than the state clearing, and a
+    /// held snapshot to draw. PluginUi gates the locked box's visibility on
+    /// this so the box survives the fight it outlasted.</summary>
+    internal bool HasHeldContent =>
+        this.Config.DpsHoldLast && !this.bridge.Dps.Show && this.bridge.Dps.Ended
+        && this.held is { Rows.Count: > 0 };
+
     protected override void DrawContent()
     {
         var dps = this.bridge.Dps;
         if (dps.Show && dps.Rows.Count > 0)
         {
+            this.held = dps;
             this.DrawMeter(dps.Title, dps.Duration, dps.EncDps, this.FilterRows(dps.Rows));
+        }
+        else if (this.HasHeldContent)
+        {
+            // The fight is over and the option keeps its final numbers up.
+            var last = this.held!;
+            this.DrawMeter(last.Title, last.Duration, last.EncDps, this.FilterRows(last.Rows));
         }
         else if (!this.Config.Locked)
         {
@@ -146,21 +175,25 @@ internal sealed class DpsWindow : OverlayWindow
             + ImGui.GetStyle().WindowPadding.Y;
     }
 
-    /// <summary>The rows after the solo-only and max-combatants filters, in
-    /// rank order. The common case, neither filter biting, hands the input
-    /// back without a copy. keptRanks records where each kept row sat in the
-    /// full list so the solo filter cannot renumber the row to 1.
+    /// <summary>The rows after the solo-only filter, the sort, the self-first
+    /// pin and the max-combatants cap. The common case, nothing of it biting,
+    /// hands the input back without a copy. keptRanks records where each kept
+    /// row sat in the full list so none of the reshuffling can renumber a row
+    /// to 1. The pin runs before the cap, so self-first with a tight cap still
+    /// keeps the local player rather than trimming them away.
     /// </summary>
     private IReadOnlyList<DpsRow> FilterRows(IReadOnlyList<DpsRow> rows)
     {
         var max = Math.Clamp(this.Config.DpsMaxRows, 1, 24);
+        var sort = this.Config.DpsSortOrder;
         this.keptRanks.Clear();
-        if (!this.Config.DpsSoloOnly && rows.Count <= max)
+        if (!this.Config.DpsSoloOnly && !this.Config.DpsSelfFirst
+            && sort == DpsSortOrder.ByDps && rows.Count <= max)
         {
             return rows;
         }
 
-        var kept = new List<DpsRow>(Math.Min(rows.Count, max));
+        var kept = new List<DpsRow>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -171,14 +204,124 @@ internal sealed class DpsWindow : OverlayWindow
 
             kept.Add(row);
             this.keptRanks.Add(i + 1);
-            if (kept.Count >= max)
+        }
+
+        if (sort != DpsSortOrder.ByDps)
+        {
+            // Rows and ranks move as one, so the rank number keeps telling
+            // the truth under a re-sorted list. Stable: ties keep rank order.
+            var order = new int[kept.Count];
+            for (var i = 0; i < order.Length; i++)
             {
+                order[i] = i;
+            }
+
+            Array.Sort(order, Comparer<int>.Create(
+                (a, b) => CompareRows(kept[a], kept[b], a, b, sort)));
+            var sortedRows = new List<DpsRow>(kept.Count);
+            var sortedRanks = new List<int>(kept.Count);
+            foreach (var i in order)
+            {
+                sortedRows.Add(kept[i]);
+                sortedRanks.Add(this.keptRanks[i]);
+            }
+
+            kept = sortedRows;
+            this.keptRanks.Clear();
+            this.keptRanks.AddRange(sortedRanks);
+        }
+
+        if (this.Config.DpsSelfFirst)
+        {
+            for (var i = 1; i < kept.Count; i++)
+            {
+                if (!kept[i].IsSelf)
+                {
+                    continue;
+                }
+
+                // The strip draws left to right and the lists top to bottom,
+                // so slot zero is the pinned place in every style. The rank
+                // moves with the row and still tells the truth.
+                var row = kept[i];
+                var rank = this.keptRanks[i];
+                kept.RemoveAt(i);
+                this.keptRanks.RemoveAt(i);
+                kept.Insert(0, row);
+                this.keptRanks.Insert(0, rank);
                 break;
             }
         }
 
+        if (kept.Count > max)
+        {
+            kept.RemoveRange(max, kept.Count - max);
+            this.keptRanks.RemoveRange(max, this.keptRanks.Count - max);
+        }
+
         return kept;
     }
+
+    /// <summary>The sort orders other than the feed's own. Alphabetical reads
+    /// by name, by role groups tanks then healers then dps like the party
+    /// list. Ties fall back to the rows' original places, keeping the sort
+    /// stable.</summary>
+    private static int CompareRows(DpsRow a, DpsRow b, int indexA, int indexB, DpsSortOrder sort)
+    {
+        var by = sort switch
+        {
+            DpsSortOrder.Alphabetical => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+            DpsSortOrder.ByRole => RoleRank(a.Job).CompareTo(RoleRank(b.Job)),
+            _ => 0,
+        };
+        return by != 0 ? by : indexA.CompareTo(indexB);
+    }
+
+    /// <summary>Party-list grouping for the by-role sort: tanks, healers, dps,
+    /// unknown jobs last.</summary>
+    private static int RoleRank(string job) => JobColors.RoleOf(job) switch
+    {
+        JobRole.Tank => 0,
+        JobRole.Healer => 1,
+        JobRole.Dps => 2,
+        _ => 3,
+    };
+
+    /// <summary>The name as the privacy options display it: YOU for the local
+    /// player when asked, everyone else shown, initialled or hidden.</summary>
+    private string RowName(DpsRow row)
+    {
+        if (row.IsSelf)
+        {
+            return this.Config.DpsSelfNameYou ? "YOU" : row.Name;
+        }
+
+        return this.Config.DpsNamePrivacy switch
+        {
+            NamePrivacyStyle.Initials => Initials(row.Name),
+            NamePrivacyStyle.Hidden => string.Empty,
+            _ => row.Name,
+        };
+    }
+
+    /// <summary>"Y'shtola Rhul" becomes "Y. R.", the streamer-friendly middle
+    /// ground between a full name and none.</summary>
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var builder = new StringBuilder(name.Length + parts.Length);
+        foreach (var part in parts)
+        {
+            builder.Append(char.ToUpperInvariant(part[0])).Append(". ");
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    /// <summary>The deaths marker for a row, " x2" in the deaths red, or null
+    /// when the option is off or the member never died.</summary>
+    private string? DeathsMarker(DpsRow row)
+        => this.Config.DpsShowDeaths && row.Deaths > 0 ? $" x{row.Deaths}" : null;
 
     /// <summary>The 1 based rank of kept row i: its place in the full list
     /// when a filter ran, else its own index.</summary>
@@ -215,7 +358,7 @@ internal sealed class DpsWindow : OverlayWindow
             case DpsMeterStyle.Kagerou:
                 for (var i = 0; i < rows.Count; i++)
                 {
-                    this.DrawKagerouRow(rows[i]);
+                    this.DrawKagerouRow(this.RankOf(i), i, rows[i]);
                 }
 
                 break;
@@ -223,7 +366,7 @@ internal sealed class DpsWindow : OverlayWindow
             default:
                 for (var i = 0; i < rows.Count; i++)
                 {
-                    this.DrawBarsRow(this.RankOf(i), rows[i]);
+                    this.DrawBarsRow(this.RankOf(i), i, rows[i]);
                 }
 
                 break;
@@ -242,23 +385,8 @@ internal sealed class DpsWindow : OverlayWindow
         // Skip whichever parts the frame did not carry or the user turned
         // off rather than printing dangling separators; with none of them
         // there is no header at all.
-        var parts = new List<string>(3);
-        if (!string.IsNullOrWhiteSpace(title))
-        {
-            parts.Add(title);
-        }
-
-        if (this.Config.DpsHeaderDuration && !string.IsNullOrWhiteSpace(duration))
-        {
-            parts.Add(duration);
-        }
-
-        if (this.Config.DpsHeaderTotalDps && encDps > 0.0)
-        {
-            parts.Add(FormatDps(encDps));
-        }
-
-        if (parts.Count == 0)
+        var text = this.FormatHeaderLine(title, duration, encDps);
+        if (text.Length == 0)
         {
             return;
         }
@@ -270,7 +398,6 @@ internal sealed class DpsWindow : OverlayWindow
 
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
-        var text = string.Join(" · ", parts);
         var textSize = ImGui.CalcTextSize(text);
         if (centered)
         {
@@ -305,10 +432,79 @@ internal sealed class DpsWindow : OverlayWindow
             ImGui.GetTextLineHeight() + (chip ? 0.0f : Math.Max(this.Config.DpsBarSpacing, 0.0f))));
     }
 
+    /// <summary>Whitespace runs collapse to one space, for the gap a skipped
+    /// header token leaves behind.</summary>
+    private static readonly Regex HeaderSpaces = new(@"\s+", RegexOptions.Compiled);
+
+    /// <summary>Two or more separators left adjacent by a skipped token,
+    /// collapsed back to one.</summary>
+    private static readonly Regex HeaderSepRuns = new(
+        @"\s*[·•|/\-–—]\s*(\s*[·•|/\-–—]\s*)+", RegexOptions.Compiled);
+
+    /// <summary>The encounter line's text. The parts are the title, the fight
+    /// clock and the party dps, each skippable. An empty format joins them
+    /// with a dot, the long standing look. A set format places the {title}
+    /// {duration} {dps} tokens freely, and the tidy-up keeps a skipped part
+    /// from leaving doubled or dangling separators behind.</summary>
+    private string FormatHeaderLine(string title, string duration, double encDps)
+    {
+        var titleText = string.IsNullOrWhiteSpace(title) ? string.Empty : title;
+        var durationText = this.Config.DpsHeaderDuration && !string.IsNullOrWhiteSpace(duration)
+            ? duration
+            : string.Empty;
+        var dpsText = this.Config.DpsHeaderTotalDps && encDps > 0.0 ? FormatDps(encDps) : string.Empty;
+
+        var format = this.Config.DpsHeaderFormat;
+        if (string.IsNullOrWhiteSpace(format))
+        {
+            var parts = new List<string>(3);
+            if (titleText.Length > 0)
+            {
+                parts.Add(titleText);
+            }
+
+            if (durationText.Length > 0)
+            {
+                parts.Add(durationText);
+            }
+
+            if (dpsText.Length > 0)
+            {
+                parts.Add(dpsText);
+            }
+
+            return string.Join(" · ", parts);
+        }
+
+        var text = format
+            .Replace("{title}", titleText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{duration}", durationText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{dps}", dpsText, StringComparison.OrdinalIgnoreCase);
+        text = HeaderSepRuns.Replace(HeaderSpaces.Replace(text, " "), FirstSeparator);
+        return text.Trim(' ', '·', '•', '|', '/', '-', '–', '—');
+    }
+
+    /// <summary>A separator run's replacement: its own first separator, single
+    /// spaced.</summary>
+    private static string FirstSeparator(Match match)
+    {
+        foreach (var ch in match.Value)
+        {
+            if (ch is '·' or '•' or '|' or '/' or '-' or '–' or '—')
+            {
+                return $" {ch} ";
+            }
+        }
+
+        return " ";
+    }
+
     /// <summary>Bars: the damage share filled into a dark full-length slot
     /// behind the text, exactly like a timeline bar. The meter's own bar
-    /// settings drive it, independent of the timeline box.</summary>
-    private void DrawBarsRow(int rank, DpsRow row)
+    /// settings drive it, independent of the timeline box. The label carries
+    /// the rank, an optional job icon, the name as the privacy options show
+    /// it, and the deaths marker in red.</summary>
+    private void DrawBarsRow(int rank, int index, DpsRow row)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
@@ -328,16 +524,31 @@ internal sealed class DpsWindow : OverlayWindow
             var fillOrigin = this.Config.DpsBarRightToLeft
                 ? origin + new Vector2(width - fillWidth, 0.0f)
                 : origin;
-            // The self highlight wins over job coloured bars. Job colours keep
-            // the configured bar colour's alpha so the tint knob still governs
-            // how loud the fill reads.
+            // The self highlight wins over the rank 1 highlight, which wins
+            // over job coloured bars. Job colours keep the configured bar
+            // colour's alpha so the tint knob still governs how loud the
+            // fill reads.
             var fill = this.Config.DpsBarSelfHighlight && row.IsSelf
                 ? this.Config.DpsBarSelfColor
-                : this.Config.DpsBarJobColors
-                    ? WithAlpha(JobColors.Get(row.Job), Math.Clamp(this.Config.DpsBarColor.W, 0.0f, 1.0f))
-                    : this.Config.DpsBarColor;
+                : this.Config.DpsBarTopHighlight && rank == 1
+                    ? this.Config.DpsBarTopColor
+                    : this.Config.DpsBarJobColors
+                        ? WithAlpha(JobColors.Get(row.Job), Math.Clamp(this.Config.DpsBarColor.W, 0.0f, 1.0f))
+                        : this.Config.DpsBarColor;
             AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height),
                 fill, rounding);
+        }
+
+        // The stripe lightens the whole row evenly, fill included, so it sits
+        // over both rather than only reading in the unfilled tail.
+        if (this.Config.DpsRowStripes && (index & 1) == 1)
+        {
+            var stripe = Math.Clamp(this.Config.DpsRowStripeOpacity, 0.0f, 0.5f);
+            drawList.AddRectFilled(
+                origin,
+                origin + new Vector2(width, height),
+                ToColor(new Vector4(1.0f, 1.0f, 1.0f, stripe)),
+                rounding);
         }
 
         if (this.Config.DpsBarBorderThickness > 0.0f)
@@ -351,9 +562,18 @@ internal sealed class DpsWindow : OverlayWindow
                 this.Config.DpsBarBorderThickness);
         }
 
-        var label = string.IsNullOrWhiteSpace(row.Job)
-            ? $"{rank}  {row.Name}"
-            : $"{rank}  {row.Name} · {row.Job}";
+        var name = this.RowName(row);
+        var label = this.Config.DpsRowsShowRank ? $"{rank}  " : string.Empty;
+        if (name.Length > 0)
+        {
+            label += name;
+        }
+
+        if (!string.IsNullOrWhiteSpace(row.Job))
+        {
+            label += name.Length > 0 ? $" · {row.Job}" : row.Job;
+        }
+
         var dpsText = this.Config.DpsBarsShowShare
             ? $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}"
             : FormatDps(row.Dps);
@@ -363,14 +583,48 @@ internal sealed class DpsWindow : OverlayWindow
         }
 
         var dpsWidth = ImGui.CalcTextSize(dpsText).X;
+        var deaths = this.DeathsMarker(row);
+        var deathsWidth = deaths == null ? 0.0f : ImGui.CalcTextSize(deaths).X;
+
+        // The job icon sits before the label when asked, the label's start
+        // sliding right to make room.
+        var textLeft = TextPadding;
+        if (this.Config.DpsRowsShowIcons)
+        {
+            var icon = JobIcons.Get(row.Job);
+            if (icon != null)
+            {
+                var iconSize = Math.Clamp(
+                    ImGui.GetTextLineHeight() + 2.0f, 8.0f, Math.Max(height - 4.0f, 8.0f));
+                var iconTop = origin.Y + ((height - iconSize) * 0.5f);
+                drawList.AddImage(
+                    icon.Handle,
+                    new Vector2(origin.X + TextPadding, iconTop),
+                    new Vector2(origin.X + TextPadding + iconSize, iconTop + iconSize),
+                    Vector2.Zero,
+                    Vector2.One,
+                    ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
+                textLeft = TextPadding + iconSize + TextPadding;
+            }
+        }
 
         // The name ends in an ellipsis rather than running into the pinned
         // number on a narrow box.
-        label = Elide(label, Math.Max(width - dpsWidth - (TextPadding * 3.0f), 1.0f));
+        label = Elide(label, Math.Max(width - dpsWidth - textLeft - (TextPadding * 2.0f) - deathsWidth, 1.0f));
         var textY = origin.Y + ((height - ImGui.CalcTextSize(label).Y) * 0.5f);
 
         this.DrawStyledText(
-            drawList, origin + new Vector2(TextPadding, textY), this.Config.DpsTextColor, label);
+            drawList, origin + new Vector2(textLeft, textY), this.Config.DpsTextColor, label);
+
+        if (deaths != null)
+        {
+            var labelWidth = ImGui.CalcTextSize(label).X;
+            this.DrawStyledText(
+                drawList,
+                origin + new Vector2(textLeft + labelWidth, textY),
+                DeathsColor,
+                deaths);
+        }
 
         // The dps pins to the right edge so the numbers never shift the names
         // as they tick over, same as the timeline's split countdown.
@@ -530,11 +784,19 @@ internal sealed class DpsWindow : OverlayWindow
             }
 
             // Rank and name centred over the cell, in the box's text colour
-            // and effect, for the self bar too. The ACT original lets a long
-            // name overflow into the margins rather than ellipsizing it.
+            // and effect, for the self bar too. The name goes through the
+            // privacy options and carries the deaths marker. The ACT original
+            // lets a long name overflow into the margins rather than
+            // ellipsizing it.
             if (showNames)
             {
-                var name = showRank ? $"{this.RankOf(i)}. {row.Name}" : row.Name;
+                var name = showRank ? $"{this.RankOf(i)}. {this.RowName(row)}" : this.RowName(row);
+                var deaths = this.DeathsMarker(row);
+                if (deaths != null)
+                {
+                    name += deaths;
+                }
+
                 var nameWidth = ImGui.CalcTextSize(name).X;
                 this.DrawStyledText(
                     drawList,
@@ -556,7 +818,13 @@ internal sealed class DpsWindow : OverlayWindow
                 {
                     hasIcon = true;
                     var iconTopLeft = new Vector2(iconLeft, barTop - iconOverhang);
-                    drawList.AddImage(icon.Handle, iconTopLeft, iconTopLeft + new Vector2(iconSize, iconSize));
+                    drawList.AddImage(
+                        icon.Handle,
+                        iconTopLeft,
+                        iconTopLeft + new Vector2(iconSize, iconSize),
+                        Vector2.Zero,
+                        Vector2.One,
+                        ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
                 }
             }
 
@@ -862,11 +1130,12 @@ internal sealed class DpsWindow : OverlayWindow
             color);
     }
 
-    /// <summary>Kagerou: no bars, just the text line — job acronym and name
-    /// on the left, dps and share on the right — with a thin job-coloured
-    /// underline whose length is the member's share of the party's damage.
-    /// </summary>
-    private void DrawKagerouRow(DpsRow row)
+    /// <summary>Kagerou: no bars, just the text line — rank, job icon and
+    /// acronym and the name on the left, dps and share on the right — with a
+    /// thin job-coloured underline whose length is the member's share of the
+    /// party's damage. The name goes through the privacy options and carries
+    /// the deaths marker in red.</summary>
+    private void DrawKagerouRow(int rank, int index, DpsRow row)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
@@ -876,6 +1145,17 @@ internal sealed class DpsWindow : OverlayWindow
         // Thick enough to read as a bar, thin enough to stay an underline.
         var underline = Math.Clamp(this.Config.DpsBarHeight * 0.15f, 2.0f, 4.0f);
 
+        // The stripe sits under the text line; the underline keeps its own
+        // colour so the share still reads.
+        if (this.Config.DpsRowStripes && (index & 1) == 1)
+        {
+            var stripe = Math.Clamp(this.Config.DpsRowStripeOpacity, 0.0f, 0.5f);
+            drawList.AddRectFilled(
+                origin,
+                origin + new Vector2(width, lineHeight),
+                ToColor(new Vector4(1.0f, 1.0f, 1.0f, stripe)));
+        }
+
         var numbers = $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}";
         if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
         {
@@ -883,22 +1163,56 @@ internal sealed class DpsWindow : OverlayWindow
         }
 
         var numbersWidth = ImGui.CalcTextSize(numbers).X;
-        var nameWidth = Math.Max(width - numbersWidth - (TextPadding * 2.0f), 1.0f);
+        var deaths = this.DeathsMarker(row);
+        var deathsWidth = deaths == null ? 0.0f : ImGui.CalcTextSize(deaths).X;
+        var leftBudget = origin.X +
+            Math.Max(width - numbersWidth - (TextPadding * 2.0f) - deathsWidth, 1.0f);
 
-        // The acronym carries the job colour, like kagerou's own; the name
-        // stays in the box's text colour and ends in an ellipsis rather than
-        // running into the pinned numbers.
-        if (string.IsNullOrWhiteSpace(row.Job))
+        // The left side walks a cursor: rank in the box's text colour, the
+        // icon, then the acronym in the job colour like kagerou's own, then
+        // the name, which ends in an ellipsis rather than running into the
+        // pinned numbers.
+        var x = origin.X;
+        if (this.Config.DpsRowsShowRank)
         {
-            this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, Elide(row.Name, nameWidth));
+            var rankText = $"{rank}.";
+            this.DrawStyledText(drawList, new Vector2(x, origin.Y), this.Config.DpsTextColor, rankText);
+            x += ImGui.CalcTextSize(rankText + " ").X;
         }
-        else
+
+        if (this.Config.DpsRowsShowIcons)
         {
-            this.DrawStyledText(drawList, origin, JobColors.Get(row.Job), row.Job);
-            var nameX = origin.X + ImGui.CalcTextSize($"{row.Job}  ").X;
-            this.DrawStyledText(
-                drawList, new Vector2(nameX, origin.Y), this.Config.DpsTextColor,
-                Elide(row.Name, Math.Max(origin.X + nameWidth - nameX, 1.0f)));
+            var icon = JobIcons.Get(row.Job);
+            if (icon != null)
+            {
+                drawList.AddImage(
+                    icon.Handle,
+                    new Vector2(x, origin.Y),
+                    new Vector2(x + lineHeight, origin.Y + lineHeight),
+                    Vector2.Zero,
+                    Vector2.One,
+                    ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
+                x += lineHeight + 4.0f;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(row.Job))
+        {
+            this.DrawStyledText(drawList, new Vector2(x, origin.Y), JobColors.Get(row.Job), row.Job);
+            x += ImGui.CalcTextSize($"{row.Job}  ").X;
+        }
+
+        var name = this.RowName(row);
+        if (name.Length > 0)
+        {
+            var elided = Elide(name, Math.Max(leftBudget - x, 1.0f));
+            this.DrawStyledText(drawList, new Vector2(x, origin.Y), this.Config.DpsTextColor, elided);
+            x += ImGui.CalcTextSize(elided).X;
+        }
+
+        if (deaths != null)
+        {
+            this.DrawStyledText(drawList, new Vector2(x, origin.Y), DeathsColor, deaths);
         }
 
         this.DrawStyledText(

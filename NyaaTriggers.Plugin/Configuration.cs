@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
+using System.Text.Json;
 using Dalamud.Configuration;
 
 namespace NyaaTriggers.Plugin;
@@ -48,6 +50,23 @@ internal enum CountdownStyle
     Hidden,
     Seconds,
     Tenths,
+}
+
+/// <summary>How other players' names show in the dps meter.</summary>
+internal enum NamePrivacyStyle
+{
+    Shown,
+    Initials,
+    Hidden,
+}
+
+/// <summary>How the dps meter orders its rows. ByDps is the feed's own rank
+/// order; the others re-sort but keep each row's real rank number.</summary>
+internal enum DpsSortOrder
+{
+    ByDps,
+    Alphabetical,
+    ByRole,
 }
 
 /// <summary>Which end of the stack the newest callout sits at.</summary>
@@ -126,6 +145,10 @@ internal sealed class Configuration : IPluginConfiguration
     /// invisible (the raid-night default; the box floats bare text/bars over
     /// the game), up to 1 = solid theme background.</summary>
     public float TimelineBgOpacity { get; set; }
+
+    /// <summary>Whole-box opacity multiplier: every colour the timeline box
+    /// draws, backdrop included, is scaled by it.</summary>
+    public float TimelineFade { get; set; } = 1.0f;
 
     /// <summary>What is drawn behind the timeline's text to keep it readable
     /// over bright arenas.</summary>
@@ -211,12 +234,26 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Fill colour for bars about to fire.</summary>
     public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
 
+    /// <summary>Colour each bar by the kind the app tagged its label with:
+    /// tankbuster or raidwide get their own fill, everything else keeps the
+    /// shared bar colour. The imminent colour still wins near zero.</summary>
+    public bool TimelineKindColors { get; set; }
+
+    /// <summary>Bar fill for cues the app tagged tankbuster.</summary>
+    public Vector4 TimelineTankbusterColor { get; set; } = new(0.92f, 0.48f, 0.20f, 0.85f);
+
+    /// <summary>Bar fill for cues the app tagged raidwide.</summary>
+    public Vector4 TimelineRaidwideColor { get; set; } = new(0.35f, 0.62f, 0.92f, 0.85f);
+
     // ── alerts box ────────────────────────────────────────────────────────
     /// <summary>Text scale inside the alerts box.</summary>
     public float AlertsTextScale { get; set; } = 1.0f;
 
     /// <summary>Backdrop alpha behind the alerts box's content.</summary>
     public float AlertsBgOpacity { get; set; }
+
+    /// <summary>Whole-box opacity multiplier for the alerts box.</summary>
+    public float AlertsFade { get; set; } = 1.0f;
 
     /// <summary>What is drawn behind callout text to keep it readable.</summary>
     public TextEffectStyle AlertsTextEffect { get; set; } = TextEffectStyle.Outline;
@@ -306,6 +343,9 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Backdrop alpha behind the dps meter box's content.</summary>
     public float DpsBgOpacity { get; set; }
 
+    /// <summary>Whole-box opacity multiplier for the dps meter box.</summary>
+    public float DpsFade { get; set; } = 1.0f;
+
     /// <summary>What is drawn behind the meter's text to keep it readable.</summary>
     public TextEffectStyle DpsTextEffect { get; set; } = TextEffectStyle.Outline;
 
@@ -321,6 +361,61 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Show only the local player's row, the original's solo mode.
     /// Applies to every dps style.</summary>
     public bool DpsSoloOnly { get; set; }
+
+    /// <summary>Pin the local player's row ahead of everyone else's whatever
+    /// their rank, keeping its real rank number. Top of the Bars and Kagerou
+    /// lists, left end of the Horizon Overlay strip. Applies to every dps
+    /// style.</summary>
+    public bool DpsSelfFirst { get; set; }
+
+    /// <summary>Row order in the meter. Alphabetical and by role keep each
+    /// row's real rank number, so the list can read by name or role without
+    /// lying about who parsed where. Applies to every dps style.</summary>
+    public DpsSortOrder DpsSortOrder { get; set; } = DpsSortOrder.ByDps;
+
+    /// <summary>Other players' names: shown whole, reduced to initials, or
+    /// hidden outright. The streamer knobs. Applies to every dps style.</summary>
+    public NamePrivacyStyle DpsNamePrivacy { get; set; } = NamePrivacyStyle.Shown;
+
+    /// <summary>Show the local player as YOU instead of their name, the way
+    /// ACT's own overlays do. Applies to every dps style.</summary>
+    public bool DpsSelfNameYou { get; set; }
+
+    /// <summary>Bars and Kagerou styles: rank numbers on the rows. The Horizon
+    /// Overlay has its own rank knob.</summary>
+    public bool DpsRowsShowRank { get; set; } = true;
+
+    /// <summary>Bars and Kagerou styles: the job icon before the name.</summary>
+    public bool DpsRowsShowIcons { get; set; }
+
+    /// <summary>Bars and Kagerou styles: lighten every other row so lines are
+    /// easier to track across a wide box.</summary>
+    public bool DpsRowStripes { get; set; }
+
+    /// <summary>How strongly the striped rows lighten, 0 to 0.5.</summary>
+    public float DpsRowStripeOpacity { get; set; } = 0.08f;
+
+    /// <summary>Bars style only: fill the rank 1 bar with its own colour so
+    /// the top of the parse reads at a glance. Self highlight still wins.</summary>
+    public bool DpsBarTopHighlight { get; set; }
+
+    /// <summary>The rank 1 bar fill when DpsBarTopHighlight is on.</summary>
+    public Vector4 DpsBarTopColor { get; set; } = new(0.98f, 0.80f, 0.25f, 0.85f);
+
+    /// <summary>Show each member's death count beside the name, red, when the
+    /// feed carries it. Needs names shown in the Horizon Overlay strip.</summary>
+    public bool DpsShowDeaths { get; set; }
+
+    /// <summary>Keep the final meter on screen after the encounter ends,
+    /// until the next pull starts or the zone changes. Off hides the box the
+    /// moment the fight does.</summary>
+    public bool DpsHoldLast { get; set; }
+
+    /// <summary>Encounter line layout. Empty joins title, duration and party
+    /// dps with a dot, the long standing look. The tokens {title} {duration}
+    /// {dps} place those parts freely, so the line can be reordered or
+    /// reworded.</summary>
+    public string DpsHeaderFormat { get; set; } = string.Empty;
 
     /// <summary>How many members at most the meter shows, the original's
     /// # combatants. The feed carries up to a 24-man alliance; eight covers
@@ -468,6 +563,46 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>The party's dps in the encounter line.</summary>
     public bool DpsHeaderTotalDps { get; set; } = true;
 
+    // ── profiles ────────────────────────────────────────────────────────────
+    /// <summary>Named appearance snapshots: profile name to a serialized
+    /// Configuration blob from SnapshotAppearance. Only the appearance knobs
+    /// come back on apply; the link, placement and visibility stay as they
+    /// are.</summary>
+    public Dictionary<string, string> AppearanceProfiles { get; set; } = new();
+
+    /// <summary>This configuration as a JSON blob for AppearanceProfiles,
+    /// minus the profiles themselves so saved blobs do not nest.</summary>
+    public string SnapshotAppearance()
+    {
+        var node = JsonSerializer.SerializeToNode(this)!.AsObject();
+        node.Remove(nameof(this.AppearanceProfiles));
+        return node.ToJsonString();
+    }
+
+    /// <summary>Bring a SnapshotAppearance blob's appearance knobs in. False
+    /// on a blob that does not parse, so a mangled stored profile leaves the
+    /// current look alone.</summary>
+    public bool ApplyAppearanceProfile(string json)
+    {
+        Configuration? snapshot;
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<Configuration>(json);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        if (snapshot == null)
+        {
+            return false;
+        }
+
+        this.CopyAppearanceFrom(snapshot);
+        return true;
+    }
+
     // ── legacy: the shared pre-v3 look, kept only so MigrateFromV2 can read
     //     the old values, the same pattern as BgOpacity from v1 ────────────
     public TextEffectStyle TextEffect { get; set; } = TextEffectStyle.Outline;
@@ -572,11 +707,16 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>Restore the shipped palette and sizing, leaving the link
     /// settings and window placement alone.</summary>
-    public void ResetAppearance()
+    public void ResetAppearance() => this.CopyAppearanceFrom(new Configuration());
+
+    /// <summary>Copy every appearance knob over from another configuration,
+    /// leaving the link, placement, visibility and profiles alone. Applying a
+    /// saved profile and resetting to defaults differ only in the source.</summary>
+    public void CopyAppearanceFrom(Configuration fresh)
     {
-        var fresh = new Configuration();
         TimelineTextScale = fresh.TimelineTextScale;
         TimelineBgOpacity = fresh.TimelineBgOpacity;
+        TimelineFade = fresh.TimelineFade;
         TimelineTextEffect = fresh.TimelineTextEffect;
         TimelineEffectThickness = fresh.TimelineEffectThickness;
         TimelineEffectColor = fresh.TimelineEffectColor;
@@ -602,8 +742,12 @@ internal sealed class Configuration : IPluginConfiguration
         TimelineAnchorBottom = fresh.TimelineAnchorBottom;
         TimelineFireFlash = fresh.TimelineFireFlash;
         ColorImminent = fresh.ColorImminent;
+        TimelineKindColors = fresh.TimelineKindColors;
+        TimelineTankbusterColor = fresh.TimelineTankbusterColor;
+        TimelineRaidwideColor = fresh.TimelineRaidwideColor;
         AlertsTextScale = fresh.AlertsTextScale;
         AlertsBgOpacity = fresh.AlertsBgOpacity;
+        AlertsFade = fresh.AlertsFade;
         AlertsTextEffect = fresh.AlertsTextEffect;
         AlertsEffectThickness = fresh.AlertsEffectThickness;
         AlertsEffectColor = fresh.AlertsEffectColor;
@@ -630,11 +774,20 @@ internal sealed class Configuration : IPluginConfiguration
         ColorAlarm = fresh.ColorAlarm;
         DpsTextScale = fresh.DpsTextScale;
         DpsBgOpacity = fresh.DpsBgOpacity;
+        DpsFade = fresh.DpsFade;
         DpsTextEffect = fresh.DpsTextEffect;
         DpsEffectThickness = fresh.DpsEffectThickness;
         DpsEffectColor = fresh.DpsEffectColor;
         DpsTextColor = fresh.DpsTextColor;
         DpsSoloOnly = fresh.DpsSoloOnly;
+        DpsSelfFirst = fresh.DpsSelfFirst;
+        DpsSortOrder = fresh.DpsSortOrder;
+        DpsNamePrivacy = fresh.DpsNamePrivacy;
+        DpsSelfNameYou = fresh.DpsSelfNameYou;
+        DpsRowsShowRank = fresh.DpsRowsShowRank;
+        DpsRowsShowIcons = fresh.DpsRowsShowIcons;
+        DpsRowStripes = fresh.DpsRowStripes;
+        DpsRowStripeOpacity = fresh.DpsRowStripeOpacity;
         DpsMaxRows = fresh.DpsMaxRows;
         DpsBarHeight = fresh.DpsBarHeight;
         DpsBarSpacing = fresh.DpsBarSpacing;
@@ -650,6 +803,11 @@ internal sealed class Configuration : IPluginConfiguration
         DpsRowsShowHps = fresh.DpsRowsShowHps;
         DpsBarSelfHighlight = fresh.DpsBarSelfHighlight;
         DpsBarSelfColor = fresh.DpsBarSelfColor;
+        DpsBarTopHighlight = fresh.DpsBarTopHighlight;
+        DpsBarTopColor = fresh.DpsBarTopColor;
+        DpsShowDeaths = fresh.DpsShowDeaths;
+        DpsHoldLast = fresh.DpsHoldLast;
+        DpsHeaderFormat = fresh.DpsHeaderFormat;
         DpsStyle = fresh.DpsStyle;
         DpsHorizTheme = fresh.DpsHorizTheme;
         DpsHorizShowNames = fresh.DpsHorizShowNames;

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -19,6 +20,8 @@ internal sealed class ConfigWindow : Window
     private static readonly string[] AlignNames = { "Left", "Center", "Right" };
     private static readonly string[] DpsStyleNames = { "Bars", "Horizon Overlay", "Kagerou" };
     private static readonly string[] HorizonThemeNames = { "Color by role", "Black & white" };
+    private static readonly string[] PrivacyNames = { "Shown", "Initials only", "Hidden" };
+    private static readonly string[] DpsSortNames = { "By DPS", "Alphabetical", "Tanks, healers, DPS" };
 
     private readonly Configuration config;
     private readonly BridgeHost bridge;
@@ -27,6 +30,10 @@ internal sealed class ConfigWindow : Window
     /// <summary>Edited separately from the live setting: rebinding the listener
     /// on every keystroke would thrash the socket while a port is typed.</summary>
     private int pendingPort;
+
+    /// <summary>The profile name being typed. Kept out of the config itself:
+    /// it is the editor's scratch, not a setting.</summary>
+    private string profileName = string.Empty;
 
     internal ConfigWindow(Configuration config, BridgeHost bridge, PluginUi ui)
         : base("NyaaTriggers###nyaaConfig")
@@ -92,6 +99,12 @@ internal sealed class ConfigWindow : Window
             if (ImGui.CollapsingHeader("Horizon Overlay"))
             {
                 this.DrawHorizon();
+                ImGui.Spacing();
+            }
+
+            if (ImGui.CollapsingHeader("Profiles"))
+            {
+                this.DrawProfiles();
                 ImGui.Spacing();
             }
         }
@@ -238,6 +251,9 @@ internal sealed class ConfigWindow : Window
             () => this.config.TimelineTextScale, v => this.config.TimelineTextScale = v);
         this.PercentSlider("Background",
             () => this.config.TimelineBgOpacity, v => this.config.TimelineBgOpacity = v);
+        this.PercentSlider("Window fade",
+            () => this.config.TimelineFade, v => this.config.TimelineFade = v, 5.0f, 100.0f);
+        ImGui.TextDisabled("The whole box's opacity, backdrop included.");
 
         ImGui.Spacing();
 
@@ -295,6 +311,16 @@ internal sealed class ConfigWindow : Window
 
         ImGui.Spacing();
 
+        this.Check("Color bars by kind",
+            () => this.config.TimelineKindColors, v => this.config.TimelineKindColors = v);
+        ImGui.TextDisabled("The app tags timeline labels that say tankbuster or raidwide; everything else keeps the Bar colour.");
+        this.ColorRow("Tankbuster",
+            () => this.config.TimelineTankbusterColor, v => this.config.TimelineTankbusterColor = v);
+        this.ColorRow("Raidwide",
+            () => this.config.TimelineRaidwideColor, v => this.config.TimelineRaidwideColor = v);
+
+        ImGui.Spacing();
+
         this.EffectGroup(
             () => this.config.TimelineTextEffect, v => this.config.TimelineTextEffect = v,
             () => this.config.TimelineEffectThickness, v => this.config.TimelineEffectThickness = v,
@@ -311,6 +337,9 @@ internal sealed class ConfigWindow : Window
             () => this.config.AlertsTextScale, v => this.config.AlertsTextScale = v);
         this.PercentSlider("Background",
             () => this.config.AlertsBgOpacity, v => this.config.AlertsBgOpacity = v);
+        this.PercentSlider("Window fade",
+            () => this.config.AlertsFade, v => this.config.AlertsFade = v, 5.0f, 100.0f);
+        ImGui.TextDisabled("The whole box's opacity, backdrop included.");
 
         ImGui.Spacing();
 
@@ -386,10 +415,36 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsTextScale, v => this.config.DpsTextScale = v);
         this.PercentSlider("Background",
             () => this.config.DpsBgOpacity, v => this.config.DpsBgOpacity = v);
+        this.PercentSlider("Window fade",
+            () => this.config.DpsFade, v => this.config.DpsFade = v, 5.0f, 100.0f);
+        ImGui.TextDisabled("The whole box's opacity, backdrop included.");
         this.Check("Only show yourself",
             () => this.config.DpsSoloOnly, v => this.config.DpsSoloOnly = v);
+        this.Check("Your own row first",
+            () => this.config.DpsSelfFirst, v => this.config.DpsSelfFirst = v);
+        ImGui.TextDisabled("Top of the Bars and Kagerou lists, left end of the Horizon Overlay strip.");
+        this.Combo("Sort order", DpsSortNames,
+            () => this.config.DpsSortOrder, v => this.config.DpsSortOrder = v);
         this.SliderInt("Max combatants", 1, 24,
             () => this.config.DpsMaxRows, v => this.config.DpsMaxRows = v);
+
+        ImGui.Spacing();
+
+        this.Check("Rank numbers",
+            () => this.config.DpsRowsShowRank, v => this.config.DpsRowsShowRank = v);
+        this.Check("Job icons",
+            () => this.config.DpsRowsShowIcons, v => this.config.DpsRowsShowIcons = v);
+        ImGui.TextDisabled("Both apply to the Bars and Kagerou rows; the Horizon strip has its own toggles.");
+        this.Combo("Other players' names", PrivacyNames,
+            () => this.config.DpsNamePrivacy, v => this.config.DpsNamePrivacy = v);
+        this.Check("Call yourself YOU",
+            () => this.config.DpsSelfNameYou, v => this.config.DpsSelfNameYou = v);
+        this.Check("Show deaths",
+            () => this.config.DpsShowDeaths, v => this.config.DpsShowDeaths = v);
+        ImGui.TextDisabled("A red count beside the name. The Horizon strip needs names shown.");
+        this.Check("Keep the last encounter on screen",
+            () => this.config.DpsHoldLast, v => this.config.DpsHoldLast = v);
+        ImGui.TextDisabled("The final meter stays up after the fight, until the next pull or a zone change.");
 
         ImGui.Spacing();
 
@@ -400,6 +455,9 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsHeaderDuration, v => this.config.DpsHeaderDuration = v);
         this.Check("Total DPS",
             () => this.config.DpsHeaderTotalDps, v => this.config.DpsHeaderTotalDps = v);
+        this.TextInput("Line format", "{title} · {duration} · {dps}",
+            () => this.config.DpsHeaderFormat, v => this.config.DpsHeaderFormat = v);
+        ImGui.TextDisabled("Empty joins the parts with a dot. Tokens reorder or reword them.");
 
         ImGui.Spacing();
 
@@ -422,10 +480,17 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsBarsShowShare, v => this.config.DpsBarsShowShare = v);
         this.Check("Highlight your own bar",
             () => this.config.DpsBarSelfHighlight, v => this.config.DpsBarSelfHighlight = v);
-        ImGui.TextDisabled("All three apply to the Bars style only.");
+        this.Check("Highlight the top DPS bar",
+            () => this.config.DpsBarTopHighlight, v => this.config.DpsBarTopHighlight = v);
+        ImGui.TextDisabled("These apply to the Bars style only.");
         this.Check("Show HPS",
             () => this.config.DpsRowsShowHps, v => this.config.DpsRowsShowHps = v);
         ImGui.TextDisabled("Bars and Kagerou rows: append the member's hps to the numbers.");
+        this.Check("Alternate row tint",
+            () => this.config.DpsRowStripes, v => this.config.DpsRowStripes = v);
+        this.PercentSlider("Row tint strength",
+            () => this.config.DpsRowStripeOpacity, v => this.config.DpsRowStripeOpacity = v, 0.0f, 30.0f);
+        ImGui.TextDisabled("Bars and Kagerou: lighten every other row.");
 
         ImGui.Spacing();
 
@@ -437,7 +502,9 @@ internal sealed class ConfigWindow : Window
         this.ColorRow("Bar text", () => this.config.DpsTextColor, v => this.config.DpsTextColor = v);
         this.ColorRow("Self bar",
             () => this.config.DpsBarSelfColor, v => this.config.DpsBarSelfColor = v);
-        ImGui.TextDisabled("Bars style only; Horizon Overlay colours by role, Kagerou by job. Self bar needs Highlight your own bar.");
+        this.ColorRow("Top DPS bar",
+            () => this.config.DpsBarTopColor, v => this.config.DpsBarTopColor = v);
+        ImGui.TextDisabled("Bars style only; Horizon Overlay colours by role, Kagerou by job. Self bar needs Highlight your own bar, top DPS bar needs Highlight the top DPS bar.");
 
         ImGui.Spacing();
 
@@ -518,6 +585,61 @@ internal sealed class ConfigWindow : Window
         ImGui.PopID();
     }
 
+    /// <summary>Named snapshots of the whole appearance: save the current look
+    /// under a name, apply or delete saved ones. Only the appearance knobs
+    /// travel; the link, the placement and the visibility filters stay.</summary>
+    private void DrawProfiles()
+    {
+        ImGui.TextDisabled("Snapshots of every appearance setting. Placement and the link stay as they are.");
+
+        ImGui.SetNextItemWidth(220);
+        ImGui.InputTextWithHint("##profileName", "Profile name", ref this.profileName, 64);
+
+        var name = this.profileName.Trim();
+        ImGui.SameLine();
+        if (name.Length == 0)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        // Saving over an existing name replaces it, the usual preset rule.
+        if (ImGui.Button("Save current"))
+        {
+            this.config.AppearanceProfiles[name] = this.config.SnapshotAppearance();
+            this.config.Save();
+        }
+
+        if (name.Length == 0)
+        {
+            ImGui.EndDisabled();
+        }
+
+        // A copy of the entries: Apply and Delete mutate the dictionary mid
+        // enumeration otherwise.
+        foreach (var (savedName, blob) in this.config.AppearanceProfiles.ToList())
+        {
+            ImGui.PushID(savedName);
+            if (ImGui.Button("Apply"))
+            {
+                if (this.config.ApplyAppearanceProfile(blob))
+                {
+                    this.config.Save();
+                }
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Delete"))
+            {
+                this.config.AppearanceProfiles.Remove(savedName);
+                this.config.Save();
+            }
+
+            ImGui.SameLine();
+            ImGui.TextUnformatted(savedName);
+            ImGui.PopID();
+        }
+    }
+
     /// <summary>One box's duty and combat filters on a single row. The fixed
     /// column keeps the pairs lined up across the boxes.</summary>
     private void VisibilityRow(
@@ -591,6 +713,19 @@ internal sealed class ConfigWindow : Window
             set(value);
             this.config.Save();
         }
+    }
+
+    /// <summary>A free-text setting. Applies live but saves on deactivate, so
+    /// a half-typed value never hits the config file.</summary>
+    private void TextInput(string label, string hint, Func<string> get, Action<string> set)
+    {
+        var value = get();
+        if (ImGui.InputTextWithHint(label, hint, ref value, 128))
+        {
+            set(value);
+        }
+
+        this.SaveIfDragEnded();
     }
 
     private void Combo<T>(string label, string[] names, Func<T> get, Action<T> set)

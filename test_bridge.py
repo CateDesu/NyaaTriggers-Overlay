@@ -36,14 +36,16 @@ PROTOCOL_VERSION = 1
 # it forever with nothing on screen to say so.
 HELLO_TIMEOUT = 5.0
 
-# (timeline second, label) - the same shape TimelineEngine.upcoming() produces.
+# (timeline second, label, kind) - the wire shape the app's timeline_frame
+# produces, the engine's time and label pairs plus the kind tag it derives
+# from the label text. Two tagged entries exercise the per-kind colours.
 SCHEDULE = [
-    (8.0, "Wing of Ruin"),
-    (16.0, "Akh Morn"),
-    (24.0, "Stack"),
-    (33.0, "Spread"),
-    (41.0, "Tower soak"),
-    (52.0, "Enrage"),
+    (8.0, "Wing of Ruin", "mechanic"),
+    (16.0, "Akh Morn raidwide", "raidwide"),
+    (24.0, "Stack", "mechanic"),
+    (33.0, "Spread", "mechanic"),
+    (41.0, "Tower soak tankbuster", "tankbuster"),
+    (52.0, "Enrage", "mechanic"),
 ]
 
 # (timeline second, text, severity)
@@ -55,18 +57,18 @@ CALLOUTS = [
     (39.0, "Soak your tower", "alert"),
 ]
 
-# (name, job, base encdps, base enchps, is the local player) - the same
-# shape the app's meter rows produce, already close to sorted; each frame
-# jitters and re-sorts them.
+# (name, job, base encdps, base enchps, is the local player, deaths) - the
+# same shape the app's meter rows produce, already close to sorted; each
+# frame jitters and re-sorts them.
 PARTY = [
-    ("Alphinaud L", "SGE", 10234.5, 9123.4, False),
-    ("Beta Tester", "DRG", 9876.0, 0.0, True),
-    ("Cid Garlond", "MCH", 9450.0, 0.0, False),
-    ("Dulia Chai", "WHM", 9012.0, 8456.0, False),
-    ("Estinien W", "DRG", 8780.0, 0.0, False),
-    ("Five Heads", "BLM", 8540.0, 0.0, False),
-    ("G'raha Tia", "RDM", 8100.0, 0.0, False),
-    ("Hythlodaeus", "PLD", 7600.0, 322.0, False),
+    ("Alphinaud L", "SGE", 10234.5, 9123.4, False, 0),
+    ("Beta Tester", "DRG", 9876.0, 0.0, True, 0),
+    ("Cid Garlond", "MCH", 9450.0, 0.0, False, 1),
+    ("Dulia Chai", "WHM", 9012.0, 8456.0, False, 0),
+    ("Estinien W", "DRG", 8780.0, 0.0, False, 2),
+    ("Five Heads", "BLM", 8540.0, 0.0, False, 0),
+    ("G'raha Tia", "RDM", 8100.0, 0.0, False, 0),
+    ("Hythlodaeus", "PLD", 7600.0, 322.0, False, 0),
 ]
 
 TICK_SECONDS = 0.25
@@ -137,10 +139,10 @@ async def run_dps(port: int) -> None:
         print(f"sending {DPS_FRAMES} dps frames, one per second (ctrl-c to stop)")
         for frame in range(DPS_FRAMES):
             rows = []
-            for name, job, base, base_hps, is_self in PARTY:
+            for name, job, base, base_hps, is_self, deaths in PARTY:
                 dps = round(base * rng.uniform(0.95, 1.05), 1)
                 hps = round(base_hps * rng.uniform(0.95, 1.05), 1)
-                rows.append([name, job, dps, 0.0, hps, is_self])
+                rows.append([name, job, dps, 0.0, hps, is_self, deaths])
 
             rows.sort(key=lambda row: row[2], reverse=True)
             total = sum(row[2] for row in rows)

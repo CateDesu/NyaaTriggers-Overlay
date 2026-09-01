@@ -22,8 +22,10 @@ internal sealed class TimelineWindow : OverlayWindow
     private readonly BridgeHost bridge;
 
     /// <summary>Scratch for the collect-then-draw pass, cleared each frame so
-    /// the bar walk stays allocation free like the streaming draw before it.</summary>
-    private readonly List<(string Label, float Remaining, bool Fired)> rows = new();
+    /// the bar walk stays allocation free like the streaming draw before it.
+    /// The kind is the app's tag on the label, tankbuster or raidwide or a
+    /// plain mechanic.</summary>
+    private readonly List<(string Label, float Remaining, bool Fired, string Kind)> rows = new();
 
     internal TimelineWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
         : base("NyaaTriggers Timeline###nyaaTimeline", config, fonts)
@@ -54,6 +56,8 @@ internal sealed class TimelineWindow : OverlayWindow
     protected override float TextScale => this.Config.TimelineTextScale;
 
     protected override float BgOpacity => this.Config.TimelineBgOpacity;
+
+    protected override float FadeOpacity => this.Config.TimelineFade;
 
     protected override TextEffectStyle TextEffect => this.Config.TimelineTextEffect;
 
@@ -97,14 +101,15 @@ internal sealed class TimelineWindow : OverlayWindow
                 break;
             }
 
-            rows.Add((entry.Label, (float)Math.Max(remaining, 0.0), fired));
+            rows.Add((entry.Label, (float)Math.Max(remaining, 0.0), fired, entry.Kind));
         }
 
         if (rows.Count == 0 && !this.Config.Locked)
         {
             // Placeholder so an unlocked box being positioned is never blank.
-            rows.Add(("Sample mechanic", window * 0.6f, false));
-            rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false));
+            // One tagged kind too, so the kind colours preview live.
+            rows.Add(("Sample tankbuster", window * 0.6f, false, "tankbuster"));
+            rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false, string.Empty));
         }
 
         // The clock line needs a fight clock; an unlocked box gets a stand-in
@@ -136,7 +141,7 @@ internal sealed class TimelineWindow : OverlayWindow
 
         foreach (var row in rows)
         {
-            this.DrawBar(row.Label, row.Remaining, window, row.Fired);
+            this.DrawBar(row.Label, row.Remaining, window, row.Fired, row.Kind);
         }
     }
 
@@ -151,6 +156,23 @@ internal sealed class TimelineWindow : OverlayWindow
         ImGui.Dummy(new Vector2(width, ImGui.GetTextLineHeight() + Math.Max(this.Config.TimelineBarSpacing, 0.0f)));
     }
 
+    /// <summary>The bar's fill colour for its kind. With kind colours off, or
+    /// for a kind we do not know, every cue keeps the shared bar colour.</summary>
+    private Vector4 BarColor(string kind)
+    {
+        if (!this.Config.TimelineKindColors)
+        {
+            return this.Config.TimelineBarColor;
+        }
+
+        return kind switch
+        {
+            "tankbuster" => this.Config.TimelineTankbusterColor,
+            "raidwide" => this.Config.TimelineRaidwideColor,
+            _ => this.Config.TimelineBarColor,
+        };
+    }
+
     private static string FormatClock(double seconds)
     {
         var total = Math.Max((int)seconds, 0);
@@ -160,7 +182,7 @@ internal sealed class TimelineWindow : OverlayWindow
             (total % 60).ToString("D2", CultureInfo.InvariantCulture));
     }
 
-    private void DrawBar(string label, float remaining, float window, bool fired)
+    private void DrawBar(string label, float remaining, float window, bool fired, string kind)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
@@ -179,7 +201,7 @@ internal sealed class TimelineWindow : OverlayWindow
         }
 
         var imminent = fired || remaining <= Math.Max(this.Config.ImminentSeconds, 0.0f);
-        var fill = imminent ? this.Config.ColorImminent : this.Config.TimelineBarColor;
+        var fill = imminent ? this.Config.ColorImminent : this.BarColor(kind);
 
         if (imminent && this.Config.ImminentPulse)
         {

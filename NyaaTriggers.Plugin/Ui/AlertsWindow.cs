@@ -56,6 +56,8 @@ internal sealed class AlertsWindow : OverlayWindow
 
     protected override float BgOpacity => this.Config.AlertsBgOpacity;
 
+    protected override float FadeOpacity => this.Config.AlertsFade;
+
     protected override TextEffectStyle TextEffect => this.Config.AlertsTextEffect;
 
     protected override int EffectThickness => this.Config.AlertsEffectThickness;

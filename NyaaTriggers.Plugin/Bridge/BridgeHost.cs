@@ -13,15 +13,20 @@ internal enum Severity
     Alarm,
 }
 
-internal readonly record struct TimelineEntry(float Time, string Label);
+internal readonly record struct TimelineEntry(float Time, string Label, string Kind);
 
-internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf);
+internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths);
 
 /// <summary>The app's latest dps frame. Replaced whole on every update rather
 /// than mutated, so the UI never reads a half-updated meter.</summary>
 internal sealed class DpsState
 {
     internal bool Show { get; init; }
+
+    /// <summary>The encounter ended, as opposed to a clear wiping the state:
+    /// the meter's hold-last option keeps showing the final rows on this one.
+    /// </summary>
+    internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;
 
@@ -335,8 +340,11 @@ internal sealed class BridgeHost : IDisposable
 
         foreach (var entry in entries.EnumerateArray())
         {
-            // [time, label] pairs, matching what the app's timeline engine
-            // already produces.
+            // [time, label] pairs, optionally [time, label, kind], matching
+            // what the app's timeline engine produces. The kind is a free
+            // string ("tankbuster", "raidwide", "mechanic"); an old app's
+            // 2-field entries and kinds we do not know both draw as plain
+            // mechanics.
             if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
             {
                 continue;
@@ -349,10 +357,16 @@ internal sealed class BridgeHost : IDisposable
                 continue;
             }
 
+            var kind = string.Empty;
+            if (entry.GetArrayLength() > 2 && entry[2].ValueKind == JsonValueKind.String)
+            {
+                kind = SanitizeText(entry[2].GetString(), 32);
+            }
+
             var text = SanitizeText(label.GetString(), MaxTextChars);
             if (!string.IsNullOrWhiteSpace(text))
             {
-                this.timeline.Add(new TimelineEntry((float)time.GetDouble(), text));
+                this.timeline.Add(new TimelineEntry((float)time.GetDouble(), text, kind));
             }
 
             if (this.timeline.Count >= MaxTimelineEntries)
@@ -433,10 +447,12 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Encounter over: hide the meter and drop the rows with it.
+        // Encounter over: hide the meter and drop the rows with it. Marked
+        // as an ending rather than a clear, so the hold-last option can tell
+        // "fight done" apart from "zone changed" and keep the final rows up.
         if (show.ValueKind == JsonValueKind.False)
         {
-            this.Dps = new DpsState();
+            this.Dps = new DpsState { Ended = true };
             return;
         }
 
@@ -456,10 +472,10 @@ internal sealed class BridgeHost : IDisposable
         {
             foreach (var entry in rowsElement.EnumerateArray())
             {
-                // [name, job, encdps, share, hps, isSelf] rows, sorted by
-                // encdps desc, matching what the app's meter produces. The
-                // last two fields arrived with the Horizon Overlay look; an
-                // old app's 4-field rows just get the defaults.
+                // [name, job, encdps, share, hps, isSelf, deaths] rows, sorted
+                // by encdps desc, matching what the app's meter produces. The
+                // trailing fields arrived one version at a time; an old app's
+                // shorter rows just get the defaults.
                 if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
                 {
                     continue;
@@ -479,6 +495,7 @@ internal sealed class BridgeHost : IDisposable
 
                 var hps = 0.0;
                 var isSelf = false;
+                var deaths = 0;
                 if (entry.GetArrayLength() > 4 && entry[4].ValueKind == JsonValueKind.Number)
                 {
                     hps = entry[4].GetDouble();
@@ -489,13 +506,20 @@ internal sealed class BridgeHost : IDisposable
                     isSelf = true;
                 }
 
+                if (entry.GetArrayLength() > 6 && entry[6].ValueKind == JsonValueKind.Number &&
+                    entry[6].TryGetInt32(out var parsedDeaths))
+                {
+                    deaths = Math.Max(parsedDeaths, 0);
+                }
+
                 rows.Add(new DpsRow(
                     SanitizeText(name.GetString(), MaxTextChars),
                     SanitizeText(job.GetString(), MaxTextChars),
                     dps.GetDouble(),
                     share.GetDouble(),
                     hps,
-                    isSelf));
+                    isSelf,
+                    deaths));
 
                 if (rows.Count >= MaxDpsRows)
                 {

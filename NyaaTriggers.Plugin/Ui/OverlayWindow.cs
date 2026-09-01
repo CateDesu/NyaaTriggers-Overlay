@@ -78,6 +78,14 @@ internal abstract class OverlayWindow : Window
     /// effect does not force itself onto the timeline.</summary>
     protected abstract TextEffectStyle TextEffect { get; }
 
+    /// <summary>Whole-box opacity multiplier. Every colour the box draws is
+    /// folded through it in ToColor, the backdrop included. Clamped just
+    /// above zero: a box faded to nothing could never be found again.</summary>
+    protected virtual float FadeOpacity => 1.0f;
+
+    /// <summary>The fade for this frame, clamped to the drawable range.</summary>
+    private float Fade => Math.Clamp(this.FadeOpacity, 0.05f, 1.0f);
+
     /// <summary>Effect reach in pixels for this box.</summary>
     protected abstract int EffectThickness { get; }
 
@@ -99,10 +107,11 @@ internal abstract class OverlayWindow : Window
         var locked = this.Config.Locked;
         this.Flags = locked ? LockedFlags : UnlockedFlags;
 
-        // The window bg honors the configured backdrop opacity (0 = invisible).
+        // The window bg honors the configured backdrop opacity (0 = invisible),
+        // scaled by the box's fade like everything else it draws.
         // The locked state stays NoBackground and gets a custom rect in Draw()
         // instead, so its click-through and chromeless shape are unaffected.
-        ImGui.SetNextWindowBgAlpha(Math.Clamp(this.BgOpacity, 0.0f, 1.0f));
+        ImGui.SetNextWindowBgAlpha(Math.Clamp(this.BgOpacity, 0.0f, 1.0f) * this.Fade);
 
         // Dalamud multiplies Size by GlobalScale on the way out but leaves
         // Position alone, so the stored size is divided back out here. Skipping
@@ -199,7 +208,7 @@ internal abstract class OverlayWindow : Window
         drawList.AddRectFilled(
             pos,
             pos + size,
-            ImGui.GetColorU32(ImGuiCol.WindowBg, Math.Clamp(this.BgOpacity, 0.0f, 1.0f)),
+            ImGui.GetColorU32(ImGuiCol.WindowBg, Math.Clamp(this.BgOpacity, 0.0f, 1.0f) * this.Fade),
             3.0f);
     }
 
@@ -222,7 +231,10 @@ internal abstract class OverlayWindow : Window
         }
     }
 
-    protected static uint ToColor(Vector4 rgba) => ImGui.ColorConvertFloat4ToU32(rgba);
+    /// <summary>Float rgba to a draw-list colour with the box's fade folded
+    /// into the alpha, so everything drawn through here answers the fade knob.
+    /// </summary>
+    protected uint ToColor(Vector4 rgba) => ImGui.ColorConvertFloat4ToU32(WithAlpha(rgba, this.Fade));
 
     /// <summary>Fade a colour's alpha, for alerts on their way out.</summary>
     protected static Vector4 WithAlpha(Vector4 rgba, float alpha)
@@ -243,7 +255,7 @@ internal abstract class OverlayWindow : Window
     /// <summary>Draw a fill with a lit top edge settling to the base colour at
     /// the bottom, plus a hairline highlight along the top. ImGui cannot round
     /// a gradient, so a rounded bar keeps the plain flat fill.</summary>
-    protected static void AddBarFill(
+    protected void AddBarFill(
         ImDrawListPtr drawList, Vector2 min, Vector2 max, Vector4 fill, float rounding)
     {
         if (rounding >= 0.5f)
@@ -304,7 +316,7 @@ internal abstract class OverlayWindow : Window
         var alpha = Math.Clamp(color.W, 0.0f, 1.0f);
         var thickness = Math.Clamp(this.EffectThickness, 0, 4);
         var effect = this.EffectColor;
-        var effectAlpha = effect.W * alpha;
+        var effectAlpha = effect.W * alpha * this.Fade;
 
         if (thickness > 0 && effectAlpha > 0.0f)
         {

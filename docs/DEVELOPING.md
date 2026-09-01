@@ -110,19 +110,20 @@ The app already had reconnect handling for talking to IINACT, and the same code 
 | Message | Meaning |
 |---|---|
 | `{"c":"tick","t":12.5}` | Fight clock, in timeline seconds. The plugin interpolates from here, so this only has to beat drift, not the frame rate. |
-| `{"c":"timeline","v":[[18.0,"Wing"],[24.5,"Dive"]]}` | Replace the schedule. `[time, label]` pairs in timeline seconds, same shape as the app's `TimelineEngine.upcoming()`. |
+| `{"c":"timeline","v":[[18.0,"Wing","mechanic"],[24.5,"Dive","tankbuster"]]}` | Replace the schedule. `[time, label, kind]` entries in timeline seconds; the time and label are the app's `TimelineEngine.upcoming()` shape and `kind` is the tag the app derives from the label text: `tankbuster`, `raidwide` or `mechanic`. The kind is optional and free-form; an absent or unknown kind draws as a plain mechanic. |
 | `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured time for that severity. |
-| `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true]]}` | DPS meter snapshot; see below. |
+| `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true,0]]}` | DPS meter snapshot; see below. |
 | `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and fight end. |
 | `{"c":"ping"}` | Liveness check; answered with `{"ev":"pong"}`. |
 
 `dps` goes out about once a second while an encounter runs. `enc` carries the encounter title, the
 fight duration as `mm:ss` text and the party's combined dps; `rows` is at most 24
-`[name, job, encdps, share, hps, is_self]` arrays already sorted by encdps descending, where `job`
+`[name, job, encdps, share, hps, is_self, deaths]` arrays already sorted by encdps descending, where `job`
 is the job acronym (or `""`), `share` is the member's damage percentage, `hps` is the member's
-healing per second and `is_self` is true on the local player's row. 24 covers a full alliance;
-the plugin's Max combatants setting only narrows what it draws. The trailing two fields are
-optional, so a 4-field row from an older program still parses with `hps` 0 and `is_self` false.
+healing per second, `is_self` is true on the local player's row and `deaths` counts the member's
+deaths this encounter. 24 covers a full alliance;
+the plugin's Max combatants setting only narrows what it draws. The trailing fields are
+optional, so a shorter row from an older program still parses with the defaults.
 `{"c":"dps","show":false}` hides the meter, so the app sends it when the encounter ends. The
 plugin keeps only the latest snapshot; there is nothing to acknowledge.
 
