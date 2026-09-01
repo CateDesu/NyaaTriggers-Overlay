@@ -486,6 +486,12 @@ internal sealed class Configuration : IPluginConfiguration
     /// numbers. Rows with no healing recorded skip it.</summary>
     public bool DpsRowsShowHps { get; set; }
 
+    /// <summary>Bars and Kagerou styles: shorten the row numbers to the
+    /// header's compact shape, 10234.5 becoming 10.2k. Off shows the full
+    /// figure with one decimal. The Horizon Overlay has its own compact knob.
+    /// </summary>
+    public bool DpsRowsCompact { get; set; } = true;
+
     /// <summary>Bars style only: fill the local player's bar with its own
     /// colour so it reads at a glance. Wins over job coloured bars.</summary>
     public bool DpsBarSelfHighlight { get; set; }
@@ -870,6 +876,7 @@ internal sealed class Configuration : IPluginConfiguration
         DpsBarJobColors = fresh.DpsBarJobColors;
         DpsBarsShowShare = fresh.DpsBarsShowShare;
         DpsRowsShowHps = fresh.DpsRowsShowHps;
+        DpsRowsCompact = fresh.DpsRowsCompact;
         DpsBarSelfHighlight = fresh.DpsBarSelfHighlight;
         DpsBarSelfColor = fresh.DpsBarSelfColor;
         DpsBarTopHighlight = fresh.DpsBarTopHighlight;

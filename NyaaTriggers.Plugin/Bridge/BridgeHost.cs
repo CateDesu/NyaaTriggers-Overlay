@@ -595,15 +595,17 @@ internal sealed class BridgeHost : IDisposable
         this.clockRunning = false;
     }
 
-    /// <summary>The Test callout button in the config window: push one sample
-    /// alert so the box and its colours can be checked outside a fight.</summary>
-    internal void PushTestAlert()
+    /// <summary>The test buttons in the config window: push one sample alert
+    /// so the box, its colours and the per severity knobs can be checked
+    /// outside a fight. The severity names the text, so testing several at
+    /// once does not fold them into one merged repeat.</summary>
+    internal void PushTestAlert(Severity severity)
     {
         var now = Environment.TickCount64;
         this.Push(new ActiveAlert
         {
-            Text = "Sample callout",
-            Severity = Severity.Alarm,
+            Text = $"Sample {severity.ToString().ToLowerInvariant()}",
+            Severity = severity,
             ShownAt = now,
             ExpiresAt = now + 3000,
         });

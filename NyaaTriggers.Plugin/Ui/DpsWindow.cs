@@ -576,11 +576,11 @@ internal sealed class DpsWindow : OverlayWindow
         }
 
         var dpsText = this.Config.DpsBarsShowShare
-            ? $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}"
-            : FormatDps(row.Dps);
+            ? $"{this.FormatRowNumber(row.Dps)} · {FormatShare(row.Share)}"
+            : this.FormatRowNumber(row.Dps);
         if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
         {
-            dpsText += $" · {FormatDps(row.Hps)} hps";
+            dpsText += $" · {this.FormatRowNumber(row.Hps)} hps";
         }
 
         var dpsWidth = ImGui.CalcTextSize(dpsText).X;
@@ -1166,10 +1166,10 @@ internal sealed class DpsWindow : OverlayWindow
                 ToColor(new Vector4(1.0f, 1.0f, 1.0f, stripe)));
         }
 
-        var numbers = $"{FormatDps(row.Dps)} · {FormatShare(row.Share)}";
+        var numbers = $"{this.FormatRowNumber(row.Dps)} · {FormatShare(row.Share)}";
         if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
         {
-            numbers += $" · {FormatDps(row.Hps)} hps";
+            numbers += $" · {this.FormatRowNumber(row.Hps)} hps";
         }
 
         var numbersWidth = ImGui.CalcTextSize(numbers).X;
@@ -1253,6 +1253,13 @@ internal sealed class DpsWindow : OverlayWindow
     /// format's precision so the two read as a pair.</summary>
     private static string FormatShare(double share)
         => share.ToString("0.0", CultureInfo.InvariantCulture) + "%";
+
+    /// <summary>A row's dps or hps figure: the compact shape by default, the
+    /// full one-decimal figure when Compact numbers is off.</summary>
+    private string FormatRowNumber(double value)
+        => this.Config.DpsRowsCompact
+            ? FormatDps(value)
+            : value.ToString("0.0", CultureInfo.InvariantCulture);
 
     /// <summary>Compact dps: 81.2k reads faster mid-pull than 81,234. Used by
     /// the header and every row so the two always read the same way.</summary>

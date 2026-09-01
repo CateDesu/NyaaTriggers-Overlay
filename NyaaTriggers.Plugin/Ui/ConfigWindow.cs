@@ -289,9 +289,21 @@ internal sealed class ConfigWindow : Window
                 ? "Locked: no frame, clicks pass through to the game."
                 : "Unlocked: drag and resize the boxes. They show sample content while idle.");
 
-        if (ImGui.Button("Test callout"))
+        if (ImGui.Button("Test info"))
         {
-            this.bridge.PushTestAlert();
+            this.bridge.PushTestAlert(Severity.Info);
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Test alert"))
+        {
+            this.bridge.PushTestAlert(Severity.Alert);
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Test alarm"))
+        {
+            this.bridge.PushTestAlert(Severity.Alarm);
         }
 
         // The test only queues an alert. Saying so beats a button that looks
@@ -434,7 +446,7 @@ internal sealed class ConfigWindow : Window
         this.Check("Fade in and out", () => this.config.AlertsAnimate, v => this.config.AlertsAnimate = v);
         this.Slider("Alarm scale", 1.0f, 2.0f, "%.2fx",
             () => this.config.AlertsAlarmScale, v => this.config.AlertsAlarmScale = v);
-        ImGui.TextDisabled("Alarm callouts draw this much bigger than the rest. Preview with Test callout.");
+        ImGui.TextDisabled("Alarm callouts draw this much bigger than the rest. Preview with Test alarm.");
         this.Check("Lifeline under each callout",
             () => this.config.AlertsLifeline, v => this.config.AlertsLifeline = v);
         ImGui.TextDisabled("A thin strip that empties as the callout's time runs out.");
@@ -567,6 +579,9 @@ internal sealed class ConfigWindow : Window
         this.Check("Show HPS",
             () => this.config.DpsRowsShowHps, v => this.config.DpsRowsShowHps = v);
         ImGui.TextDisabled("Bars and Kagerou rows: append the member's hps to the numbers.");
+        this.Check("Compact numbers",
+            () => this.config.DpsRowsCompact, v => this.config.DpsRowsCompact = v);
+        ImGui.TextDisabled("10.2k instead of 10234.5, on Bars and Kagerou rows. The Horizon Overlay has its own compact knob.");
         this.Check("Alternate row tint",
             () => this.config.DpsRowStripes, v => this.config.DpsRowStripes = v);
         this.PercentSlider("Row tint strength",

@@ -107,8 +107,10 @@ internal sealed class TimelineWindow : OverlayWindow
         if (rows.Count == 0 && !this.Config.Locked)
         {
             // Placeholder so an unlocked box being positioned is never blank.
-            // Tagged kinds too, so the kind colours preview live.
+            // All three kinds and an imminent bar, so the kind colours and
+            // the imminent look preview live.
             rows.Add(("Sample tankbuster", window * 0.6f, false, "tankbuster"));
+            rows.Add(("Sample raidwide", window * 0.35f, false, "raidwide"));
             rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false, "mechanic"));
         }
 
