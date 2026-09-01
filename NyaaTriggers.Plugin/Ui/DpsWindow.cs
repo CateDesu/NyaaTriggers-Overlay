@@ -263,14 +263,15 @@ internal sealed class DpsWindow : OverlayWindow
     }
 
     /// <summary>The sort orders other than the feed's own. Alphabetical reads
-    /// by name, by role groups tanks then healers then dps like the party
-    /// list. Ties fall back to the rows' original places, keeping the sort
-    /// stable.</summary>
-    private static int CompareRows(DpsRow a, DpsRow b, int indexA, int indexB, DpsSortOrder sort)
+    /// the displayed name, so the privacy options decide what it keys on and
+    /// hidden names simply tie and keep the feed's order. By role groups tanks
+    /// then healers then dps like the party list. Ties fall back to the rows'
+    /// original places, keeping the sort stable.</summary>
+    private int CompareRows(DpsRow a, DpsRow b, int indexA, int indexB, DpsSortOrder sort)
     {
         var by = sort switch
         {
-            DpsSortOrder.Alphabetical => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+            DpsSortOrder.Alphabetical => string.Compare(this.RowName(a), this.RowName(b), StringComparison.OrdinalIgnoreCase),
             DpsSortOrder.ByRole => RoleRank(a.Job).CompareTo(RoleRank(b.Job)),
             _ => 0,
         };
@@ -587,15 +588,16 @@ internal sealed class DpsWindow : OverlayWindow
         var deathsWidth = deaths == null ? 0.0f : ImGui.CalcTextSize(deaths).X;
 
         // The job icon sits before the label when asked, the label's start
-        // sliding right to make room.
+        // sliding right to make room. The slot stays reserved when the job
+        // resolves to no icon, so those rows still line up with the rest.
         var textLeft = TextPadding;
         if (this.Config.DpsRowsShowIcons)
         {
+            var iconSize = Math.Clamp(
+                ImGui.GetTextLineHeight() + 2.0f, 8.0f, Math.Max(height - 4.0f, 8.0f));
             var icon = JobIcons.Get(row.Job);
             if (icon != null)
             {
-                var iconSize = Math.Clamp(
-                    ImGui.GetTextLineHeight() + 2.0f, 8.0f, Math.Max(height - 4.0f, 8.0f));
                 var iconTop = origin.Y + ((height - iconSize) * 0.5f);
                 drawList.AddImage(
                     icon.Handle,
@@ -604,8 +606,9 @@ internal sealed class DpsWindow : OverlayWindow
                     Vector2.Zero,
                     Vector2.One,
                     ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
-                textLeft = TextPadding + iconSize + TextPadding;
             }
+
+            textLeft = TextPadding + iconSize + TextPadding;
         }
 
         // The name ends in an ellipsis rather than running into the pinned
@@ -785,24 +788,31 @@ internal sealed class DpsWindow : OverlayWindow
 
             // Rank and name centred over the cell, in the box's text colour
             // and effect, for the self bar too. The name goes through the
-            // privacy options and carries the deaths marker. The ACT original
-            // lets a long name overflow into the margins rather than
-            // ellipsizing it.
+            // privacy options. The ACT original lets a long name overflow
+            // into the margins rather than ellipsizing it.
             if (showNames)
             {
                 var name = showRank ? $"{this.RankOf(i)}. {this.RowName(row)}" : this.RowName(row);
+                var nameWidth = ImGui.CalcTextSize(name).X;
+                var nameLeft = cellLeft + ((cellWidth - nameWidth) * 0.5f);
+                this.DrawStyledText(
+                    drawList,
+                    new Vector2(nameLeft, origin.Y),
+                    this.Config.DpsTextColor,
+                    name);
+
+                // The deaths marker is a red second run beside the name, the
+                // same red the bars and kagerou rows use, so it neither blends
+                // into the name nor pulls the name off its centring.
                 var deaths = this.DeathsMarker(row);
                 if (deaths != null)
                 {
-                    name += deaths;
+                    this.DrawStyledText(
+                        drawList,
+                        new Vector2(nameLeft + nameWidth, origin.Y),
+                        DeathsColor,
+                        deaths);
                 }
-
-                var nameWidth = ImGui.CalcTextSize(name).X;
-                this.DrawStyledText(
-                    drawList,
-                    new Vector2(cellLeft + ((cellWidth - nameWidth) * 0.5f), origin.Y),
-                    this.Config.DpsTextColor,
-                    name);
             }
 
             // The icon straddles the bar's top edge. When it dips into the
@@ -1192,8 +1202,11 @@ internal sealed class DpsWindow : OverlayWindow
                     Vector2.Zero,
                     Vector2.One,
                     ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
-                x += lineHeight + 4.0f;
             }
+
+            // The slot stays reserved when the job resolves to no icon, same
+            // as the bars rows, so those rows still line up with the rest.
+            x += lineHeight + 4.0f;
         }
 
         if (!string.IsNullOrWhiteSpace(row.Job))

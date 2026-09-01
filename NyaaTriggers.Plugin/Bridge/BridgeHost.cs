@@ -25,7 +25,10 @@ internal sealed class DpsState
 
     /// <summary>The encounter ended, as opposed to a clear wiping the state:
     /// the meter's hold-last option keeps showing the final rows on this one.
-    /// </summary>
+    /// The last frame of a fight wins, so a clear landing after the show:false
+    /// still wipes the state and the hold never engages. That is a wipe whose
+    /// ActorControl follows the combat drop, and by design the app's
+    /// sample-fight reset, which sends clear after the end frame.</summary>
     internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;

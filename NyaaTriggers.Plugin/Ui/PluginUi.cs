@@ -69,11 +69,15 @@ internal sealed class PluginUi : IDisposable
 
         // The meter only exists while an encounter runs, or just ran when the
         // hold-last option keeps the final numbers up. Unlocked keeps it up
-        // anyway, since that is when the box is being positioned.
+        // anyway, since that is when the box is being positioned. A held
+        // meter outlasts the only-in-combat filter, the fight it holds is
+        // exactly the one that just dropped combat. The duty filter and the
+        // cutscene suppression still hide it.
         var dps = this.bridge.Dps;
-        this.dps.IsOpen = this.ShouldShow(this.config.DpsOnlyInDuty, this.config.DpsOnlyInCombat)
+        var held = this.dps.HasHeldContent;
+        this.dps.IsOpen = this.ShouldShow(this.config.DpsOnlyInDuty, this.config.DpsOnlyInCombat && !held)
             && this.config.ShowDps &&
-            (!this.config.Locked || (dps.Show && dps.Rows.Count > 0) || this.dps.HasHeldContent);
+            (!this.config.Locked || (dps.Show && dps.Rows.Count > 0) || held);
 
         // The screen flash is strictly the raid-night state: locked, alerts
         // on, an alarm live and not filtered out. While unlocked the boxes

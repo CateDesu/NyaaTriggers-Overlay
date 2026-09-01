@@ -444,7 +444,7 @@ internal sealed class ConfigWindow : Window
         ImGui.TextDisabled("A red count beside the name. The Horizon strip needs names shown.");
         this.Check("Keep the last encounter on screen",
             () => this.config.DpsHoldLast, v => this.config.DpsHoldLast = v);
-        ImGui.TextDisabled("The final meter stays up after the fight, until the next pull or a zone change.");
+        ImGui.TextDisabled("The final meter stays up after the fight, until the next pull or a zone change.\nThis beats an only-in-combat filter on the meter.");
 
         ImGui.Spacing();
 
@@ -489,7 +489,7 @@ internal sealed class ConfigWindow : Window
         this.Check("Alternate row tint",
             () => this.config.DpsRowStripes, v => this.config.DpsRowStripes = v);
         this.PercentSlider("Row tint strength",
-            () => this.config.DpsRowStripeOpacity, v => this.config.DpsRowStripeOpacity = v, 0.0f, 30.0f);
+            () => this.config.DpsRowStripeOpacity, v => this.config.DpsRowStripeOpacity = v, 0.0f, 50.0f);
         ImGui.TextDisabled("Bars and Kagerou: lighten every other row.");
 
         ImGui.Spacing();

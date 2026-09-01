@@ -113,7 +113,7 @@ The app already had reconnect handling for talking to IINACT, and the same code 
 | `{"c":"timeline","v":[[18.0,"Wing","mechanic"],[24.5,"Dive","tankbuster"]]}` | Replace the schedule. `[time, label, kind]` entries in timeline seconds; the time and label are the app's `TimelineEngine.upcoming()` shape and `kind` is the tag the app derives from the label text: `tankbuster`, `raidwide` or `mechanic`. The kind is optional and free-form; an absent or unknown kind draws as a plain mechanic. |
 | `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured time for that severity. |
 | `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true,0]]}` | DPS meter snapshot; see below. |
-| `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and fight end. |
+| `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and on wipes, not on a normal fight end; see below. |
 | `{"c":"ping"}` | Liveness check; answered with `{"ev":"pong"}`. |
 
 `dps` goes out about once a second while an encounter runs. `enc` carries the encounter title, the
@@ -125,7 +125,12 @@ deaths this encounter. 24 covers a full alliance;
 the plugin's Max combatants setting only narrows what it draws. The trailing fields are
 optional, so a shorter row from an older program still parses with the defaults.
 `{"c":"dps","show":false}` hides the meter, so the app sends it when the encounter ends. The
-plugin keeps only the latest snapshot; there is nothing to acknowledge.
+plugin records that frame as the encounter having ended rather than wiped, and the hold-last
+option keys on the distinction: it keeps the final rows up after an ended fight but not after
+a clear. The last frame of a fight wins, so a clear landing after `show:false` still wipes the
+state. Send `show:false` for a fight that ran its course and `clear` for a wipe or zone change;
+a sender that ends fights with `clear` alone never produces the ended marker and hold-last has
+nothing to hold. The plugin keeps only the latest snapshot; there is nothing to acknowledge.
 
 Unknown commands are ignored rather than treated as errors, so a newer app can talk to an older
 plugin.
