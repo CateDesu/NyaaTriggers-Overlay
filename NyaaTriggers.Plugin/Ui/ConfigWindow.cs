@@ -4,6 +4,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using NyaaTriggers.Plugin.Bridge;
+using NyaaTriggers.Plugin.Meter;
 
 namespace NyaaTriggers.Plugin.Ui;
 
@@ -31,6 +32,11 @@ internal sealed class ConfigWindow : Window
     /// on every keystroke would thrash the socket while a port is typed.</summary>
     private int pendingPort;
 
+    /// <summary>Edited separately from the live setting, same reason as the
+    /// port: re-dialling IINACT on every keystroke would thrash the feed
+    /// while an address is typed.</summary>
+    private string pendingEndpoint;
+
     /// <summary>The profile name being typed. Kept out of the config itself:
     /// it is the editor's scratch, not a setting.</summary>
     private string profileName = string.Empty;
@@ -42,6 +48,8 @@ internal sealed class ConfigWindow : Window
         this.bridge = bridge;
         this.ui = ui;
         this.pendingPort = config.Port;
+        // A hand-edited config could carry a null; fall back to the default.
+        this.pendingEndpoint = config.IinactEndpoint ?? "ws://127.0.0.1:10501/ws";
 
         this.Size = new Vector2(460, 640);
         this.SizeCondition = ImGuiCond.FirstUseEver;
@@ -181,6 +189,67 @@ internal sealed class ConfigWindow : Window
         }
 
         ImGui.TextDisabled("Loopback only. Nothing is reachable from outside this machine.");
+
+        ImGui.Spacing();
+        ImGui.Spacing();
+
+        this.Check("Standalone meter", () => this.config.StandaloneMeter, v => this.config.StandaloneMeter = v);
+        ImGui.TextDisabled(
+            "Run the meter off IINACT while the app is away, so the meter works " +
+            "without the program. Needs the IINACT plugin. The app's feed wins " +
+            "whenever it is connected.");
+
+        if (this.config.StandaloneMeter)
+        {
+            switch (this.bridge.StandaloneStatus)
+            {
+                case StandaloneState.Connected:
+                    ImGui.TextColored(Good, "Connected to IINACT.");
+                    break;
+                case StandaloneState.Error:
+                    ImGui.TextColored(Bad, this.bridge.StandaloneStatusText);
+                    break;
+                case StandaloneState.Paused:
+                    ImGui.TextColored(Waiting, "Asleep: the app is connected, its feed wins.");
+                    break;
+                default:
+                    ImGui.TextColored(Waiting, this.bridge.StandaloneStatusText);
+                    break;
+            }
+
+            ImGui.SetNextItemWidth(260);
+            ImGui.InputText("IINACT feed", ref this.pendingEndpoint, 256);
+
+            var endpoint = this.pendingEndpoint.Trim();
+            var valid = endpoint.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) ||
+                        endpoint.StartsWith("wss://", StringComparison.OrdinalIgnoreCase);
+
+            // Same shape as the port row: no silent rewrites while typing, a
+            // bad address blocks Apply instead of being re-dialled.
+            ImGui.SameLine();
+            var endpointChanged = valid && endpoint != this.config.IinactEndpoint;
+            if (!endpointChanged)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            if (ImGui.Button("Apply##iinactEndpoint"))
+            {
+                this.config.IinactEndpoint = endpoint;
+                this.config.Save();
+                this.bridge.RestartStandalone();
+            }
+
+            if (!endpointChanged)
+            {
+                ImGui.EndDisabled();
+            }
+
+            if (!valid)
+            {
+                ImGui.TextColored(Bad, "Feed URL must start with ws:// or wss://.");
+            }
+        }
     }
 
     private void DrawBoxes()

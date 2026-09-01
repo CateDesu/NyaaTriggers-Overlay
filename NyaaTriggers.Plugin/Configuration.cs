@@ -99,6 +99,15 @@ internal sealed class Configuration : IPluginConfiguration
     /// plugin it always listens; there is no off switch.</summary>
     public int Port { get; set; } = 27080;
 
+    /// <summary>Run the dps meter off IINACT directly while the program is not
+    /// connected, so the meter works for someone who never runs it. The
+    /// program's feed always wins while it is connected.</summary>
+    public bool StandaloneMeter { get; set; }
+
+    /// <summary>Where IINACT serves the ACT combat feed. Loopback by default,
+    /// same stance as the link port.</summary>
+    public string IinactEndpoint { get; set; } = "ws://127.0.0.1:10501/ws";
+
     // ── what to draw ──────────────────────────────────────────────────────
     public bool ShowTimeline { get; set; } = true;
     public bool ShowAlerts { get; set; } = true;

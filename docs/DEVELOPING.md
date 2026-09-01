@@ -144,6 +144,30 @@ plugin.
 
 `protocol` is bumped only on an incompatible change to the tables above.
 
+## Standalone meter
+
+The plugin can run the dps meter without the program. With **Standalone meter** ticked and no app
+session live, it dials IINACT's ACT-compatible feed itself (default `ws://127.0.0.1:10501/ws`),
+subscribes to `LogLine`, `ChangePrimaryPlayer`, `ChangeZone`, `PartyChanged` and `InCombat`, and
+parses the log lines with `Meter/MeterEngine.cs`, a C# port of the program's `dps_meter.py`. The
+port carries only what the overlay draws, so the program's parse-table columns and pull logging
+stay program-side; the encounter lifecycle, the effect-pair decode and the pet merging match it
+line for line.
+
+The same frame semantics the app sends are produced locally: a live snapshot about once a second,
+the ended marker when the encounter finalizes, and a clear on zone change, so hold-last engages
+after a fight but never across a zone on either feed. One divergence to know about: a wipe
+finalizes the encounter, and nothing clears after it here, so the standalone feed holds the final
+rows after a wipe. The app sends its clear after the end frame on a wipe, so the app feed does
+not hold there. The app's feed always wins: while a session is live the IINACT client
+stays off, and when the app goes away mid-fight the engine starts cold, classifying the party from
+the subscribe burst and a one-shot `getCombatants`, the same way the program handles a mid-instance
+start.
+
+`tests/MeterEngineTests` is a dependency-free harness that drives the engine with synthetic log
+lines, including the wire-decode examples from `dps_meter.py`'s docstring. Run it with
+`dotnet run --project tests/MeterEngineTests`.
+
 ## Status
 
 Both halves work and are in use in game. The app side is `plugin_link.py` in the

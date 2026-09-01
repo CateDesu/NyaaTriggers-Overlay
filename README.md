@@ -2,8 +2,10 @@
 
 This is a companion plugin for [NyaaTriggers](https://github.com/CateDesu/NyaaTriggers). It draws the
 timeline bars, callouts, and a DPS meter in the game. The meter has three looks: share bars, the
-Horizon Overlay's job bars, or kagerou-style text rows. It does not work on its own, and NyaaTriggers does not draw
-in the game without it, so you need both.
+Horizon Overlay's job bars, or kagerou-style text rows. The callouts and timeline come from the
+program, so for those you need both. If all you want is the DPS meter, the plugin can instead read
+the combat feed straight from [IINACT](https://github.com/marzent/IINACT) with no program running:
+tick **Standalone meter** in its settings.
 
 ## Installing
 

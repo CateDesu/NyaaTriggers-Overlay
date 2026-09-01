@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
+using NyaaTriggers.Plugin.Meter;
 
 namespace NyaaTriggers.Plugin.Bridge;
 
@@ -110,6 +111,11 @@ internal sealed class BridgeHost : IDisposable
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
+    /// <summary>The IINACT-fed meter that runs while no app session is live.
+    /// Ticked from Update so its frames land on the draw thread with the
+    /// app's own.</summary>
+    private readonly StandaloneMeter standalone;
+
     /// <summary>Guards server swaps, the drain list and the source check in
     /// Receive, so an old server's background teardown cannot race a new one
     /// being published and its frames cannot land after Stop drains.</summary>
@@ -132,6 +138,7 @@ internal sealed class BridgeHost : IDisposable
     internal BridgeHost(Configuration config)
     {
         this.config = config;
+        this.standalone = new StandaloneMeter(config, () => this.IsConnected, this.ApplyLocalDps, this.ClearLocalDps);
     }
 
     /// <summary>Read straight off the server rather than mirrored into a field,
@@ -232,6 +239,31 @@ internal sealed class BridgeHost : IDisposable
     /// <summary>Rebind after a port change.</summary>
     internal void Restart() => this.Start();
 
+    /// <summary>Re-dial IINACT after the standalone endpoint was applied.</summary>
+    internal void RestartStandalone() => this.standalone.Restart();
+
+    /// <summary>Standalone meter state for the config window's link section.</summary>
+    internal StandaloneState StandaloneStatus => this.standalone.State;
+
+    internal string StandaloneStatusText => this.standalone.Status;
+
+    /// <summary>The standalone meter's write path. The app owns the meter
+    /// while it is connected, so a local frame landing during a session is
+    /// dropped rather than fighting the app's feed.</summary>
+    private void ApplyLocalDps(DpsState state)
+    {
+        if (!this.IsConnected)
+        {
+            this.Dps = state;
+        }
+    }
+
+    /// <summary>The standalone meter's teardown clear. Not guarded like the
+    /// write path: an idle app sends no dps frames at all, so a handoff clear
+    /// that deferred to the app would leave the standalone's last rows frozen
+    /// on screen indefinitely. A mid-fight app repaints within a second.</summary>
+    private void ClearLocalDps() => this.Dps = new DpsState();
+
     private void OnConnectionChanged(WebSocketServer source, bool connected)
     {
         // A superseded server tearing down must not touch the live one's state.
@@ -279,6 +311,11 @@ internal sealed class BridgeHost : IDisposable
 
         var now = Environment.TickCount64;
         this.alerts.RemoveAll(a => a.ExpiresAt <= now);
+
+        // The standalone meter ticks after the app's frames, and its writer
+        // refuses to touch Dps while a session is live, so the app's feed
+        // always wins a same-frame race.
+        this.standalone.Update();
     }
 
     private void Apply(string raw)
@@ -608,8 +645,9 @@ internal sealed class BridgeHost : IDisposable
     /// <summary>Bound and flatten a wire string. Newlines go first: the
     /// windows reserve one row per string, so an embedded one would draw
     /// over the next row. Then the length cap, so a flood of max-length
-    /// frames cannot keep the render thread measuring novels.</summary>
-    private static string SanitizeText(string? text, int maxChars)
+    /// frames cannot keep the render thread measuring novels. Internal so
+    /// the standalone meter can hold its feed to the same hygiene.</summary>
+    internal static string SanitizeText(string? text, int maxChars)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -623,6 +661,7 @@ internal sealed class BridgeHost : IDisposable
     public void Dispose()
     {
         this.Stop();
+        this.standalone.Dispose();
 
         // The background drains Stop started must finish before the load
         // context goes away: a session task outliving it runs freed code.
