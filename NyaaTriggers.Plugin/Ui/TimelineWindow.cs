@@ -82,6 +82,11 @@ internal sealed class TimelineWindow : OverlayWindow
                 break;
             }
 
+            if (!this.KindVisible(entry.Kind))
+            {
+                continue;
+            }
+
             var remaining = entry.Time - clock;
 
             // Past cues fall off, except a just-fired one when the fire flash
@@ -157,6 +162,15 @@ internal sealed class TimelineWindow : OverlayWindow
         this.DrawAlignedText(drawList, text, origin, width, origin.Y);
         ImGui.Dummy(new Vector2(width, ImGui.GetTextLineHeight() + Math.Max(this.Config.TimelineBarSpacing, 0.0f)));
     }
+
+    /// <summary>Whether a kind survives the per-kind filters. Untagged and
+    /// unknown kinds ride the mechanic toggle, the bucket they draw in.</summary>
+    private bool KindVisible(string kind) => kind switch
+    {
+        "tankbuster" => this.Config.TimelineShowTankbuster,
+        "raidwide" => this.Config.TimelineShowRaidwide,
+        _ => this.Config.TimelineShowMechanic,
+    };
 
     /// <summary>The bar's fill colour for its kind. With kind colours off, or
     /// for a kind we do not know, every cue keeps the shared bar colour.</summary>

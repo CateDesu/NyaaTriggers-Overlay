@@ -385,6 +385,19 @@ internal sealed class ConfigWindow : Window
 
         ImGui.Spacing();
 
+        ImGui.TextDisabled("Which bars show at all:");
+        this.Check("Tankbusters",
+            () => this.config.TimelineShowTankbuster, v => this.config.TimelineShowTankbuster = v);
+        ImGui.SameLine();
+        this.Check("Raidwides",
+            () => this.config.TimelineShowRaidwide, v => this.config.TimelineShowRaidwide = v);
+        ImGui.SameLine();
+        this.Check("Mechanics",
+            () => this.config.TimelineShowMechanic, v => this.config.TimelineShowMechanic = v);
+        ImGui.TextDisabled("Untagged labels count as mechanics. The sample bars ignore these while unlocked.");
+
+        ImGui.Spacing();
+
         this.ColorRow("Bar", () => this.config.TimelineBarColor, v => this.config.TimelineBarColor = v);
         this.ColorRow("Bar track",
             () => this.config.TimelineBarTrackColor, v => this.config.TimelineBarTrackColor = v);

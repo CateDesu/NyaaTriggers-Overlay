@@ -240,6 +240,15 @@ internal sealed class Configuration : IPluginConfiguration
     /// instead of vanishing, so the moment it fires reads on screen.</summary>
     public bool TimelineFireFlash { get; set; } = true;
 
+    /// <summary>Per-kind filters. A tank who only watches for busters and
+    /// raidwides quiets the mechanic bars, and so on. Untagged and unknown
+    /// kinds count as mechanics, the bucket they draw in. The unlocked box's
+    /// sample bars ignore these, the same way the alerts samples ignore the
+    /// severity filters: placement must never go blank.</summary>
+    public bool TimelineShowTankbuster { get; set; } = true;
+    public bool TimelineShowRaidwide { get; set; } = true;
+    public bool TimelineShowMechanic { get; set; } = true;
+
     /// <summary>Fill colour for bars about to fire.</summary>
     public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
 
