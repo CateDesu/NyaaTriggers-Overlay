@@ -570,11 +570,20 @@ internal sealed class Configuration : IPluginConfiguration
     /// are.</summary>
     public Dictionary<string, string> AppearanceProfiles { get; set; } = new();
 
+    /// <summary>Profile blob options. The colour knobs are Vector4, whose X Y
+    /// Z W are public fields, and default options skip fields: a blob would
+    /// carry every colour as an empty object and applying it would wipe them
+    /// to transparent black. One shared instance, both directions.</summary>
+    private static readonly JsonSerializerOptions ProfileOptions = new()
+    {
+        IncludeFields = true,
+    };
+
     /// <summary>This configuration as a JSON blob for AppearanceProfiles,
     /// minus the profiles themselves so saved blobs do not nest.</summary>
     public string SnapshotAppearance()
     {
-        var node = JsonSerializer.SerializeToNode(this)!.AsObject();
+        var node = JsonSerializer.SerializeToNode(this, ProfileOptions)!.AsObject();
         node.Remove(nameof(this.AppearanceProfiles));
         return node.ToJsonString();
     }
@@ -587,7 +596,7 @@ internal sealed class Configuration : IPluginConfiguration
         Configuration? snapshot;
         try
         {
-            snapshot = JsonSerializer.Deserialize<Configuration>(json);
+            snapshot = JsonSerializer.Deserialize<Configuration>(json, ProfileOptions);
         }
         catch (JsonException)
         {
