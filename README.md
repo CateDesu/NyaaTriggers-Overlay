@@ -32,5 +32,5 @@ This is a custom repository and will never be on the official plugin list. Dalam
 allow plugins that bridge to ACT, which is what NyaaTriggers is on the other end. IINACT ships from
 its own repository for the same reason.
 
-Building it, running it from source, and the protocol it speaks to the app are in
+Building it, running it from source, and the protocol it speaks to the program are in
 [docs/DEVELOPING.md](docs/DEVELOPING.md).

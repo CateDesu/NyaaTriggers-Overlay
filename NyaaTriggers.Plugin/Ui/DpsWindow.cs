@@ -12,11 +12,11 @@ using NyaaTriggers.Plugin.Bridge;
 namespace NyaaTriggers.Plugin.Ui;
 
 /// <summary>
-/// The app's dps meter: a header with the encounter, its duration and the
+/// The program's dps meter: a header with the encounter, its duration and the
 /// party's dps, then the members in the configured style — the
 /// timeline-style share bars, the Horizon Overlay's skewed side-by-side bars
 /// with the job icon straddling the top edge, or kagerou's underlined text
-/// rows. The app sends a whole snapshot about once a second, so there is
+/// rows. The program sends a whole snapshot about once a second, so there is
 /// nothing to interpolate; the window just draws the latest one.
 /// </summary>
 internal sealed class DpsWindow : OverlayWindow
@@ -1036,7 +1036,7 @@ internal sealed class DpsWindow : OverlayWindow
     /// cell.</summary>
     private float DrawSmallText(ImDrawListPtr drawList, string text, float right, float top, Vector4 color)
     {
-        var small = this.Fonts.Get(this.TextPx * 0.45f);
+        var small = this.Fonts.Get(this.TextPx * this.HorizonPercentScale());
         if (small is { Available: true })
         {
             using (small.Push())
@@ -1059,7 +1059,7 @@ internal sealed class DpsWindow : OverlayWindow
         // Report the size the bucket will have rather than the fallback's:
         // a stable cell height is worth the transient few frames where the
         // fallback's larger text descends past what this reserves.
-        return top + (this.TextPx * 0.45f);
+        return top + (this.TextPx * this.HorizonPercentScale());
     }
 
     /// <summary>The bar tint for one member: the configured self colour for
@@ -1104,6 +1104,10 @@ internal sealed class DpsWindow : OverlayWindow
 
     /// <summary>The in-bar stat font size as a share of the box's body text.</summary>
     private float HorizonStatScale() => Math.Clamp(this.Config.DpsHorizStatScale, 0.4f, 1.5f);
+
+    /// <summary>The damage share percent figure's size as a share of the
+    /// box's body text.</summary>
+    private float HorizonPercentScale() => Math.Clamp(this.Config.DpsHorizPercentScale, 0.4f, 1.5f);
 
     /// <summary>The in-bar dps figure: the header's compact shape when
     /// Compact numbers is on, otherwise the configured decimal places.</summary>

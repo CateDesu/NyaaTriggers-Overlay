@@ -18,7 +18,7 @@ internal readonly record struct TimelineEntry(float Time, string Label, string K
 
 internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths);
 
-/// <summary>The app's latest dps frame. Replaced whole on every update rather
+/// <summary>The program's latest dps frame. Replaced whole on every update rather
 /// than mutated, so the UI never reads a half-updated meter.</summary>
 internal sealed class DpsState
 {
@@ -26,10 +26,10 @@ internal sealed class DpsState
 
     /// <summary>The encounter ended, as opposed to a clear wiping the state:
     /// the meter's hold-last option keeps showing the final rows on this one.
-    /// The last frame of a fight wins, so a clear landing after the show:false
-    /// still wipes the state and the hold never engages. That is a wipe whose
-    /// ActorControl follows the combat drop, and by design the app's
-    /// sample-fight reset, which sends clear after the end frame.</summary>
+    /// The last frame of a fight wins. A clear landing after the show:false
+    /// still wipes the state and the hold never engages, which is the program's
+    /// sample-fight reset and its zone change by design. On a wipe the program
+    /// re-sends the end frame after its clear, so the hold survives it.</summary>
     internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;
@@ -69,7 +69,7 @@ internal sealed class ActiveAlert
 /// </summary>
 internal sealed class BridgeHost : IDisposable
 {
-    /// <summary>Bumped when the wire format changes incompatibly. The app
+    /// <summary>Bumped when the wire format changes incompatibly. The program
     /// checks it in the hello and refuses to drive a plugin it does not
     /// understand, rather than sending commands into the void.</summary>
     internal const int ProtocolVersion = 1;
@@ -87,12 +87,12 @@ internal sealed class BridgeHost : IDisposable
     /// of stale callouts is worse than none.</summary>
     private const int MaxAlerts = 8;
 
-    /// <summary>Timeline entries kept. The app pushes its whole schedule, and
+    /// <summary>Timeline entries kept. The program pushes its whole schedule, and
     /// the stock timelines run past 300 entries for twenty-minute fights; the
     /// window walks the list each frame, so the cap only bounds memory.</summary>
     private const int MaxTimelineEntries = 1024;
 
-    /// <summary>DPS rows kept. The app caps at a full alliance of 24; more
+    /// <summary>DPS rows kept. The program caps at a full alliance of 24; more
     /// would only ever be a bug, and the window walks the list each frame.
     /// The user's Max combatants setting narrows this down for display.</summary>
     private const int MaxDpsRows = 24;
@@ -111,9 +111,9 @@ internal sealed class BridgeHost : IDisposable
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
-    /// <summary>The IINACT-fed meter that runs while no app session is live.
+    /// <summary>The IINACT-fed meter that runs while no program session is live.
     /// Ticked from Update so its frames land on the draw thread with the
-    /// app's own.</summary>
+    /// program's own.</summary>
     private readonly StandaloneMeter standalone;
 
     /// <summary>Guards server swaps, the drain list and the source check in
@@ -130,7 +130,7 @@ internal sealed class BridgeHost : IDisposable
     private volatile WebSocketServer? server;
 
     /// <summary>Fight clock as of <see cref="clockStamp"/>, interpolated from
-    /// there so bars move smoothly between the app's ticks.</summary>
+    /// there so bars move smoothly between the program's ticks.</summary>
     private double clockBase;
     private long clockStamp;
     private bool clockRunning;
@@ -191,7 +191,7 @@ internal sealed class BridgeHost : IDisposable
         // from its disconnect) so a Restart / port change does not re-apply stale
         // timeline or dps frames onto the freshly-cleared state next Update.
         // This lives here, not in ClearState: ClearState also runs for the
-        // "clear" command, and the app sends clear + new timeline back-to-back
+        // "clear" command, and the program sends clear + new timeline back-to-back
         // on a zone change, so draining there would discard the fresh frames.
         while (this.inbox.TryDequeue(out _))
         {
@@ -247,9 +247,9 @@ internal sealed class BridgeHost : IDisposable
 
     internal string StandaloneStatusText => this.standalone.Status;
 
-    /// <summary>The standalone meter's write path. The app owns the meter
+    /// <summary>The standalone meter's write path. The program owns the meter
     /// while it is connected, so a local frame landing during a session is
-    /// dropped rather than fighting the app's feed.</summary>
+    /// dropped rather than fighting the program's feed.</summary>
     private void ApplyLocalDps(DpsState state)
     {
         if (!this.IsConnected)
@@ -259,9 +259,9 @@ internal sealed class BridgeHost : IDisposable
     }
 
     /// <summary>The standalone meter's teardown clear. Not guarded like the
-    /// write path: an idle app sends no dps frames at all, so a handoff clear
-    /// that deferred to the app would leave the standalone's last rows frozen
-    /// on screen indefinitely. A mid-fight app repaints within a second.</summary>
+    /// write path: an idle program sends no dps frames at all, so a handoff clear
+    /// that deferred to the program would leave the standalone's last rows frozen
+    /// on screen indefinitely. A mid-fight program repaints within a second.</summary>
     private void ClearLocalDps() => this.Dps = new DpsState();
 
     private void OnConnectionChanged(WebSocketServer source, bool connected)
@@ -280,7 +280,7 @@ internal sealed class BridgeHost : IDisposable
 
             if (!connected)
             {
-                // The app going away must not leave a frozen timeline on screen
+                // The program going away must not leave a frozen timeline on screen
                 // pretending the pull is still running. Queued so it lands on the
                 // draw thread with everything else. Enqueued directly, past the
                 // depth cap: that cap exists to bound a flooding peer, and this
@@ -312,15 +312,15 @@ internal sealed class BridgeHost : IDisposable
             }
             catch (Exception ex)
             {
-                Services.Log.Warning($"bad message from the app: {ex.Message}");
+                Services.Log.Warning($"bad message from the program: {ex.Message}");
             }
         }
 
         var now = Environment.TickCount64;
         this.alerts.RemoveAll(a => a.ExpiresAt <= now);
 
-        // The standalone meter ticks after the app's frames, and its writer
-        // refuses to touch Dps while a session is live, so the app's feed
+        // The standalone meter ticks after the program's frames, and its writer
+        // refuses to touch Dps while a session is live, so the program's feed
         // always wins a same-frame race.
         this.standalone.Update();
     }
@@ -371,7 +371,7 @@ internal sealed class BridgeHost : IDisposable
                 break;
 
             default:
-                // Forward-compatible: a newer app sending a command this build
+                // Forward-compatible: a newer program sending a command this build
                 // does not know is ignored, not an error.
                 break;
         }
@@ -388,8 +388,8 @@ internal sealed class BridgeHost : IDisposable
         foreach (var entry in entries.EnumerateArray())
         {
             // [time, label] pairs, optionally [time, label, kind], matching
-            // what the app's timeline engine produces. The kind is a free
-            // string ("tankbuster", "raidwide", "mechanic"); an old app's
+            // what the program's timeline engine produces. The kind is a free
+            // string ("tankbuster", "raidwide", "mechanic"); an old program's
             // 2-field entries and kinds we do not know both draw as plain
             // mechanics.
             if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
@@ -470,7 +470,7 @@ internal sealed class BridgeHost : IDisposable
             seconds = (float)ttl.GetDouble();
         }
 
-        // Clamped: a zero would flicker and never be read, and an app bug
+        // Clamped: a zero would flicker and never be read, and a program bug
         // sending a huge value would pin a stale callout on screen all fight.
         seconds = Math.Clamp(seconds, 0.5f, 30.0f);
 
@@ -520,8 +520,8 @@ internal sealed class BridgeHost : IDisposable
             foreach (var entry in rowsElement.EnumerateArray())
             {
                 // [name, job, encdps, share, hps, isSelf, deaths] rows, sorted
-                // by encdps desc, matching what the app's meter produces. The
-                // trailing fields arrived one version at a time; an old app's
+                // by encdps desc, matching what the program's meter produces. The
+                // trailing fields arrived one version at a time; an old program's
                 // shorter rows just get the defaults.
                 if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
                 {

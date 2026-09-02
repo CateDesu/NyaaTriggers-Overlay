@@ -84,7 +84,7 @@ internal sealed class IinactClient : IDisposable
     }
 
     /// <summary>Cancel the loop and unwind it in the background. Never blocks:
-    /// Stop runs on the draw thread (toggle off, app connected, endpoint
+    /// Stop runs on the draw thread (toggle off, program connected, endpoint
     /// change), where waiting on a socket would freeze the game. Dispose
     /// still waits, bounded, so the task cannot outlive the load context.</summary>
     internal void Stop()

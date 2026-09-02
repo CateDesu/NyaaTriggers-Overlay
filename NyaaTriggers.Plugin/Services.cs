@@ -6,7 +6,7 @@ namespace NyaaTriggers.Plugin;
 
 /// <summary>
 /// Dalamud services, injected once at load. Deliberately a short list: this
-/// plugin draws what the desktop app tells it to draw and reads nothing about
+/// plugin draws what the desktop program tells it to draw and reads nothing about
 /// the game beyond whether the UI should be visible at all.
 /// </summary>
 internal sealed class Services

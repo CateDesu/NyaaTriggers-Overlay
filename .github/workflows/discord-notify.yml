@@ -8,7 +8,7 @@
 # "New repository secret" → Name = DISCORD_WEBHOOK, Value = your Discord
 # webhook URL (https://discord.com/api/webhooks/…). No other config needed.
 # Both repos point the same NyaaTriggers webhook at one channel; the username
-# below is what tells this repo's posts apart from the app's.
+# below is what tells this repo's posts apart from the program's.
 name: Discord notify
 
 on:

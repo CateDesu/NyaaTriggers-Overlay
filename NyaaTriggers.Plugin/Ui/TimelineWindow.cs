@@ -8,7 +8,7 @@ using NyaaTriggers.Plugin.Bridge;
 namespace NyaaTriggers.Plugin.Ui;
 
 /// <summary>
-/// Upcoming timeline cues as depleting bars. The app sends the schedule once
+/// Upcoming timeline cues as depleting bars. The program sends the schedule once
 /// and a clock tick periodically; the bar widths interpolate from the tick, so
 /// they move at frame rate rather than in 250 ms steps.
 /// </summary>
@@ -23,7 +23,7 @@ internal sealed class TimelineWindow : OverlayWindow
 
     /// <summary>Scratch for the collect-then-draw pass, cleared each frame so
     /// the bar walk stays allocation free like the streaming draw before it.
-    /// The kind is the app's tag on the label, tankbuster or raidwide or a
+    /// The kind is the program's tag on the label, tankbuster or raidwide or a
     /// plain mechanic.</summary>
     private readonly List<(string Label, float Remaining, bool Fired, string Kind)> rows = new();
 

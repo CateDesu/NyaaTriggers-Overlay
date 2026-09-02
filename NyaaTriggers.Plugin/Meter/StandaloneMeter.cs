@@ -24,7 +24,7 @@ internal enum StandaloneState
 /// Owns the engine and the feed client. The socket thread only ever enqueues;
 /// everything is applied in <see cref="Update"/> on the draw thread, the same
 /// discipline the bridge uses, so the UI never reads a half-updated meter.
-/// The program's feed always wins: while an app session is live the client
+/// The program's feed always wins: while a program session is live the client
 /// stays off and this writes nothing.
 /// </summary>
 internal sealed class StandaloneMeter : IDisposable
@@ -91,7 +91,7 @@ internal sealed class StandaloneMeter : IDisposable
     }
 
     /// <summary>Draw thread heartbeat: run or stop the client per the toggle
-    /// and the app session, apply what the feed queued, push the meter.</summary>
+    /// and the program session, apply what the feed queued, push the meter.</summary>
     internal void Update()
     {
         var wanted = this.config.StandaloneMeter && !this.appConnected();
@@ -106,7 +106,7 @@ internal sealed class StandaloneMeter : IDisposable
 
         if (!wanted)
         {
-            // Toggled off, or the app took over. Frames the stopped feed left
+            // Toggled off, or the program took over. Frames the stopped feed left
             // queued belong to a source that no longer owns the meter, so
             // they are discarded, not applied: applying one could resurrect
             // the rows the transition clear just dropped.
@@ -120,8 +120,8 @@ internal sealed class StandaloneMeter : IDisposable
                 this.feeding = false;
                 this.wasLive = false;
 
-                // The teardown clear goes around the app-wins guard on
-                // purpose: an idle app sends no dps frames, so deferring to
+                // The teardown clear goes around the program-wins guard on
+                // purpose: an idle program sends no dps frames, so deferring to
                 // it would freeze the standalone's last rows on screen.
                 this.clearLocal();
             }

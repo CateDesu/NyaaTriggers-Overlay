@@ -30,7 +30,7 @@ internal sealed class WebSocketServer : IDisposable
 {
     private const string HandshakeGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-    /// <summary>Refuse anything larger. The app sends short JSON lines; a
+    /// <summary>Refuse anything larger. The program sends short JSON lines; a
     /// multi-megabyte "message" is a bug or a stranger, and either way is not
     /// worth allocating for.</summary>
     private const int MaxMessageBytes = 1 << 20;
@@ -126,7 +126,7 @@ internal sealed class WebSocketServer : IDisposable
 
         // Both loopback families. Binding only 127.0.0.1 leaves a client that
         // resolved "localhost" to ::1 connecting to nothing, which presents as
-        // "the app says connected but nothing ever draws".
+        // "the program says connected but nothing ever draws".
         string? ipv4Error = null;
         var bound = 0;
         foreach (var address in new[] { IPAddress.Loopback, IPAddress.IPv6Loopback })
@@ -141,7 +141,7 @@ internal sealed class WebSocketServer : IDisposable
             {
                 // No IPv6 stack is normal. A failure on 127.0.0.1 is the one the
                 // user needs to see, and it must survive ::1 binding fine: the
-                // app connects over IPv4 and would otherwise get no explanation.
+                // program connects over IPv4 and would otherwise get no explanation.
                 if (address.Equals(IPAddress.Loopback))
                 {
                     ipv4Error = ex.Message;
@@ -156,7 +156,7 @@ internal sealed class WebSocketServer : IDisposable
             _ = Task.Run(() => this.AcceptLoopAsync(listener, token), token);
         }
 
-        // A v4 failure is fatal in practice even when ::1 bound fine: the app
+        // A v4 failure is fatal in practice even when ::1 bound fine: the program
         // dials 127.0.0.1 explicitly, so a v6-only listener serves no one.
         // Tear it down rather than leave a link up that the config window
         // then reports as dead.
@@ -239,7 +239,7 @@ internal sealed class WebSocketServer : IDisposable
             if (!this.TryMakeRoomForNewcomer())
             {
                 // Every slot holds an established session. Refusing is safe:
-                // the app backs off and reconnects, so a reconnect that arrives
+                // the program backs off and reconnects, so a reconnect that arrives
                 // while old sessions are still unwinding recovers on its own.
                 Services.Log.Debug("all session slots are established; refusing a new connection");
                 client.Dispose();
@@ -259,7 +259,7 @@ internal sealed class WebSocketServer : IDisposable
     /// is also what a dead session that has not unwound yet looks like, so
     /// dropping those for a newcomer costs nothing real. An established
     /// session is only ever replaced by a peer that completes the handshake,
-    /// so a bare connect-and-hold flood cannot push the app off the overlay
+    /// so a bare connect-and-hold flood cannot push the program off the overlay
     /// mid-fight.</summary>
     private bool TryMakeRoomForNewcomer()
     {
@@ -305,7 +305,7 @@ internal sealed class WebSocketServer : IDisposable
         try
         {
             client.NoDelay = true;   // callouts are latency-critical and tiny
-            // Enable TCP keepalive so a half-open peer (app killed on sleep or a
+            // Enable TCP keepalive so a half-open peer (program killed on sleep or a
             // network change) is detected in about a minute (30s idle, then 3
             // probes 10s apart), not the OS default (~2h on Linux). Without this
             // the session slot stays pinned and the overlay shows stale state
@@ -374,7 +374,7 @@ internal sealed class WebSocketServer : IDisposable
             session.Pump = Task.Run(() => PumpAsync(session));
 
             // Queued before the session is published, so a concurrent Send
-            // cannot overtake it. The protocol promises the app this frame is
+            // cannot overtake it. The protocol promises the program this frame is
             // first, and publishing then greeting loses that race.
             var greeting = this.onGreeting();
             if (greeting != null)
@@ -382,7 +382,7 @@ internal sealed class WebSocketServer : IDisposable
                 session.Enqueue(BuildFrame(0x1, Encoding.UTF8.GetBytes(greeting)));
             }
 
-            // One client at a time: a reconnect after the app restarted would
+            // One client at a time: a reconnect after the program restarted would
             // otherwise leave two sessions both thinking they own the overlay.
             var previous = Interlocked.Exchange(ref this.peer, session);
             if (previous != null)
@@ -403,7 +403,7 @@ internal sealed class WebSocketServer : IDisposable
                 Services.Log.Warning($"connect handler threw: {ex.Message}");
             }
 
-            Services.Log.Information("NyaaTriggers app connected");
+            Services.Log.Information("NyaaTriggers program connected");
             await this.ReadLoopAsync(session).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -431,7 +431,7 @@ internal sealed class WebSocketServer : IDisposable
                     Services.Log.Warning($"disconnect handler threw: {ex.Message}");
                 }
 
-                Services.Log.Information("NyaaTriggers app disconnected");
+                Services.Log.Information("NyaaTriggers program disconnected");
             }
 
             session.Dispose();
@@ -463,7 +463,7 @@ internal sealed class WebSocketServer : IDisposable
 
         // WebSocket is exempt from the same-origin policy, so any page the user
         // happens to be browsing could otherwise open this socket and inject or
-        // clear callouts. Browsers always send Origin; the app never does, so
+        // clear callouts. Browsers always send Origin; the program never does, so
         // refusing any request that carries one costs nothing and closes it.
         var origin = FindHeader(request, "Origin");
 
@@ -535,7 +535,7 @@ internal sealed class WebSocketServer : IDisposable
             }
 
             // Anything after the blank line would be frame bytes read into this
-            // buffer and then dropped, desyncing the read loop. The app does not
+            // buffer and then dropped, desyncing the read loop. The program does not
             // pipeline, so refuse rather than carry a pushback buffer around.
             if (used > end + HeaderTerminator.Length)
             {
@@ -697,7 +697,7 @@ internal sealed class WebSocketServer : IDisposable
             catch (DecoderFallbackException)
             {
                 // RFC 6455 says a text frame that is not valid UTF-8 closes with
-                // 1007. Substituting U+FFFD instead would hand the app silently
+                // 1007. Substituting U+FFFD instead would hand the program silently
                 // corrupted callout text.
                 await CloseAsync(session, 1007).ConfigureAwait(false);
                 return;
@@ -736,7 +736,7 @@ internal sealed class WebSocketServer : IDisposable
         return true;
     }
 
-    /// <summary>Queue a text message to the app. Safe from the draw thread:
+    /// <summary>Queue a text message to the program. Safe from the draw thread:
     /// returns immediately, preserves order, and never throws.</summary>
     internal void Send(string text)
         => Volatile.Read(ref this.peer)?.Enqueue(BuildFrame(0x1, Encoding.UTF8.GetBytes(text)));
@@ -848,7 +848,7 @@ internal sealed class WebSocketServer : IDisposable
     }
 
     /// <summary>Single writer per session: the channel is what guarantees the
-    /// greeting reaches the app before anything queued after it.</summary>
+    /// greeting reaches the program before anything queued after it.</summary>
     private static async Task PumpAsync(Session session)
     {
         try

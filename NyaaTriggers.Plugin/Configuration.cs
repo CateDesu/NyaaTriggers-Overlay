@@ -94,7 +94,7 @@ internal sealed class Configuration : IPluginConfiguration
     public int Version { get; set; } = 4;
 
     // ── link ──────────────────────────────────────────────────────────────
-    /// <summary>Loopback port the desktop app connects to. Not exposed off the
+    /// <summary>Loopback port the desktop program connects to. Not exposed off the
     /// machine: the listener binds 127.0.0.1 and ::1 only. As a companion
     /// plugin it always listens; there is no off switch.</summary>
     public int Port { get; set; } = 27080;
@@ -252,18 +252,18 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Fill colour for bars about to fire.</summary>
     public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
 
-    /// <summary>Colour each bar by the kind the app tagged its label with:
+    /// <summary>Colour each bar by the kind the program tagged its label with:
     /// tankbuster, raidwide and mechanic get their own fill, anything untagged
     /// keeps the shared bar colour. The imminent colour still wins near zero.</summary>
     public bool TimelineKindColors { get; set; }
 
-    /// <summary>Bar fill for cues the app tagged tankbuster.</summary>
+    /// <summary>Bar fill for cues the program tagged tankbuster.</summary>
     public Vector4 TimelineTankbusterColor { get; set; } = new(0.92f, 0.48f, 0.20f, 0.85f);
 
-    /// <summary>Bar fill for cues the app tagged raidwide.</summary>
+    /// <summary>Bar fill for cues the program tagged raidwide.</summary>
     public Vector4 TimelineRaidwideColor { get; set; } = new(0.35f, 0.62f, 0.92f, 0.85f);
 
-    /// <summary>Bar fill for cues the app tagged mechanic. Ships matching the
+    /// <summary>Bar fill for cues the program tagged mechanic. Ships matching the
     /// shared bar colour, so turning kind colours on only moves the tankbuster
     /// and raidwide bars until this one is recoloured. Untagged and unknown
     /// kinds keep the shared bar colour.</summary>
@@ -289,7 +289,7 @@ internal sealed class Configuration : IPluginConfiguration
     /// by the callout's own fade.</summary>
     public Vector4 AlertsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    /// <summary>Seconds an info callout stays up when the app does not specify
+    /// <summary>Seconds an info callout stays up when the program does not specify
     /// one. The field keeps the pre-v4 name so stored configs still load.</summary>
     public float AlertSeconds { get; set; } = 4.0f;
 
@@ -558,6 +558,10 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Size of the in-bar hps and dps figures relative to the box's
     /// body text, 0.4 to 1.5. The names share it.</summary>
     public float DpsHorizStatScale { get; set; } = 0.80f;
+
+    /// <summary>Size of the damage share percent figure under the strip,
+    /// relative to the box's body text, 0.4 to 1.5.</summary>
+    public float DpsHorizPercentScale { get; set; } = 0.45f;
 
     /// <summary>Decimal places on the in-bar dps figure, 0 to 2.</summary>
     public int DpsHorizDecimals { get; set; } = 2;
@@ -907,6 +911,7 @@ internal sealed class Configuration : IPluginConfiguration
         DpsHorizIconSize = fresh.DpsHorizIconSize;
         DpsHorizCellPadding = fresh.DpsHorizCellPadding;
         DpsHorizStatScale = fresh.DpsHorizStatScale;
+        DpsHorizPercentScale = fresh.DpsHorizPercentScale;
         DpsHorizDecimals = fresh.DpsHorizDecimals;
         DpsHorizCompact = fresh.DpsHorizCompact;
         DpsHorizBarOpacity = fresh.DpsHorizBarOpacity;

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Drive the NyaaTriggers companion plugin without the app.
+"""Drive the NyaaTriggers companion plugin without the program.
 
 Connects to the plugin's loopback WebSocket and feeds it a fake pull: a
 timeline that counts down, and callouts at fixed points. Lets the in-game
-drawing be checked before the app knows anything about the plugin.
+drawing be checked before the program knows anything about the plugin.
 
     python test_bridge.py [--port 27080] [--speed 1.0]
     python test_bridge.py --dps          fake encounter for the DPS meter instead
 
-Needs the `websockets` package (the app itself uses Qt's client instead; this
-is a standalone tool, not part of the app).
+Needs the `websockets` package (the program itself uses Qt's client instead; this
+is a standalone tool, not part of the program).
 
 Note on --speed: the plugin interpolates the fight clock in real time between
 ticks, so a fast-forwarded clock makes the bars step rather than glide. Above
@@ -36,7 +36,7 @@ PROTOCOL_VERSION = 1
 # it forever with nothing on screen to say so.
 HELLO_TIMEOUT = 5.0
 
-# (timeline second, label, kind) - the wire shape the app's timeline_frame
+# (timeline second, label, kind) - the wire shape the program's timeline_frame
 # produces, the engine's time and label pairs plus the kind tag it derives
 # from the label text. Two tagged entries exercise the per-kind colours.
 SCHEDULE = [
@@ -58,7 +58,7 @@ CALLOUTS = [
 ]
 
 # (name, job, base encdps, base enchps, is the local player, deaths) - the
-# same shape the app's meter rows produce, already close to sorted; each
+# same shape the program's meter rows produce, already close to sorted; each
 # frame jitters and re-sorts them.
 PARTY = [
     ("Alphinaud L", "SGE", 10234.5, 9123.4, False, 0),
@@ -73,7 +73,7 @@ PARTY = [
 
 TICK_SECONDS = 0.25
 
-# The app's meter cadence: one dps frame per second while the encounter runs.
+# The program's meter cadence: one dps frame per second while the encounter runs.
 DPS_SECONDS = 1.0
 DPS_FRAMES = 6
 

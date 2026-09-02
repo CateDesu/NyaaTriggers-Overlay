@@ -66,7 +66,7 @@ internal static class JobColors
 
     private static readonly Dictionary<string, Vector4> ByJob = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Base classes take their job's colour: the app sends class acronyms
+        // Base classes take their job's colour: the program sends class acronyms
         // for sub-50 content, and kagerou colours them the same.
         ["GLA"] = Hex(0xA8D2E6),
         ["PGL"] = Hex(0xD69C00),

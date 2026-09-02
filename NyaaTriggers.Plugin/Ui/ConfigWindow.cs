@@ -146,16 +146,16 @@ internal sealed class ConfigWindow : Window
             ImGui.TextColored(Bad, $"Not listening: {error}");
             ImGui.TextWrapped(
                 "Another program is probably already on this port. Pick a different " +
-                "one here and set the same port in the app, on its Settings page " +
+                "one here and set the same port in the program, on its Settings page " +
                 "under In-Game Overlay.");
         }
         else if (this.bridge.IsConnected)
         {
-            ImGui.TextColored(Good, "Connected to the app.");
+            ImGui.TextColored(Good, "Connected to the program.");
         }
         else
         {
-            ImGui.TextColored(Waiting, $"Listening on 127.0.0.1:{this.config.Port}, waiting for the app.");
+            ImGui.TextColored(Waiting, $"Listening on 127.0.0.1:{this.config.Port}, waiting for the program.");
         }
 
         ImGui.Spacing();
@@ -198,10 +198,7 @@ internal sealed class ConfigWindow : Window
         ImGui.Spacing();
 
         this.Check("Standalone meter", () => this.config.StandaloneMeter, v => this.config.StandaloneMeter = v);
-        ImGui.TextDisabled(
-            "Run the meter off IINACT while the app is away, so the meter works " +
-            "without the program. Needs the IINACT plugin. The app's feed wins " +
-            "whenever it is connected.");
+        ImGui.TextDisabled("Run the meter solely from IINACT.");
 
         if (this.config.StandaloneMeter)
         {
@@ -214,7 +211,7 @@ internal sealed class ConfigWindow : Window
                     ImGui.TextColored(Bad, this.bridge.StandaloneStatusText);
                     break;
                 case StandaloneState.Paused:
-                    ImGui.TextColored(Waiting, "Asleep: the app is connected, its feed wins.");
+                    ImGui.TextColored(Waiting, "Asleep: the program is connected, its feed wins.");
                     break;
                 default:
                     ImGui.TextColored(Waiting, this.bridge.StandaloneStatusText);
@@ -254,13 +251,29 @@ internal sealed class ConfigWindow : Window
                 ImGui.TextColored(Bad, "Feed URL must start with ws:// or wss://.");
             }
         }
+
+        ImGui.Spacing();
+
+        var locked = this.config.Locked;
+        if (ImGui.Checkbox("Lock", ref locked))
+        {
+            this.ui.SetLocked(locked);
+        }
+
+        ImGui.TextDisabled(
+            locked
+                ? "Locked: no frame, clicks pass through to the game."
+                : "Unlocked: drag and resize the boxes. They show sample content while idle.");
     }
 
     private void DrawBoxes()
     {
         this.Check("Timeline bars", () => this.config.ShowTimeline, v => this.config.ShowTimeline = v);
         this.Check("Alert pop-ups", () => this.config.ShowAlerts, v => this.config.ShowAlerts = v);
-        this.Check("DPS meter", () => this.config.ShowDps, v => this.config.ShowDps = v);
+        // Same label as the DPS meter section header. Without an id suffix
+        // both share one ImGui id, and a click on the header's bar never
+        // reaches it while this section is open, only the arrow worked.
+        this.Check("DPS meter##showDps", () => this.config.ShowDps, v => this.config.ShowDps = v);
 
         ImGui.Spacing();
 
@@ -277,17 +290,6 @@ internal sealed class ConfigWindow : Window
         ImGui.TextDisabled("Both ticked on one box means it shows only for a fight inside a duty.");
 
         ImGui.Spacing();
-
-        var locked = this.config.Locked;
-        if (ImGui.Checkbox("Lock", ref locked))
-        {
-            this.ui.SetLocked(locked);
-        }
-
-        ImGui.TextDisabled(
-            locked
-                ? "Locked: no frame, clicks pass through to the game."
-                : "Unlocked: drag and resize the boxes. They show sample content while idle.");
 
         if (ImGui.Button("Test info"))
         {
@@ -411,7 +413,7 @@ internal sealed class ConfigWindow : Window
 
         this.Check("Color bars by kind",
             () => this.config.TimelineKindColors, v => this.config.TimelineKindColors = v);
-        ImGui.TextDisabled("The app tags every timeline label tankbuster, raidwide or mechanic. Untagged labels keep the Bar colour.");
+        ImGui.TextDisabled("The program tags every timeline label tankbuster, raidwide or mechanic. Untagged labels keep the Bar colour.");
         this.ColorRow("Tankbuster",
             () => this.config.TimelineTankbusterColor, v => this.config.TimelineTankbusterColor = v);
         this.ColorRow("Raidwide",
@@ -449,7 +451,7 @@ internal sealed class ConfigWindow : Window
             () => this.config.AlertSecondsAlert, v => this.config.AlertSecondsAlert = v);
         this.Slider("Alarm time", 0.5f, 15.0f, "%.1f s",
             () => this.config.AlertSecondsAlarm, v => this.config.AlertSecondsAlarm = v);
-        ImGui.TextDisabled("How long a callout stays up when the app does not say.");
+        ImGui.TextDisabled("How long a callout stays up when the program does not say.");
         this.SliderInt("Max visible", 1, 8,
             () => this.config.AlertsMaxVisible, v => this.config.AlertsMaxVisible = v);
         this.Combo("Stack order", OrderNames,
@@ -665,6 +667,10 @@ internal sealed class ConfigWindow : Window
             () => this.config.DpsHorizStatScale, v => this.config.DpsHorizStatScale = v,
             40.0f, 150.0f);
         ImGui.TextDisabled("The hps and dps figures inside the bars, and the names above them.");
+        this.PercentSlider("Percent text size",
+            () => this.config.DpsHorizPercentScale, v => this.config.DpsHorizPercentScale = v,
+            40.0f, 150.0f);
+        ImGui.TextDisabled("The damage share figure under each bar.");
         this.SliderInt("DPS decimals", 0, 2,
             () => this.config.DpsHorizDecimals, v => this.config.DpsHorizDecimals = v);
         this.Check("Compact numbers",
