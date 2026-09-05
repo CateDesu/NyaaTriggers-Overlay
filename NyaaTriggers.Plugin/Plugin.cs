@@ -40,6 +40,11 @@ public sealed class Plugin : IDalamudPlugin
         this.fonts = new ScaledFonts();
         this.ui = new PluginUi(this.config, this.bridge, this.fonts);
 
+        // Start clears the live timeline and alerts lists, and this
+        // constructor already races the render thread: it must run before
+        // any Draw subscription exists, or a frame mid iteration throws.
+        this.bridge.Start();
+
         Services.Commands.AddHandler(CommandName, new CommandInfo(this.OnCommand)
         {
             HelpMessage = "Open NyaaTriggers settings. /nyaa lock toggles the overlay lock.",
@@ -48,8 +53,6 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.Draw += this.ui.Draw;
         pluginInterface.UiBuilder.OpenConfigUi += this.ui.OpenConfig;
         pluginInterface.UiBuilder.OpenMainUi += this.ui.OpenConfig;
-
-        this.bridge.Start();
 
         // A fresh install starts unlocked so the boxes are visible and can be
         // placed; the user locks them once they are where they want them.

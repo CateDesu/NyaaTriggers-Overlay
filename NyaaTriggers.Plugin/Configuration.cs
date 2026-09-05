@@ -610,8 +610,13 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Named appearance snapshots: profile name to a serialized
     /// Configuration blob from SnapshotAppearance. Only the appearance knobs
     /// come back on apply; the link, placement and visibility stay as they
-    /// are.</summary>
-    public Dictionary<string, string> AppearanceProfiles { get; set; } = new();
+    /// are. A hand edited config can carry a JSON null for the dictionary
+    /// itself, which the setter coalesces back to empty.</summary>
+    public Dictionary<string, string> AppearanceProfiles
+    {
+        get;
+        set => field = value ?? new();
+    } = new();
 
     /// <summary>Profile blob options. The colour knobs are Vector4, whose X Y
     /// Z W are public fields, and default options skip fields: a blob would
@@ -826,6 +831,9 @@ internal sealed class Configuration : IPluginConfiguration
         TimelineShowClock = fresh.TimelineShowClock;
         TimelineAnchorBottom = fresh.TimelineAnchorBottom;
         TimelineFireFlash = fresh.TimelineFireFlash;
+        TimelineShowTankbuster = fresh.TimelineShowTankbuster;
+        TimelineShowRaidwide = fresh.TimelineShowRaidwide;
+        TimelineShowMechanic = fresh.TimelineShowMechanic;
         ColorImminent = fresh.ColorImminent;
         TimelineKindColors = fresh.TimelineKindColors;
         TimelineTankbusterColor = fresh.TimelineTankbusterColor;

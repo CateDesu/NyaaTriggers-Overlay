@@ -186,7 +186,11 @@ internal sealed class BridgeHost : IDisposable
             this.server = null;
         }
 
-        this.ClearState();
+        // The standalone meter owns Dps while no program session is live and
+        // runs independent of this server, so a port change must not blank
+        // its rows. Only a session actually live on the old server makes the
+        // program the owner whose frames this reset covers.
+        this.ClearState(resetDps: old?.IsConnected == true);
         // Drain anything the old server queued (including a synthesised clear
         // from its disconnect) so a Restart / port change does not re-apply stale
         // timeline or dps frames onto the freshly-cleared state next Update.
@@ -363,7 +367,9 @@ internal sealed class BridgeHost : IDisposable
                 break;
 
             case "clear":
-                this.ClearState();
+                // Arrives over a live program session, so the program owns
+                // the dps rows and this reset covers them too.
+                this.ClearState(resetDps: true);
                 break;
 
             case "ping":
@@ -379,11 +385,14 @@ internal sealed class BridgeHost : IDisposable
 
     private void ApplyTimeline(JsonElement root)
     {
-        this.timeline.Clear();
+        // Validate before touching the live schedule: a malformed frame is
+        // dropped whole, the same discipline the tick and dps handlers follow.
         if (!root.TryGetProperty("v", out var entries) || entries.ValueKind != JsonValueKind.Array)
         {
             return;
         }
+
+        this.timeline.Clear();
 
         foreach (var entry in entries.EnumerateArray())
         {
@@ -586,11 +595,18 @@ internal sealed class BridgeHost : IDisposable
         };
     }
 
-    internal void ClearState()
+    /// <summary>Wipe the state the program pushed. The dps rows only when
+    /// resetDps: they can belong to the standalone meter, which is fed
+    /// independent of this server and must survive its restarts.</summary>
+    internal void ClearState(bool resetDps)
     {
         this.timeline.Clear();
         this.alerts.Clear();
-        this.Dps = new DpsState();
+        if (resetDps)
+        {
+            this.Dps = new DpsState();
+        }
+
         this.clockBase = 0;
         this.clockRunning = false;
     }

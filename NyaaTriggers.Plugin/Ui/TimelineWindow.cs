@@ -128,7 +128,7 @@ internal sealed class TimelineWindow : OverlayWindow
         {
             var spacing = Math.Max(this.Config.TimelineBarSpacing, 0.0f);
             var total = rows.Count *
-                ((this.Config.TimelineBarHeight * ClampTextScale(this.TextScale)) + spacing);
+                ((Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale)) + spacing);
             if (clockLine)
             {
                 total += ImGui.GetTextLineHeight() + spacing;
@@ -204,7 +204,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.TimelineBarHeight * ClampTextScale(this.TextScale);
+        var height = Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale);
         var rounding = Math.Min(Math.Max(this.Config.TimelineBarRounding, 0.0f), height * 0.5f);
 
         // Depleting bars shrink toward zero as the cue arrives, so the bar
@@ -245,7 +245,8 @@ internal sealed class TimelineWindow : OverlayWindow
             AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height), fill, rounding);
         }
 
-        if (this.Config.TimelineBarBorderThickness > 0.0f)
+        var border = Math.Clamp(this.Config.TimelineBarBorderThickness, 0.0f, 4.0f);
+        if (border > 0.0f)
         {
             drawList.AddRect(
                 origin,
@@ -253,7 +254,7 @@ internal sealed class TimelineWindow : OverlayWindow
                 ToColor(this.Config.TimelineBarBorderColor),
                 rounding,
                 ImDrawFlags.None,
-                this.Config.TimelineBarBorderThickness);
+                border);
         }
 
         this.DrawBarText(drawList, label, remaining, origin, width, height);
@@ -279,10 +280,16 @@ internal sealed class TimelineWindow : OverlayWindow
         {
             // The countdown pins to the right edge so the numbers never shift
             // the label as they tick, and the label aligns inside the space
-            // left of it so the two cannot overlap.
+            // left of it so the two cannot overlap. A box too narrow for
+            // both drops the label, which would only elide to an ellipsis
+            // anyway.
             var countdownWidth = ImGui.CalcTextSize(countdown).X;
-            this.DrawAlignedText(
-                drawList, label, origin, width - countdownWidth - TextPadding, textY);
+            if (width - countdownWidth - (2.0f * TextPadding) > 0.0f)
+            {
+                this.DrawAlignedText(
+                    drawList, label, origin, width - countdownWidth - TextPadding, textY);
+            }
+
             this.DrawStyledText(
                 drawList,
                 new Vector2(origin.X + Math.Max(width - countdownWidth - TextPadding, TextPadding), textY),

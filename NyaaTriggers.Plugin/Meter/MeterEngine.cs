@@ -111,6 +111,11 @@ internal sealed class MeterEngine
 
     internal bool HasLiveEncounter => this.current != null;
 
+    /// <summary>Whether any zone line has landed. The standalone feed dedups
+    /// zone events against its own memory, which a fresh engine does not
+    /// share, so the feed checks this before passing a replayed zone in.</summary>
+    internal bool HasZone => this.zone.Length > 0;
+
     /// <summary>How long the meter keeps ticking after the last damage before
     /// it pauses, resetting on the next hit. Display only, the recorded pull
     /// is never split or shortened by this. Bad input is ignored.</summary>

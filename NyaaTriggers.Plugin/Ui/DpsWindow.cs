@@ -313,7 +313,15 @@ internal sealed class DpsWindow : OverlayWindow
         var builder = new StringBuilder(name.Length + parts.Length);
         foreach (var part in parts)
         {
-            builder.Append(char.ToUpperInvariant(part[0])).Append(". ");
+            builder.Append(char.ToUpperInvariant(part[0]));
+            // Keep an astral initial whole: the pair's other half rides
+            // along so no lone surrogate draws as a replacement glyph.
+            if (part.Length > 1 && char.IsHighSurrogate(part[0]) && char.IsLowSurrogate(part[1]))
+            {
+                builder.Append(part[1]);
+            }
+
+            builder.Append(". ");
         }
 
         return builder.ToString().TrimEnd();
@@ -593,8 +601,11 @@ internal sealed class DpsWindow : OverlayWindow
         var textLeft = TextPadding;
         if (this.Config.DpsRowsShowIcons)
         {
+            // No floor beyond a pixel: a row shorter than the text line
+            // shrinks the icon to fit rather than spilling onto its
+            // neighbours.
             var iconSize = Math.Clamp(
-                ImGui.GetTextLineHeight() + 2.0f, 8.0f, Math.Max(height - 4.0f, 8.0f));
+                ImGui.GetTextLineHeight() + 2.0f, 1.0f, Math.Max(height - 4.0f, 1.0f));
             var icon = JobIcons.Get(row.Job);
             if (icon != null)
             {
@@ -733,7 +744,13 @@ internal sealed class DpsWindow : OverlayWindow
         var stripTop = barTop + barHeight + scale;
         var stripHeight = Math.Max(2.0f * scale, 1.5f);
 
-        var cellBottom = barTop + barHeight;
+        // The icon's lower edge sits three quarters of its size below the
+        // bar's top edge. A tall icon on a short bar hangs over the share
+        // strip and past the cell, clipping at the window's bottom, so its
+        // edge reserves cell height the same way barTop reserves the
+        // overhang above the bar.
+        var iconBottom = showIcons ? barTop - iconOverhang + iconSize : barTop;
+        var cellBottom = Math.Max(barTop + barHeight, iconBottom);
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -880,7 +897,9 @@ internal sealed class DpsWindow : OverlayWindow
 
             // Damage share: the thin skewed strip under the bar, shifted left
             // like the original's, plus the percent figure below its right end.
-            var stripLeftEdge = barLeft - (8.0f * scale);
+            // The shift never crosses the content origin: a flush left cell
+            // with thin padding would paint the strip over the window's edge.
+            var stripLeftEdge = Math.Max(barLeft - (8.0f * scale), origin.X);
             var stripSkew = this.HorizonSkew() * stripHeight;
             AddSkewedQuad(
                 drawList, stripLeftEdge, stripTop, barWidth, stripHeight,
@@ -1265,10 +1284,24 @@ internal sealed class DpsWindow : OverlayWindow
             ? FormatDps(value)
             : value.ToString("0.0", CultureInfo.InvariantCulture);
 
-    /// <summary>Compact dps: 81.2k reads faster mid-pull than 81,234. Used by
-    /// the header and every row so the two always read the same way.</summary>
+    /// <summary>Compact dps: 81.2k reads faster mid-pull than 81,234, and a
+    /// big enough total rolls to 1.0m. Used by the header and every row so
+    /// the two always read the same way.</summary>
     private static string FormatDps(double dps)
-        => dps >= 1000.0
-            ? (dps / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + "k"
-            : dps.ToString("0", CultureInfo.InvariantCulture);
+    {
+        // Each step up happens where the smaller unit's figure would round
+        // to 1000: 999.96 prints as 1.0k rather than 1000, and a full
+        // alliance's total reads 1.0m rather than 1045.6k.
+        if (dps >= 999950.0)
+        {
+            return (dps / 1000000.0).ToString("0.0", CultureInfo.InvariantCulture) + "m";
+        }
+
+        if (dps >= 999.5)
+        {
+            return (dps / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + "k";
+        }
+
+        return dps.ToString("0", CultureInfo.InvariantCulture);
+    }
 }

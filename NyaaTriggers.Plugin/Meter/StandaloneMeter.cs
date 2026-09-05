@@ -372,7 +372,26 @@ internal sealed class StandaloneMeter : IDisposable
                     if ((zoneId != 0 && zoneId != this.lastZoneId) ||
                         (zoneId == 0 && zoneName.Length > 0 && zoneName != this.lastZone))
                     {
+                        // The engine hears zones only from 01 lines, which
+                        // IINACT never replays, so hand it the change as a
+                        // synthetic one. Its 01 handler reads the name field
+                        // alone. Engine first, then the clear, the same order
+                        // TreatLine runs a real 01 in.
+                        if (zoneName.Length > 0)
+                        {
+                            this.engine.Process(new[] { "01", "", "", zoneName });
+                        }
+
                         this.pending = Pending.Cleared;
+                    }
+                    else if (zoneName.Length > 0 && !this.engine.HasZone)
+                    {
+                        // A replayed event for the zone we are already in,
+                        // swallowed by the dedup above, on an engine with no
+                        // zone yet: a restarted client still has to learn it,
+                        // or every pull is titled Encounter until the next
+                        // real change.
+                        this.engine.Process(new[] { "01", "", "", zoneName });
                     }
 
                     if (zoneId != 0)

@@ -365,13 +365,33 @@ internal sealed class WebSocketServer : IDisposable
                 return;
             }
 
+            // The slot only becomes safe from eviction once it is marked
+            // established, and a newcomer admitted during the handshake may
+            // already have torn this session down. Publishing it anyway would
+            // close the healthy program connection below for a dead socket.
+            if (session.IsDisposed)
+            {
+                return;
+            }
+
             // Past this point the peer has proven it speaks the protocol, so
             // the slot can no longer be taken by a newcomer.
             session.MarkEstablished();
 
             // Tracked on the session so Dispose waits for the send side too:
-            // an untracked pump could outlive the plugin's teardown.
-            session.Pump = Task.Run(() => PumpAsync(session));
+            // an untracked pump could outlive the plugin's teardown. Assigned
+            // under the gate Dispose snapshots with, so a session in the
+            // dictionary always shows its real pump. A teardown that already
+            // ran owns the unwind, and no pump starts after it.
+            lock (this.gate)
+            {
+                if (this.disposed)
+                {
+                    return;
+                }
+
+                session.Pump = Task.Run(() => PumpAsync(session));
+            }
 
             // Queued before the session is published, so a concurrent Send
             // cannot overtake it. The protocol promises the program this frame is
@@ -614,14 +634,15 @@ internal sealed class WebSocketServer : IDisposable
 
             var control = (opcode & 0x8) != 0;
 
-            // Reserved bits set means an extension we never negotiated; an
-            // unmasked client frame is a protocol violation; control frames may
-            // not be fragmented or exceed 125 bytes; and nothing may exceed the
-            // message cap. Each of these ends the session rather than being
-            // guessed at.
+            // Reserved bits set means an extension we never negotiated, an
+            // unmasked client frame is a protocol violation, and control
+            // frames may not be fragmented or exceed 125 bytes. The assembly
+            // cap counts message payload only: control frames may interleave
+            // inside a fragmented message and are not part of it. Each of
+            // these ends the session rather than being guessed at.
             if (reserved != 0 || !masked || length < 0 || length > MaxMessageBytes ||
                 (control && (!fin || length > MaxControlPayload)) ||
-                assembled.Length + length > MaxMessageBytes)
+                (!control && assembled.Length + length > MaxMessageBytes))
             {
                 await CloseAsync(session, 1002).ConfigureAwait(false);
                 return;
@@ -867,6 +888,12 @@ internal sealed class WebSocketServer : IDisposable
         catch (Exception ex)
         {
             Services.Log.Debug($"send failed: {ex.Message}");
+
+            // A failed send leaves the session half-alive: reads still work
+            // and the outbox keeps filling for a peer that receives nothing.
+            // End it here rather than wait for TCP keepalive to notice.
+            // Dispose is idempotent, so the read loop's own unwind is fine.
+            session.Dispose();
         }
         finally
         {

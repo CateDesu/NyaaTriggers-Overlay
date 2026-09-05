@@ -10,6 +10,11 @@ namespace NyaaTriggers.Plugin.Ui;
 /// </summary>
 internal sealed class PluginUi : IDisposable
 {
+    // Fade timings mirrored from the alerts box, which keeps its own
+    // private. The flash fades on the same clock so the two never split.
+    private const float AlarmFadeSeconds = 0.6f;
+    private const float AlarmRiseSeconds = 0.12f;
+
     private readonly Configuration config;
     private readonly BridgeHost bridge;
     private readonly ScaledFonts fonts;
@@ -83,25 +88,46 @@ internal sealed class PluginUi : IDisposable
         // on, an alarm live and not filtered out. While unlocked the boxes
         // are being placed and a full screen glow would only annoy. It follows
         // the alerts box's visibility: a suppressed alerts box means its flash
-        // is just as unwanted.
+        // is just as unwanted. The pulse is scaled by the alarm's own alpha
+        // so the glow fades out with the callout like the box border does,
+        // instead of holding full strength until the bridge culls it.
+        var alarmAlpha = this.LiveAlarmAlpha();
+        this.flash.AlarmAlpha = alarmAlpha;
         this.flash.IsOpen = this.AlertsVisible && this.config.Locked &&
             this.config.ShowAlerts && this.config.AlarmScreenFlash &&
-            this.config.AlertsShowAlarm && this.HasLiveAlarm();
+            this.config.AlertsShowAlarm && alarmAlpha > 0.0f;
 
         this.windows.Draw();
     }
 
-    private bool HasLiveAlarm()
+    /// <summary>The strongest alpha among the live alarms, faded exactly as
+    /// the alerts box fades each callout. Zero when no alarm is live, which
+    /// doubles as the old any-alarm check for the flash gate.</summary>
+    private float LiveAlarmAlpha()
     {
+        var strongest = 0.0f;
+        var now = Environment.TickCount64;
         foreach (var alert in this.bridge.Alerts)
         {
-            if (alert.Severity == Severity.Alarm)
+            if (alert.Severity != Severity.Alarm)
             {
-                return true;
+                continue;
             }
+
+            var alpha = 1.0f;
+            if (this.config.AlertsAnimate)
+            {
+                var remaining = (alert.ExpiresAt - now) / 1000.0f;
+                var age = (now - alert.ShownAt) / 1000.0f;
+                alpha = Math.Min(
+                    remaining >= AlarmFadeSeconds ? 1.0f : Math.Max(remaining, 0.0f) / AlarmFadeSeconds,
+                    age >= AlarmRiseSeconds ? 1.0f : Math.Max(age, 0.0f) / AlarmRiseSeconds);
+            }
+
+            strongest = Math.Max(strongest, alpha);
         }
 
-        return false;
+        return strongest;
     }
 
     private bool ShouldShow(bool onlyInDuty, bool onlyInCombat)

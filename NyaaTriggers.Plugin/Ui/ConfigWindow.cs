@@ -168,8 +168,11 @@ internal sealed class ConfigWindow : Window
         // while the box still showed what was typed, and Apply would bind a
         // port the user never chose. Clamp on Apply instead.
         ImGui.SameLine();
-        var changed = this.pendingPort != this.config.Port;
-        if (!changed)
+        var outOfRange = this.pendingPort is < 1024 or > 65535;
+        // Out of range counts as changed too, so a hand edited config with a
+        // port outside the range can still be clamped back in from here.
+        var canApply = this.pendingPort != this.config.Port || outOfRange;
+        if (!canApply)
         {
             ImGui.BeginDisabled();
         }
@@ -182,12 +185,12 @@ internal sealed class ConfigWindow : Window
             this.bridge.Restart();
         }
 
-        if (!changed)
+        if (!canApply)
         {
             ImGui.EndDisabled();
         }
 
-        if (this.pendingPort is < 1024 or > 65535)
+        if (outOfRange)
         {
             ImGui.TextColored(Bad, "Port must be between 1024 and 65535.");
         }
@@ -222,8 +225,12 @@ internal sealed class ConfigWindow : Window
             ImGui.InputText("IINACT feed", ref this.pendingEndpoint, 256);
 
             var endpoint = this.pendingEndpoint.Trim();
-            var valid = endpoint.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) ||
-                        endpoint.StartsWith("wss://", StringComparison.OrdinalIgnoreCase);
+            // Same test the meter dials with: an absolute uri on the ws or
+            // wss scheme with a real host. A bare ws:// used to pass here
+            // and then be rejected by the meter on dial anyway.
+            var valid = Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri) &&
+                        (endpointUri.Scheme == Uri.UriSchemeWs || endpointUri.Scheme == Uri.UriSchemeWss) &&
+                        endpointUri.Host.Length > 0;
 
             // Same shape as the port row: no silent rewrites while typing, a
             // bad address blocks Apply instead of being re-dialled.
@@ -499,9 +506,12 @@ internal sealed class ConfigWindow : Window
 
         ImGui.Spacing();
 
-        this.ColorRow("Info", () => this.config.ColorInfo, v => this.config.ColorInfo = v);
-        this.ColorRow("Alert", () => this.config.ColorAlert, v => this.config.ColorAlert = v);
-        this.ColorRow("Alarm", () => this.config.ColorAlarm, v => this.config.ColorAlarm = v);
+        // Same labels as the severity checkboxes above. Without an id suffix
+        // both widgets share one ImGui id in this scope, and hover and
+        // presses cross between the checkbox and the colour well.
+        this.ColorRow("Info##sevColor", () => this.config.ColorInfo, v => this.config.ColorInfo = v);
+        this.ColorRow("Alert##sevColor", () => this.config.ColorAlert, v => this.config.ColorAlert = v);
+        this.ColorRow("Alarm##sevColor", () => this.config.ColorAlarm, v => this.config.ColorAlarm = v);
 
         ImGui.Spacing();
 

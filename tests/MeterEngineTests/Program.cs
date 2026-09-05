@@ -600,5 +600,34 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap.Rows[0].EncDps, 0.0, "malformed: junk hex credits nothing");
 }
 
+// ------------------------------------------------------------------
+// synthetic zone line, the shape the standalone feed's ChangeZone
+// handler pushes: no timestamp or id fields, only the name
+// ------------------------------------------------------------------
+{
+    var ends = 0;
+    var eng = new MeterEngine(() => 0.0);
+    eng.OnEncounterEnd = () => ends++;
+    Check(!eng.HasZone, "synthetic 01: HasZone starts false");
+    eng.Process(new List<string> { "01", "", "", "Limsa Lominsa" });
+    Check(eng.HasZone, "synthetic 01: HasZone once fed");
+    eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    Check(eng.LiveSnapshot()!.Title == "Limsa Lominsa", "synthetic 01: title follows the fed zone");
+    eng.Process(new List<string> { "01", "", "", "Gridania" });
+    Check(!eng.HasLiveEncounter, "synthetic 01: finalizes the open pull");
+    Check(ends == 1, "synthetic 01: end fired once");
+    eng.SetInCombat(false, false);
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    Check(eng.LiveSnapshot()!.Rows.Count == 0, "synthetic 01: actor knowledge reset");
+    eng.Process(new List<string> { "02", "ts", Player, "Player One" });
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    Check(eng.LiveSnapshot()!.Title == "Gridania", "synthetic 01: re-fed zone titles the next pull");
+    var snap = eng.LiveSnapshot()!;
+    Check(snap.Rows.Count == 1 && snap.Rows[0].Job == "", "synthetic 01: jobs stay forgotten until re-noted");
+}
+
 Console.WriteLine($"{passes} passed, {failures} failed");
 return failures == 0 ? 0 : 1;
