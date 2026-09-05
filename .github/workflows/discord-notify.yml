@@ -35,8 +35,15 @@ jobs:
             echo "DISCORD_WEBHOOK secret not set — skipping."
             exit 0
           fi
+          # --fail-with-body: a dead or revoked webhook returns 4xx/5xx; without
+          # --fail curl exits 0, the run reports success, and nothing is posted.
+          # -w logs the HTTP status on success and failure alike.
+          # Discord rejects content over 2000 characters, so a long commit
+          # message is truncated in jq before posting.
           jq -nc --arg c "📦 Push to **${REPO}** (${REF}) by ${ACTOR}
 
           ${COMMIT_MSG}
-          ${COMMIT_URL}" '{content:$c, username:"NyaaTriggers Overlay"}' \
-            | curl -sS -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK"
+          ${COMMIT_URL}" \
+            '{content:(if ($c|length) > 2000 then ($c[:1999] + "…") else $c end), username:"NyaaTriggers Overlay"}' \
+            | curl -sS --fail-with-body -w '\nDiscord HTTP %{http_code}\n' \
+                -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK"
