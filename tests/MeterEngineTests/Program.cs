@@ -184,7 +184,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.SetInCombat(true, true);
     eng.Process(Ability(Enemy, "Striking Dummy", Player, "Player One", "0003", "47280000"));
@@ -241,7 +241,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     var t = 0.0;
     var ends = 0;
     var eng = new MeterEngine(() => t);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.SetInCombat(true, false);
     Check(eng.HasLiveEncounter, "lifecycle: combat flag opens");
@@ -260,7 +260,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.SetInCombat(true, true);
     eng.SetInCombat(false, false);
     Check(ends == 0, "empty pull finalizes silently");
@@ -271,7 +271,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.SetInCombat(true, false);
     eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
@@ -285,7 +285,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.SetInCombat(true, true);
     eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
@@ -301,7 +301,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.SetInCombat(true, true);
     eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
@@ -327,7 +327,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     var t = 0.0;
     var ends = 0;
     var eng = new MeterEngine(() => t);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
     t = 50.0;
@@ -338,7 +338,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     var t2 = 0.0;
     var ends2 = 0;
     var eng2 = new MeterEngine(() => t2);
-    eng2.OnEncounterEnd = () => ends2++;
+    eng2.OnEncounterEnd = _ => ends2++;
     eng2.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng2.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
     t2 = 200.0;
@@ -390,7 +390,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
     eng.SetInCombat(true, true);
     eng.Process(Tick("HoT", Player, "Player One", "000001F4", Player, "Player One"));
@@ -607,7 +607,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
-    eng.OnEncounterEnd = () => ends++;
+    eng.OnEncounterEnd = _ => ends++;
     Check(!eng.HasZone, "synthetic 01: HasZone starts false");
     eng.Process(new List<string> { "01", "", "", "Limsa Lominsa" });
     Check(eng.HasZone, "synthetic 01: HasZone once fed");
@@ -627,6 +627,99 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng.LiveSnapshot()!.Title == "Gridania", "synthetic 01: re-fed zone titles the next pull");
     var snap = eng.LiveSnapshot()!;
     Check(snap.Rows.Count == 1 && snap.Rows[0].Job == "", "synthetic 01: jobs stay forgotten until re-noted");
+}
+
+// ------------------------------------------------------------------
+// the end callback carries the final snapshot
+// ------------------------------------------------------------------
+{
+    var t = 0.0;
+    var ends = 0;
+    OverlaySnapshot? ended = null;
+    var eng = new MeterEngine(() => t);
+    eng.OnEncounterEnd = snap =>
+    {
+        ends++;
+        ended = snap;
+    };
+    eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    t = 5.0;
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    eng.Process(Death(Player, "Player One"));
+    eng.Process(new List<string> { "33", "ts", Player, "4000000f" });
+    Check(ends == 1, "final snapshot: end fired once");
+    Check(ended != null, "final snapshot: the callback carries it");
+    Check(ended!.Rows.Count == 1, "final snapshot: the row survives finalization");
+    Check(ended.Rows[0].Deaths == 1, "final snapshot: the late death counts");
+    CheckNear(ended.Rows[0].EncDps, 7286.4, "final snapshot: the late hit counts");
+    Check(eng.LiveSnapshot() == null, "final snapshot: encounter still gone");
+}
+
+// A pull that opens and ends between two publications still reports its rows.
+{
+    OverlaySnapshot? ended = null;
+    var eng = new MeterEngine(() => 0.0);
+    eng.OnEncounterEnd = snap => ended = snap;
+    eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    eng.SetInCombat(false, false);
+    Check(ended != null && ended.Rows.Count == 1, "short pull: rows ride the end callback");
+}
+
+// ------------------------------------------------------------------
+// unrelated damage does not touch the display segment
+// ------------------------------------------------------------------
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "423F400F"));
+
+    // NPC on NPC damage before the timeout must not extend the segment.
+    t = 100.0;
+    eng.Process(Ability("40000020", "Kobold", "40000030", "Kobold", "0003", "47280000"));
+    t = 130.0;
+    var snap = eng.LiveSnapshot();
+    Check(snap!.Duration == "02:00", "unrelated ability: idle pause holds");
+    CheckNear(snap.Rows[0].EncDps, 8333.3, "unrelated ability: no activity extension");
+
+    // Past the timeout it must not reset the segment either.
+    eng.Process(Ability("40000020", "Kobold", "40000030", "Kobold", "0003", "47280000"));
+    snap = eng.LiveSnapshot();
+    Check(snap!.Rows.Count == 1, "unrelated ability: player row survives");
+    Check(snap.Duration == "02:00", "unrelated ability: view not reset");
+    CheckNear(snap.Rows[0].EncDps, 8333.3, "unrelated ability: old numbers intact");
+
+    // Same for a DoT tick between two unknown actors.
+    eng.Process(Tick("DoT", "40000030", "Kobold", "000003E8", "40000020", "Kobold"));
+    snap = eng.LiveSnapshot();
+    Check(snap!.Rows.Count == 1 && snap.Duration == "02:00", "unrelated DoT: view untouched");
+
+    // A DoT ticking on the player is relevant and does restart the segment.
+    eng.Process(Tick("DoT", Player, "Player One", "000003E8", Enemy, "Striking Dummy"));
+    t = 135.0;
+    snap = eng.LiveSnapshot();
+    Check(snap!.Duration == "00:05", "player DoT: segment restarts on relevant damage");
+    CheckNear(snap.Rows[0].EncDps, 0.0, "player DoT: new segment starts empty");
+}
+
+// Enemy damage on a player's pet credits no one and must not move the segment.
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    eng.Process(AddCombatant(Player, "Player One", "1C", "0"));
+    eng.Process(AddCombatant("40000050", "Eos", "00", Player));
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
+    t = 130.0;
+    eng.Process(Ability(Enemy, "Striking Dummy", "40000050", "Eos", "0003", "423F400F"));
+    var snap = eng.LiveSnapshot();
+    Check(snap!.Duration == "02:00", "pet target: segment untouched");
+    CheckNear(snap.Rows[0].EncDps, 151.8, "pet target: old numbers intact");
 }
 
 Console.WriteLine($"{passes} passed, {failures} failed");

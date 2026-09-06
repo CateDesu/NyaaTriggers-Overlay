@@ -74,8 +74,12 @@ internal sealed class WebSocketServer : IDisposable
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private readonly int port;
-    private readonly Action<string> onMessage;
-    private readonly Action<bool> onConnectionChanged;
+
+    /// <summary>Both carry the session's Sequence, so the host can tell a
+    /// superseded session's late frames and callbacks apart from the live
+    /// one's. The server object alone cannot: every session shares it.</summary>
+    private readonly Action<long, string> onMessage;
+    private readonly Action<long, bool> onConnectionChanged;
 
     /// <summary>Produces the first frame of a session, queued before the
     /// session is published so nothing can overtake it.</summary>
@@ -103,8 +107,8 @@ internal sealed class WebSocketServer : IDisposable
 
     internal WebSocketServer(
         int port,
-        Action<string> onMessage,
-        Action<bool> onConnectionChanged,
+        Action<long, string> onMessage,
+        Action<long, bool> onConnectionChanged,
         Func<string?> onGreeting)
     {
         this.port = port;
@@ -415,7 +419,7 @@ internal sealed class WebSocketServer : IDisposable
 
             try
             {
-                this.onConnectionChanged(true);
+                this.onConnectionChanged(session.Sequence, true);
             }
             catch (Exception ex)
             {
@@ -444,7 +448,7 @@ internal sealed class WebSocketServer : IDisposable
             {
                 try
                 {
-                    this.onConnectionChanged(false);
+                    this.onConnectionChanged(session.Sequence, false);
                 }
                 catch (Exception ex)
                 {
@@ -726,7 +730,7 @@ internal sealed class WebSocketServer : IDisposable
 
             try
             {
-                this.onMessage(text);
+                this.onMessage(session.Sequence, text);
             }
             catch (Exception ex)
             {

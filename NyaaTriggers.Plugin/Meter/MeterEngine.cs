@@ -106,8 +106,11 @@ internal sealed class MeterEngine
 
     private static double DefaultClock() => Environment.TickCount64 / 1000.0;
 
-    /// <summary>Fired synchronously when a non-empty encounter finalizes.</summary>
-    internal Action? OnEncounterEnd { get; set; }
+    /// <summary>Fired synchronously when a non-empty encounter finalizes.
+    /// Carries the final snapshot of the display view: the encounter objects
+    /// are already gone by then, and the last throttled live push can be up
+    /// to a second stale. Null when the view holds nothing worth showing.</summary>
+    internal Action<OverlaySnapshot?>? OnEncounterEnd { get; set; }
 
     internal bool HasLiveEncounter => this.current != null;
 
@@ -199,6 +202,14 @@ internal sealed class MeterEngine
     private bool IsPlayer(int? aid)
         => aid is int id && (id == this.meId || this.jobs.Get(id) != 0);
 
+    /// <summary>Does the event credit the player meter: damage a player or a
+    /// player's pet dealt, or damage a player directly took. A pet target
+    /// resolves to its owner and credits no one, so a non-null target key
+    /// alone is not enough. Unrelated damage nearby must not move the display
+    /// segment's activity stamp.</summary>
+    private static bool CreditsPlayer(int? srcKey, int? tgtKey, int? tid)
+        => srcKey != null || (tgtKey != null && tgtKey == tid);
+
     /// <summary>The combatant record key for an actor. The owner id for
     /// player pets, the id itself for players, null for enemies and their
     /// minions.</summary>
@@ -276,7 +287,9 @@ internal sealed class MeterEngine
     }
 
     /// <summary>End the current encounter, if any, and fire OnEncounterEnd
-    /// for non-empty ones. Safe to call with nothing in progress.</summary>
+    /// for non-empty ones. Safe to call with nothing in progress. The final
+    /// snapshot is taken before the encounter objects go away, so the
+    /// callback can still publish the values the last live push missed.</summary>
     private void FinalizeEncounter()
     {
         var enc = this.current;
@@ -285,6 +298,7 @@ internal sealed class MeterEngine
             return;
         }
 
+        var snapshot = this.LiveSnapshot();
         this.current = null;
         this.view = null;
         var any = false;
@@ -304,7 +318,7 @@ internal sealed class MeterEngine
 
         try
         {
-            this.OnEncounterEnd?.Invoke();
+            this.OnEncounterEnd?.Invoke(snapshot);
         }
         catch (Exception)
         {
@@ -562,7 +576,8 @@ internal sealed class MeterEngine
         }
 
         var now = this.clock();
-        if (effects.Any(e => e.Kind == EffectKind.Damage && e.Amount > 0))
+        if (effects.Any(e => e.Kind == EffectKind.Damage && e.Amount > 0) &&
+            CreditsPlayer(srcKey, tgtKey, tid))
         {
             this.NoteDamage(now);
         }
@@ -673,7 +688,7 @@ internal sealed class MeterEngine
         }
 
         var now = this.clock();
-        if (which == "DoT" && amount > 0)
+        if (which == "DoT" && amount > 0 && CreditsPlayer(appKey, tgtKey, tid))
         {
             this.NoteDamage(now);
         }

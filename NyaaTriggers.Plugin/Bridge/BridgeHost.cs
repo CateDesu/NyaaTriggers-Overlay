@@ -29,7 +29,9 @@ internal sealed class DpsState
     /// The last frame of a fight wins. A clear landing after the show:false
     /// still wipes the state and the hold never engages, which is the program's
     /// sample-fight reset and its zone change by design. On a wipe the program
-    /// re-sends the end frame after its clear, so the hold survives it.</summary>
+    /// re-sends the end frame after its clear, so the hold survives it.
+    /// The final rows ride the ended state itself: an end marker consumed in
+    /// the same drain batch as its last live frame still keeps them.</summary>
     internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;
@@ -129,6 +131,12 @@ internal sealed class BridgeHost : IDisposable
     /// detached server is seen as superseded at once.</summary>
     private volatile WebSocketServer? server;
 
+    /// <summary>Sequence of the session that currently owns the link, under
+    /// serverLock. Frames and disconnect callbacks from any other session are
+    /// stale: a replaced session can outlive its replacement long enough to
+    /// land both, and the server object cannot tell them apart.</summary>
+    private long currentSession;
+
     /// <summary>Fight clock as of <see cref="clockStamp"/>, interpolated from
     /// there so bars move smoothly between the program's ticks.</summary>
     private double clockBase;
@@ -153,6 +161,13 @@ internal sealed class BridgeHost : IDisposable
 
     internal DpsState Dps { get; private set; } = new();
 
+    /// <summary>The newest accepted nonempty live frame, kept in the state
+    /// layer rather than only in the window: an end marker landing in the
+    /// same drain batch as its final live frame would otherwise leave
+    /// hold-last showing older numbers. A clear deliberately keeps it, the
+    /// wipe sequence is clear then show:false and the hold must survive it.</summary>
+    private DpsState? lastLive;
+
     internal double Clock => this.clockRunning
         ? this.clockBase + ((Environment.TickCount64 - this.clockStamp) / 1000.0)
         : this.clockBase;
@@ -170,8 +185,8 @@ internal sealed class BridgeHost : IDisposable
         WebSocketServer? created = null;
         created = new WebSocketServer(
             this.config.Port,
-            raw => this.Receive(created!, raw),
-            connected => this.OnConnectionChanged(created!, connected),
+            (seq, raw) => this.Receive(created!, seq, raw),
+            (seq, connected) => this.OnConnectionChanged(created!, seq, connected),
             () => this.Greeting(created!));
         this.server = created;
         created.Start();
@@ -226,12 +241,16 @@ internal sealed class BridgeHost : IDisposable
     /// Guarded on the source under serverLock so the check and the enqueue are
     /// atomic with Stop's detach and drain: a frame from a superseded server
     /// lands before the drain or not at all, never after it onto freshly
-    /// cleared state.</summary>
-    private void Receive(WebSocketServer source, string raw)
+    /// cleared state. The sequence guard does the same within one server: a
+    /// session being replaced can still be mid-read-loop, and its late frames
+    /// must not land behind the replacement's session-start reset.</summary>
+    private void Receive(WebSocketServer source, long sequence, string raw)
     {
         lock (this.serverLock)
         {
-            if (!ReferenceEquals(source, this.server) || this.inbox.Count >= MaxInboxDepth)
+            if (!ReferenceEquals(source, this.server) ||
+                sequence != this.currentSession ||
+                this.inbox.Count >= MaxInboxDepth)
             {
                 return;
             }
@@ -268,7 +287,7 @@ internal sealed class BridgeHost : IDisposable
     /// on screen indefinitely. A mid-fight program repaints within a second.</summary>
     private void ClearLocalDps() => this.Dps = new DpsState();
 
-    private void OnConnectionChanged(WebSocketServer source, bool connected)
+    private void OnConnectionChanged(WebSocketServer source, long sequence, bool connected)
     {
         // A superseded server tearing down must not touch the live one's state.
         // The check and the enqueue stay under serverLock so they are atomic
@@ -282,16 +301,41 @@ internal sealed class BridgeHost : IDisposable
                 return;
             }
 
-            if (!connected)
+            if (connected)
             {
-                // The program going away must not leave a frozen timeline on screen
-                // pretending the pull is still running. Queued so it lands on the
-                // draw thread with everything else. Enqueued directly, past the
-                // depth cap: that cap exists to bound a flooding peer, and this
-                // one frame comes from us — dropping it would leave the peer's
-                // last frames frozen on screen forever.
+                // A superseded session can still be queued behind its
+                // replacement: only the newest session earns the reset.
+                if (sequence <= this.currentSession)
+                {
+                    return;
+                }
+
+                this.currentSession = sequence;
+
+                // Session-start reset. The new session's read loop starts
+                // after this callback returns, so the clear lands ahead of
+                // its frames. A replacement never runs the old session's
+                // disconnect, and without this that swap leaves the old
+                // pull's clock running and its rows on screen. Same
+                // enqueue-past-the-cap discipline as below.
                 this.inbox.Enqueue("{\"c\":\"clear\"}");
+                return;
             }
+
+            // A replaced session's late disconnect must not clear its
+            // replacement's freshly pushed schedule.
+            if (sequence != this.currentSession)
+            {
+                return;
+            }
+
+            // The program going away must not leave a frozen timeline on screen
+            // pretending the pull is still running. Queued so it lands on the
+            // draw thread with everything else. Enqueued directly, past the
+            // depth cap: that cap exists to bound a flooding peer, and this
+            // one frame comes from us — dropping it would leave the peer's
+            // last frames frozen on screen forever.
+            this.inbox.Enqueue("{\"c\":\"clear\"}");
         }
     }
 
@@ -503,12 +547,25 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Encounter over: hide the meter and drop the rows with it. Marked
-        // as an ending rather than a clear, so the hold-last option can tell
-        // "fight done" apart from "zone changed" and keep the final rows up.
+        // Encounter over: hide the meter, with the final rows riding the
+        // marker so hold-last keeps the newest numbers even when no draw
+        // observed them live. Marked as an ending rather than a clear, so
+        // the hold-last option can tell "fight done" apart from "zone
+        // changed" and keep the final rows up.
         if (show.ValueKind == JsonValueKind.False)
         {
-            this.Dps = new DpsState { Ended = true };
+            var last = this.lastLive;
+            this.Dps = last == null
+                ? new DpsState { Ended = true }
+                : new DpsState
+                {
+                    Ended = true,
+                    Title = last.Title,
+                    Duration = last.Duration,
+                    EncDps = last.EncDps,
+                    Rows = last.Rows,
+                };
+
             return;
         }
 
@@ -585,7 +642,7 @@ internal sealed class BridgeHost : IDisposable
             }
         }
 
-        this.Dps = new DpsState
+        var state = new DpsState
         {
             Show = true,
             Title = title,
@@ -593,6 +650,13 @@ internal sealed class BridgeHost : IDisposable
             EncDps = encDps,
             Rows = rows,
         };
+
+        if (state.Rows.Count > 0)
+        {
+            this.lastLive = state;
+        }
+
+        this.Dps = state;
     }
 
     /// <summary>Wipe the state the program pushed. The dps rows only when

@@ -75,6 +75,11 @@ internal sealed class StandaloneMeter : IDisposable
     private long nextPush;
     private Pending pending;
 
+    /// <summary>The finalized encounter's last values, carried from the
+    /// engine's end callback to the ended marker Update publishes. Events
+    /// since the last throttled live push ride this or they never publish.</summary>
+    private OverlaySnapshot? endSnapshot;
+
     /// <summary>Last zone seen, from the 01 line or the ChangeZone event.
     /// IINACT replays the current zone on every subscribe, so the clear keys
     /// on the zone actually moving, not on the event arriving.</summary>
@@ -115,6 +120,7 @@ internal sealed class StandaloneMeter : IDisposable
             }
 
             this.pending = Pending.None;
+            this.endSnapshot = null;
             if (this.feeding)
             {
                 this.feeding = false;
@@ -150,12 +156,15 @@ internal sealed class StandaloneMeter : IDisposable
         else if (this.pending == Pending.Ended)
         {
             // Encounter over: an ending, not a clear, so hold-last can keep
-            // the final rows up, same frame the program sends.
+            // the final rows up, same frame the program sends. The snapshot
+            // rides the marker, or a hit landing after the last throttled
+            // push would never make it on screen.
             this.feeding = true;
-            this.applyLocal(new DpsState { Ended = true });
+            this.applyLocal(ToEndState(this.endSnapshot));
         }
 
         this.pending = Pending.None;
+        this.endSnapshot = null;
 
         var live = this.engine.HasLiveEncounter;
         var now = Environment.TickCount64;
@@ -236,7 +245,13 @@ internal sealed class StandaloneMeter : IDisposable
         // relearned from the burst IINACT sends on subscribe, and nothing
         // stale can leak in from the last run.
         this.engine = new MeterEngine();
-        this.engine.OnEncounterEnd = () => this.pending = Pending.Ended;
+        this.engine.OnEncounterEnd = snap =>
+        {
+            this.endSnapshot = snap;
+            this.pending = Pending.Ended;
+        };
+
+        this.endSnapshot = null;
         this.wasLive = false;
         this.nextPush = 0;
 
@@ -509,7 +524,7 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    private static DpsState ToState(OverlaySnapshot snap)
+    private static DpsState ToState(OverlaySnapshot snap, bool ended = false)
     {
         // Feed strings get the same hygiene the bridge gives wire frames: the
         // endpoint is user-configurable, and a multi-hundred-KB actor name
@@ -530,13 +545,19 @@ internal sealed class StandaloneMeter : IDisposable
 
         return new DpsState
         {
-            Show = true,
+            Show = !ended,
+            Ended = ended,
             Title = BridgeHost.SanitizeText(snap.Title, MaxTextChars),
             Duration = snap.Duration,
             EncDps = snap.EncDps,
             Rows = rows,
         };
     }
+
+    /// <summary>The ended marker, carrying the finalized snapshot's rows when
+    /// the engine had any. Rowless only when the view was already empty.</summary>
+    private static DpsState ToEndState(OverlaySnapshot? snap)
+        => snap == null ? new DpsState { Ended = true } : ToState(snap, ended: true);
 
     private static Uri? ParseEndpoint(string? raw)
     {
