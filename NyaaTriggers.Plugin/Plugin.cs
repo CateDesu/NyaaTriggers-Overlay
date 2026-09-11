@@ -14,12 +14,13 @@ public sealed class Plugin : IDalamudPlugin
     private readonly BridgeHost bridge;
     private readonly ScaledFonts fonts;
     private readonly PluginUi ui;
+    private readonly bool commandRegistered;
 
     public Plugin(IDalamudPluginInterface pluginInterface)
     {
         Services.Initialize(pluginInterface);
 
-        this.config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        this.config = Configuration.Load(pluginInterface.GetPluginConfig, pluginInterface.ConfigFile.FullName);
         if (this.config.Version < 4)
         {
             if (this.config.Version < 2)
@@ -36,30 +37,61 @@ public sealed class Plugin : IDalamudPlugin
             this.config.Save();
         }
 
+        this.config.Sanitize();
         this.bridge = new BridgeHost(this.config);
-        this.fonts = new ScaledFonts();
-        this.ui = new PluginUi(this.config, this.bridge, this.fonts);
-
-        // Start clears the live timeline and alerts lists, and this
-        // constructor already races the render thread: it must run before
-        // any Draw subscription exists, or a frame mid iteration throws.
-        this.bridge.Start();
-
-        Services.Commands.AddHandler(CommandName, new CommandInfo(this.OnCommand)
+        ScaledFonts? fonts = null;
+        PluginUi? ui = null;
+        try
         {
-            HelpMessage = "Open NyaaTriggers settings. /nyaa lock toggles the overlay lock.",
-        });
+            this.fonts = fonts = new ScaledFonts();
+            this.ui = ui = new PluginUi(this.config, this.bridge, this.fonts);
+            this.bridge.Start();
+            this.commandRegistered = Services.Commands.AddHandler(CommandName, new CommandInfo(this.OnCommand)
+            {
+                HelpMessage = "Open NyaaTriggers settings. /nyaa lock toggles the overlay lock.",
+            });
 
-        pluginInterface.UiBuilder.Draw += this.ui.Draw;
-        pluginInterface.UiBuilder.OpenConfigUi += this.ui.OpenConfig;
-        pluginInterface.UiBuilder.OpenMainUi += this.ui.OpenConfig;
+            pluginInterface.UiBuilder.Draw += this.ui.Draw;
+            pluginInterface.UiBuilder.OpenConfigUi += this.ui.OpenConfig;
+            pluginInterface.UiBuilder.OpenMainUi += this.ui.OpenConfig;
 
-        // A fresh install starts unlocked so the boxes are visible and can be
-        // placed; the user locks them once they are where they want them.
-        if (!this.config.Locked)
+            if (!this.config.Locked)
+            {
+                Services.Log.Information(
+                    "NyaaTriggers overlay is unlocked. Position the boxes, then tick Lock in /nyaa.");
+            }
+        }
+        catch
         {
-            Services.Log.Information(
-                "NyaaTriggers overlay is unlocked. Position the boxes, then tick Lock in /nyaa.");
+            if (ui != null)
+            {
+                pluginInterface.UiBuilder.Draw -= ui.Draw;
+                pluginInterface.UiBuilder.OpenConfigUi -= ui.OpenConfig;
+                pluginInterface.UiBuilder.OpenMainUi -= ui.OpenConfig;
+            }
+
+            if (this.commandRegistered)
+            {
+                Services.Commands.RemoveHandler(CommandName);
+            }
+
+            try
+            {
+                if (ui != null)
+                {
+                    ui.Dispose();
+                }
+                else
+                {
+                    fonts?.Dispose();
+                }
+            }
+            finally
+            {
+                this.bridge.Dispose();
+            }
+
+            throw;
         }
     }
 
@@ -90,10 +122,19 @@ public sealed class Plugin : IDalamudPlugin
         Services.PluginInterface.UiBuilder.Draw -= this.ui.Draw;
         Services.PluginInterface.UiBuilder.OpenConfigUi -= this.ui.OpenConfig;
         Services.PluginInterface.UiBuilder.OpenMainUi -= this.ui.OpenConfig;
-        Services.Commands.RemoveHandler(CommandName);
+        if (this.commandRegistered)
+        {
+            Services.Commands.RemoveHandler(CommandName);
+        }
 
-        this.ui.Dispose();
-        this.bridge.Dispose();
+        try
+        {
+            this.ui.Dispose();
+        }
+        finally
+        {
+            this.bridge.Dispose();
+        }
 
         // Geometry is only tracked in memory while unlocked; make sure the last
         // drag survives a reload rather than only a settings click.

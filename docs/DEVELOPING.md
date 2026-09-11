@@ -94,14 +94,17 @@ The program already had reconnect handling for talking to IINACT, and the same c
   old session (the old one gets a 1001 close, not a bare drop).
 - Up to four sockets may be open while handshakes settle, since a reconnect often races the old
   session's teardown. Only sessions still in the handshake can be evicted to make room, and if all
-  four slots are established sessions the newcomer is refused. Something on the machine can't kick
-  the program off the overlay by reconnecting in a loop.
+  four slots are established sessions the newcomer is refused. Bare connect-and-hold floods cannot
+  evict the program. A local process that completes handshakes can replace it by design.
 - A handshake gets 5 seconds, then the slot is reclaimed.
 - TCP keepalive is on (30s idle, then 3 probes 10s apart), so a half-open peer dies in about a
   minute instead of the OS default of hours.
 - Any handshake carrying an `Origin` header is refused. WebSocket is exempt from the same-origin
   policy, so without this any page you happened to be browsing could open the socket and inject
   callouts. Browsers always send `Origin`; the program never does.
+- The bridge inbox holds at most 4 MiB of UTF-16 payload and 512 messages. Each update
+  drains at most 64 messages and 2 MiB. Overflow closes the session so the program can reconnect
+  and resend its schedule.
 - Text frames are capped at 1 MiB and must be valid UTF-8. Anything outside the protocol closes
   the session with the proper RFC 6455 code rather than being guessed at.
 

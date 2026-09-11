@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -32,11 +31,6 @@ internal sealed class StandaloneMeter : IDisposable
     /// <summary>Messages applied per frame, same bound as the bridge inbox.</summary>
     private const int MaxMessagesPerFrame = 64;
 
-    /// <summary>Inbox depth before frames drop. A stalled draw thread must not
-    /// grow it without limit, and a flood of log lines is exactly what a pull
-    /// opening looks like.</summary>
-    private const int MaxInboxDepth = 512;
-
     /// <summary>How long unload waits for background client drains, matching
     /// the bridge's own drain bound.</summary>
     private const int DrainWaitMs = 4000;
@@ -57,14 +51,16 @@ internal sealed class StandaloneMeter : IDisposable
     private readonly Func<bool> appConnected;
     private readonly Action<DpsState> applyLocal;
     private readonly Action clearLocal;
-    private readonly ConcurrentQueue<string> inbox = new();
+    private readonly MessageInbox inbox = new();
+    private long droppedMessages;
+    private long nextWarning;
 
     /// <summary>Guards the client handle and the drain list, so a feed frame
     /// or a background drain cannot race the live client being swapped.</summary>
     private readonly object gate = new();
 
     /// <summary>Old clients draining in the background; unload waits on them,
-    /// since a receive loop outliving the load context runs freed code.</summary>
+    /// so receive callbacks finish before plugin teardown.</summary>
     private readonly List<Task> pendingDrains = new();
 
     private MeterEngine engine = new();
@@ -73,6 +69,7 @@ internal sealed class StandaloneMeter : IDisposable
     private bool feeding;
     private bool wasLive;
     private long nextPush;
+    private long retryAt;
     private Pending pending;
 
     /// <summary>The finalized encounter's last values, carried from the
@@ -100,7 +97,7 @@ internal sealed class StandaloneMeter : IDisposable
     internal void Update()
     {
         var wanted = this.config.StandaloneMeter && !this.appConnected();
-        if (wanted && this.client == null)
+        if (wanted && this.client == null && Environment.TickCount64 >= this.retryAt)
         {
             this.StartClient();
         }
@@ -115,9 +112,7 @@ internal sealed class StandaloneMeter : IDisposable
             // queued belong to a source that no longer owns the meter, so
             // they are discarded, not applied: applying one could resurrect
             // the rows the transition clear just dropped.
-            while (this.inbox.TryDequeue(out _))
-            {
-            }
+            this.inbox.Clear();
 
             this.pending = Pending.None;
             this.endSnapshot = null;
@@ -135,16 +130,38 @@ internal sealed class StandaloneMeter : IDisposable
             return;
         }
 
-        var budget = MaxMessagesPerFrame;
-        while (budget-- > 0 && this.inbox.TryDequeue(out var raw))
+        long dropped;
+        lock (this.gate)
+        {
+            dropped = this.droppedMessages;
+        }
+
+        if (dropped > 0)
+        {
+            this.StopClient();
+            this.retryAt = Environment.TickCount64 + 5000;
+            this.engine.FeedLost(incomplete: true);
+            this.Warn($"IINACT inbox lost at least {dropped} messages, encounter incomplete, reconnecting");
+        }
+
+        var bytes = MessageInbox.FrameBytes;
+        for (var count = 0; count < MaxMessagesPerFrame &&
+             this.inbox.TryDequeue(ref bytes, count == 0, out var raw); count++)
         {
             try
             {
-                this.Handle(raw);
+                if (raw == null)
+                {
+                    this.engine.FeedLost();
+                }
+                else
+                {
+                    this.Handle(raw);
+                }
             }
             catch (Exception ex)
             {
-                Services.Log.Warning($"bad IINACT message: {ex.Message}");
+                this.Warn($"bad IINACT message: {ex.Message}");
             }
         }
 
@@ -184,7 +201,11 @@ internal sealed class StandaloneMeter : IDisposable
 
     /// <summary>Re-dial after the endpoint field was applied. The next Update
     /// starts a fresh client on the new address.</summary>
-    internal void Restart() => this.StopClient();
+    internal void Restart()
+    {
+        this.StopClient();
+        this.retryAt = 0;
+    }
 
     internal StandaloneState State
     {
@@ -226,7 +247,8 @@ internal sealed class StandaloneMeter : IDisposable
                 return "Feed URL must start with ws:// or wss://.";
             }
 
-            return this.client?.Status ?? "Connecting to IINACT.";
+            return this.client?.Status ?? (Environment.TickCount64 < this.retryAt
+                ? "Meter feed overloaded. Retrying shortly." : "Connecting to IINACT.");
         }
     }
 
@@ -248,6 +270,7 @@ internal sealed class StandaloneMeter : IDisposable
         this.engine.OnEncounterEnd = snap =>
         {
             this.endSnapshot = snap;
+            this.wasLive = false;
             this.pending = Pending.Ended;
         };
 
@@ -258,7 +281,8 @@ internal sealed class StandaloneMeter : IDisposable
         // The callback needs to know which client it came from, so a late
         // frame from one already stopped can be ignored.
         IinactClient? created = null;
-        created = new IinactClient(uri, raw => this.Receive(created!, raw));
+        created = new IinactClient(uri, raw => this.Receive(created!, raw),
+            () => this.Receive(created!, null));
         lock (this.gate)
         {
             this.client = created;
@@ -274,15 +298,14 @@ internal sealed class StandaloneMeter : IDisposable
         {
             old = this.client;
             this.client = null;
+            this.droppedMessages = 0;
         }
 
         // Drain what the detached client queued before the swap. The Receive
         // guard keeps new frames out from here on, but a backlog already in
         // the inbox would be applied onto the fresh engine the next Update
         // builds. Same drain the bridge's Stop does after a server swap.
-        while (this.inbox.TryDequeue(out _))
-        {
-        }
+        this.inbox.Clear();
 
         if (old == null)
         {
@@ -304,16 +327,29 @@ internal sealed class StandaloneMeter : IDisposable
     /// Guarded on the source under gate so the check and the enqueue are atomic
     /// with StopClient's detach: a frame from a superseded client lands before
     /// the swap or not at all, never after it onto the fresh engine.</summary>
-    private void Receive(IinactClient source, string raw)
+    private void Receive(IinactClient source, string? raw)
     {
         lock (this.gate)
         {
-            if (!ReferenceEquals(source, this.client) || this.inbox.Count >= MaxInboxDepth)
+            if (!ReferenceEquals(source, this.client))
             {
                 return;
             }
 
-            this.inbox.Enqueue(raw);
+            if (this.droppedMessages > 0 || !this.inbox.TryEnqueue(raw))
+            {
+                this.droppedMessages++;
+            }
+        }
+    }
+
+    private void Warn(string message)
+    {
+        var now = Environment.TickCount64;
+        if (now >= this.nextWarning)
+        {
+            this.nextWarning = now + 5000;
+            Services.Log.Warning(message);
         }
     }
 
@@ -329,14 +365,14 @@ internal sealed class StandaloneMeter : IDisposable
             // Not JSON: some feeds ship bare log lines. Fall through.
         }
 
-        if (doc == null || doc.RootElement.ValueKind != JsonValueKind.Object)
-        {
-            this.TreatLine(raw.Trim());
-            return;
-        }
-
         using (doc)
         {
+            if (doc == null || doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                this.TreatLine(raw.Trim());
+                return;
+            }
+
             var root = doc.RootElement;
             var type = ReadString(root, "type");
             switch (type.ToLowerInvariant())
@@ -424,6 +460,7 @@ internal sealed class StandaloneMeter : IDisposable
                 case "partychanged":
                     if (root.TryGetProperty("party", out var party) && party.ValueKind == JsonValueKind.Array)
                     {
+                        var members = new List<KeyValuePair<int, int>>();
                         foreach (var member in party.EnumerateArray())
                         {
                             if (member.ValueKind != JsonValueKind.Object)
@@ -435,9 +472,11 @@ internal sealed class StandaloneMeter : IDisposable
                             var job = ReadLong(member, "job");
                             if (aid != null && job is > 0 and <= int.MaxValue)
                             {
-                                this.engine.NoteJob(aid.Value, (int)job);
+                                members.Add(new KeyValuePair<int, int>(aid.Value, (int)job));
                             }
                         }
+
+                        this.engine.SetRoster(members);
                     }
 
                     break;

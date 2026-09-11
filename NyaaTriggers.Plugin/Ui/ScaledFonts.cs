@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Dalamud.Interface.ManagedFontAtlas;
 
 namespace NyaaTriggers.Plugin.Ui;
@@ -45,6 +46,9 @@ internal sealed class ScaledFonts : IDisposable
     /// the timeline and the alerts all sharpen from the same list.</summary>
     private static readonly float[] Buckets = BuildBuckets();
 
+    private int generation;
+    internal int Generation => Volatile.Read(ref this.generation);
+
     private readonly IFontAtlas atlas;
     private readonly Dictionary<float, IFontHandle> handles = new();
 
@@ -69,6 +73,7 @@ internal sealed class ScaledFonts : IDisposable
         {
             var handle = this.atlas.NewDelegateFontHandle(
                 e => e.OnPreBuild(tk => tk.AddDalamudDefaultFont(bucket)));
+            handle.ImFontChanged += (_, _) => Interlocked.Increment(ref this.generation);
             this.handles[bucket] = handle;
             return handle;
         }

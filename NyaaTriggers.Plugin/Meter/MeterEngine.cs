@@ -22,8 +22,8 @@ namespace NyaaTriggers.Plugin.Meter;
 // Encounter lifecycle mirrors ACT. Begins on a combat flag rising, either
 // InCombat bool, or lazily on the first hostile effect involving a player,
 // so attaching mid-fight still meters the pull. Finalizes on a combat flag
-// dropping, on a wipe, or on any 01 zone line. Pulls with no player damage
-// and no player damage taken finalize silently, no callback.
+// dropping, on a wipe, or on any 01 zone line. Empty pulls still send an end
+// marker so the last live row can close.
 //
 // Every event lands twice, on the encounter and on the display view. Only
 // the view resets when damage resumes past the idle timeout, so the overlay
@@ -73,6 +73,10 @@ internal sealed class MeterEngine
     private const int MaxOverlayRows = 24;
 
     private const int HealType = 0x04;
+    private const int MaxNameChars = 256;
+
+    private static string BoundName(string name)
+        => name.Length <= MaxNameChars ? name : name[..MaxNameChars];
 
     // ClassJob id to acronym. Ids 8 to 18 are crafting and gathering classes
     // and map to "", no combat row worth labelling. 0 is NPC or none.
@@ -88,6 +92,7 @@ internal sealed class MeterEngine
 
     private readonly Func<double> clock;
     private readonly BoundedMap<int> jobs = new();      // actor id to ClassJob id, nonzero means a player
+    private readonly Dictionary<int, int> rosterJobs = new();
     private readonly BoundedMap<int> owners = new();    // pet or summon id to owner id
     private readonly BoundedMap<string> names = new();  // actor id to last seen name
 
@@ -106,7 +111,7 @@ internal sealed class MeterEngine
 
     private static double DefaultClock() => Environment.TickCount64 / 1000.0;
 
-    /// <summary>Fired synchronously when a non-empty encounter finalizes.
+    /// <summary>Fired synchronously whenever an encounter finalizes.
     /// Carries the final snapshot of the display view: the encounter objects
     /// are already gone by then, and the last throttled live push can be up
     /// to a second stale. Null when the view holds nothing worth showing.</summary>
@@ -199,8 +204,36 @@ internal sealed class MeterEngine
         this.meId = aid;
     }
 
+    internal void SetRoster(IEnumerable<KeyValuePair<int, int>> members)
+    {
+        this.rosterJobs.Clear();
+        foreach (var member in members.Take(MaxOverlayRows))
+        {
+            if (member.Key > 0 && member.Value > 0)
+            {
+                this.rosterJobs[member.Key] = member.Value;
+                this.NoteJob(member.Key, member.Value);
+            }
+        }
+    }
+
+    private int JobFor(int id)
+    {
+        if (this.rosterJobs.TryGetValue(id, out var job))
+        {
+            return job;
+        }
+
+        if (this.current?.Combatants.TryGetValue(id, out var active) == true && active.Job != 0)
+        {
+            return active.Job;
+        }
+
+        return this.jobs.Get(id);
+    }
+
     private bool IsPlayer(int? aid)
-        => aid is int id && (id == this.meId || this.jobs.Get(id) != 0);
+        => aid is int id && (id == this.meId || this.JobFor(id) != 0);
 
     /// <summary>Does the event credit the player meter: damage a player or a
     /// player's pet dealt, or damage a player directly took. A pet target
@@ -230,12 +263,13 @@ internal sealed class MeterEngine
 
     private Combatant CombatantFor(Encounter enc, int key, string name = "")
     {
+        name = BoundName(name);
         if (!enc.Combatants.TryGetValue(key, out var c))
         {
             c = new Combatant(
                 key,
                 name.Length > 0 ? name : this.names.Get(key) ?? string.Empty,
-                this.jobs.Get(key));
+                this.JobFor(key));
             enc.Combatants[key] = c;
         }
         else
@@ -248,9 +282,9 @@ internal sealed class MeterEngine
                 c.Name = name.Length > 0 ? name : this.names.Get(key) ?? string.Empty;
             }
 
-            if (c.Job == 0 && this.jobs.Get(key) != 0)
+            if (c.Job == 0 && this.JobFor(key) != 0)
             {
-                c.Job = this.jobs.Get(key);
+                c.Job = this.JobFor(key);
             }
         }
 
@@ -287,10 +321,10 @@ internal sealed class MeterEngine
     }
 
     /// <summary>End the current encounter, if any, and fire OnEncounterEnd
-    /// for non-empty ones. Safe to call with nothing in progress. The final
+    /// even for empty ones. Safe to call with nothing in progress. The final
     /// snapshot is taken before the encounter objects go away, so the
     /// callback can still publish the values the last live push missed.</summary>
-    private void FinalizeEncounter()
+    private void FinalizeEncounter(bool incomplete = false)
     {
         var enc = this.current;
         if (enc == null)
@@ -298,24 +332,9 @@ internal sealed class MeterEngine
             return;
         }
 
-        var snapshot = this.LiveSnapshot();
+        var snapshot = this.Snapshot(final: true, incomplete);
         this.current = null;
         this.view = null;
-        var any = false;
-        foreach (var c in enc.Combatants.Values)
-        {
-            if (c.Damage > 0 || c.DamageTaken > 0)
-            {
-                any = true;
-                break;
-            }
-        }
-
-        if (!any)
-        {
-            return;   // empty pull, nothing worth keeping
-        }
-
         try
         {
             this.OnEncounterEnd?.Invoke(snapshot);
@@ -349,6 +368,19 @@ internal sealed class MeterEngine
     // ------------------------------------------------------------------
     // feed
     // ------------------------------------------------------------------
+
+    /// <summary>Close the feed session before replay can supply fresh identities.</summary>
+    internal void FeedLost(bool incomplete = false)
+    {
+        this.FinalizeEncounter(incomplete);
+        this.inAct = false;
+        this.inGame = false;
+        this.jobs.Clear();
+        this.rosterJobs.Clear();
+        this.owners.Clear();
+        this.names.Clear();
+        this.meId = null;
+    }
 
     /// <summary>InCombat event, inACTCombat and inGameCombat. A rising edge
     /// on either flag begins the encounter, a falling edge on either ends it.
@@ -437,7 +469,10 @@ internal sealed class MeterEngine
         // reassigned per entry, so actor knowledge must reset anyway, the
         // local player id too. The next 02 line pins it again.
         this.FinalizeEncounter();
-        this.zone = fields[3].Trim();
+        this.zone = BoundName(fields[3].Trim());
+        this.inAct = false;
+        this.inGame = false;
+        this.rosterJobs.Clear();
         this.jobs.Clear();
         this.owners.Clear();
         this.names.Clear();
@@ -460,7 +495,7 @@ internal sealed class MeterEngine
         }
 
         this.meId = aid;
-        var name = fields[3].Trim();
+        var name = BoundName(fields[3].Trim());
         if (name.Length > 0)
         {
             this.names.Set(aid.Value, name);
@@ -480,7 +515,7 @@ internal sealed class MeterEngine
             return;
         }
 
-        var name = fields[3].Trim();
+        var name = BoundName(fields[3].Trim());
         if (name.Length > 0)
         {
             this.names.Set(aid.Value, name);
@@ -586,7 +621,7 @@ internal sealed class MeterEngine
         // display view, what the meter shows right now.
         foreach (var enc in new[] { this.current, this.view })
         {
-            if (enc != null)
+            if (enc != null && (enc != this.view || !this.ViewPaused(now)))
             {
                 this.ApplyAbility(enc, fields, effects, now, srcKey, tgtKey, sid, tid, ownerName);
             }
@@ -604,7 +639,7 @@ internal sealed class MeterEngine
         int? tid,
         string ownerName)
     {
-        if (effects.Any(e => e.Kind != EffectKind.None))
+        if (CreditsPlayer(srcKey, tgtKey, tid) && effects.Any(e => e.Kind != EffectKind.None))
         {
             enc.Last = now;
         }
@@ -695,7 +730,7 @@ internal sealed class MeterEngine
 
         foreach (var enc in new[] { this.current, this.view })
         {
-            if (enc != null)
+            if (enc != null && (enc != this.view || !this.ViewPaused(now)))
             {
                 ApplyDotHot(enc, fields, which, amount, now, appKey, tgtKey, appId, tid);
             }
@@ -720,7 +755,11 @@ internal sealed class MeterEngine
             return;
         }
 
-        enc.Last = now;
+        if (appKey != null || (which == "DoT" && tgtKey != null && tgtKey == tid))
+        {
+            enc.Last = now;
+        }
+
         if (which == "DoT")
         {
             if (appKey is int ak)
@@ -792,7 +831,12 @@ internal sealed class MeterEngine
     /// after the last damage and reset when damage resumes. A whiffed pull
     /// opens on a miss and never stamps last_damage, so the clamp falls back
     /// to the encounter start or the live clock would run unbounded.</summary>
-    internal OverlaySnapshot? LiveSnapshot()
+    internal OverlaySnapshot? LiveSnapshot() => this.Snapshot(final: false);
+
+    private bool ViewPaused(double now)
+        => this.view != null && now - (this.view.LastDamage ?? this.view.Start) > this.idleTimeout;
+
+    private OverlaySnapshot? Snapshot(bool final, bool incomplete = false)
     {
         if (this.current == null)
         {
@@ -801,7 +845,9 @@ internal sealed class MeterEngine
 
         var enc = this.view ?? this.current;
         var idleBase = enc.LastDamage ?? enc.Start;
-        var spanEnd = Math.Min(this.clock(), idleBase + this.idleTimeout);
+        var spanEnd = final
+            ? enc.Last ?? enc.Start
+            : Math.Min(this.clock(), idleBase + this.idleTimeout);
         var duration = Math.Max(0.0, spanEnd - enc.Start);
         var encPer = Math.Max(1.0, duration);
         long totalDamage = 0;
@@ -830,7 +876,7 @@ internal sealed class MeterEngine
             .ToList();
         return new OverlaySnapshot
         {
-            Title = enc.Title,
+            Title = incomplete ? $"{enc.Title} [incomplete feed]" : enc.Title,
             Duration = MmSs(duration),
             EncDps = Math.Round(totalDamage / Math.Max(1.0, duration), 1),
             Rows = sorted,

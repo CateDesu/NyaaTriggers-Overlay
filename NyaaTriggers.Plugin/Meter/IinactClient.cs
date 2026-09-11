@@ -44,6 +44,7 @@ internal sealed class IinactClient : IDisposable
 
     private readonly Uri endpoint;
     private readonly Action<string> onMessage;
+    private readonly Action onSessionEnd;
 
     /// <summary>Guards the loop task handle, so a Stop on the draw thread
     /// cannot race the loop being published.</summary>
@@ -56,10 +57,11 @@ internal sealed class IinactClient : IDisposable
     private volatile bool connected;
     private volatile string status = "Connecting to IINACT.";
 
-    internal IinactClient(Uri endpoint, Action<string> onMessage)
+    internal IinactClient(Uri endpoint, Action<string> onMessage, Action? onSessionEnd = null)
     {
         this.endpoint = endpoint;
         this.onMessage = onMessage;
+        this.onSessionEnd = onSessionEnd ?? (() => { });
     }
 
     /// <summary>Read unsynchronized by the config window on the draw thread
@@ -100,6 +102,7 @@ internal sealed class IinactClient : IDisposable
         {
             using var ws = new ClientWebSocket();
             ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+            ws.Options.KeepAliveTimeout = TimeSpan.FromSeconds(90);
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(this.stop.Token);
@@ -134,6 +137,7 @@ internal sealed class IinactClient : IDisposable
             finally
             {
                 this.connected = false;
+                this.onSessionEnd();
             }
 
             if (!this.running)

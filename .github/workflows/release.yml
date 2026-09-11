@@ -27,13 +27,11 @@ on:
 permissions:
   contents: read
 
-# One in-flight build per ref. Rapid pushes to main share a group, so a newer
-# commit supersedes an older still-building rolling run. A canceled run that
-# already published self-heals: the next run's prune sweeps its leftover
-# rolling release.
+# Release creation, listing publication and pruning share one queue across refs.
+# Pending runs can be reordered, so publication also refuses a version downgrade.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-publication
+  cancel-in-progress: false
 
 env:
   # Pinned to the API level the plugin targets. Tracking "latest" would mean a
@@ -56,11 +54,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: v
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           CS=$(grep -oP '<Version>\K[^<]+' NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj | head -1)
           if [ -z "$CS" ]; then echo "::error::could not read <Version> from the csproj"; exit 1; fi
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${{ github.ref_name }}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF_NAME"
             VER="${TAG#v}"
             # The tag is the version and must equal the csproj's. Building with
             # the tag would mask a disagreement, so compare first.
@@ -71,12 +73,12 @@ jobs:
           else
             # Only main has a release channel. A manual run from another branch
             # must never publish over it, so fail rather than guess.
-            if [ "${{ github.ref_name }}" != "main" ]; then
-              echo "::error::branch ${{ github.ref_name }} has no release channel"; exit 1
+            if [ "$REF_NAME" != "main" ]; then
+              echo "::error::branch $REF_NAME has no release channel"; exit 1
             fi
             BASE=$(echo "$CS" | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+')
             if [ -z "$BASE" ]; then echo "::error::csproj <Version> $CS is not x.y.z[.w]"; exit 1; fi
-            VER="${BASE}.${{ github.run_number }}"
+            VER="${BASE}.${RUN_NUMBER}"
             TAG="v${VER}"
             ROLL=true
           fi
@@ -91,6 +93,8 @@ jobs:
     needs: [meta]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      published: ${{ steps.fresh.outputs.publish }}
     permissions:
       contents: write
     steps:
@@ -118,7 +122,15 @@ jobs:
       # version, so the listing can never advertise one version while the zip
       # reports another.
       - name: Build
-        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release -p:Version="${{ needs.meta.outputs.version }}"
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release -p:Version="$VERSION"
+
+      - name: Run regression tests
+        run: |
+          dotnet run --project tests/MeterEngineTests
+          dotnet run --project tests/BridgeTests
+          python3 tests/test_release_version.py
 
       - name: Check the package came out
         env:
@@ -146,10 +158,20 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
             echo "::error::tag ${GITHUB_REF_NAME} is not an ancestor of main"; exit 1; }
 
+      - name: Refuse stale publication
+        id: fresh
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          git fetch origin main
+          git show origin/main:pluginmaster.json > /tmp/current-pluginmaster.json
+          python3 tools/check_publish_version.py /tmp/current-pluginmaster.json "$VERSION" >> "$GITHUB_OUTPUT"
+
       # The listing only updates in the next step, so the release being visible
       # for a few seconds before the listing points at it harms nothing: nobody
       # discovers builds except through the listing.
       - name: Publish the release
+        if: steps.fresh.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
@@ -160,6 +182,7 @@ jobs:
             --generate-notes
 
       - name: Republish pluginmaster.json
+        if: steps.fresh.outputs.publish == 'true'
         env:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
@@ -191,7 +214,7 @@ jobs:
   # never deleted before the new one is visible.
   prune-rolling:
     needs: [meta, build]
-    if: needs.meta.outputs.rolling == 'true'
+    if: needs.meta.outputs.rolling == 'true' && needs.build.outputs.published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

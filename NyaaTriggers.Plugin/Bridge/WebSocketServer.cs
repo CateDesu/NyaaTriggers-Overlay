@@ -86,11 +86,10 @@ internal sealed class WebSocketServer : IDisposable
     private readonly Func<string?> onGreeting;
 
     private readonly List<TcpListener> listeners = new();
+    private readonly List<Task> acceptTasks = new();
 
-    /// <summary>Every accepted session including ones still in the handshake,
-    /// mapped to the task serving it. Dispose walks this and waits: a session
-    /// left running after Dalamud tears down the plugin's load context executes
-    /// freed code and takes the game with it.</summary>
+    /// <summary>Accepted sessions and their tasks, retained until both the
+    /// receive loop and the send pump have finished.</summary>
     private readonly ConcurrentDictionary<Session, Task> sessions = new();
 
     /// <summary>Guards the disposed flag against session registration, so a
@@ -125,6 +124,13 @@ internal sealed class WebSocketServer : IDisposable
 
     internal void Start()
     {
+        if (this.port is < 1 or > 65535)
+        {
+            this.LastError = "Port must be between 1 and 65535.";
+            Services.Log.Error($"NyaaTriggers link: {this.LastError}");
+            return;
+        }
+
         this.cts = new CancellationTokenSource();
         var token = this.cts.Token;
 
@@ -157,7 +163,7 @@ internal sealed class WebSocketServer : IDisposable
 
             bound++;
             this.listeners.Add(listener);
-            _ = Task.Run(() => this.AcceptLoopAsync(listener, token), token);
+            this.acceptTasks.Add(Task.Run(() => this.AcceptLoopAsync(listener, token), token));
         }
 
         // A v4 failure is fatal in practice even when ::1 bound fine: the program
@@ -166,6 +172,7 @@ internal sealed class WebSocketServer : IDisposable
         // then reports as dead.
         if (ipv4Error != null)
         {
+            this.cts.Cancel();
             foreach (var listener in this.listeners)
             {
                 listener.Stop();
@@ -240,17 +247,24 @@ internal sealed class WebSocketServer : IDisposable
                 continue;
             }
 
-            if (!this.TryMakeRoomForNewcomer())
+            try
             {
-                // Every slot holds an established session. Refusing is safe:
-                // the program backs off and reconnects, so a reconnect that arrives
-                // while old sessions are still unwinding recovers on its own.
-                Services.Log.Debug("all session slots are established; refusing a new connection");
-                client.Dispose();
-                continue;
-            }
+                lock (this.gate)
+                {
+                    if (this.disposed || !this.TryMakeRoomForNewcomer())
+                    {
+                        client.Dispose();
+                        continue;
+                    }
 
-            this.Register(client);
+                    this.Register(client);
+                }
+            }
+            catch (Exception ex)
+            {
+                client.Dispose();
+                Services.Log.Warning($"could not register link connection: {ex.Message}");
+            }
         }
     }
 
@@ -326,7 +340,7 @@ internal sealed class WebSocketServer : IDisposable
                 // TcpKeepAlive* are platform-dependent in edge cases; if they are
                 // unsupported the plain Keepalive option above still applies.
             }
-            session = new Session(client);
+            session = new Session(client, this.gate);
         }
         catch (Exception ex)
         {
@@ -369,46 +383,27 @@ internal sealed class WebSocketServer : IDisposable
                 return;
             }
 
-            // The slot only becomes safe from eviction once it is marked
-            // established, and a newcomer admitted during the handshake may
-            // already have torn this session down. Publishing it anyway would
-            // close the healthy program connection below for a dead socket.
-            if (session.IsDisposed)
-            {
-                return;
-            }
-
-            // Past this point the peer has proven it speaks the protocol, so
-            // the slot can no longer be taken by a newcomer.
-            session.MarkEstablished();
-
-            // Tracked on the session so Dispose waits for the send side too:
-            // an untracked pump could outlive the plugin's teardown. Assigned
-            // under the gate Dispose snapshots with, so a session in the
-            // dictionary always shows its real pump. A teardown that already
-            // ran owns the unwind, and no pump starts after it.
+            Session? previous;
             lock (this.gate)
             {
-                if (this.disposed)
+                if (this.disposed || session.IsDisposed ||
+                    (this.peer != null && this.peer.Sequence > session.Sequence))
                 {
                     return;
                 }
 
+                // Eviction, disposal and publication share this gate.
+                session.MarkEstablished();
+                var greeting = this.onGreeting();
+                if (greeting != null)
+                {
+                    session.Enqueue(BuildFrame(0x1, Encoding.UTF8.GetBytes(greeting)));
+                }
+
                 session.Pump = Task.Run(() => PumpAsync(session));
+                previous = Interlocked.Exchange(ref this.peer, session);
             }
 
-            // Queued before the session is published, so a concurrent Send
-            // cannot overtake it. The protocol promises the program this frame is
-            // first, and publishing then greeting loses that race.
-            var greeting = this.onGreeting();
-            if (greeting != null)
-            {
-                session.Enqueue(BuildFrame(0x1, Encoding.UTF8.GetBytes(greeting)));
-            }
-
-            // One client at a time: a reconnect after the program restarted would
-            // otherwise leave two sessions both thinking they own the overlay.
-            var previous = Interlocked.Exchange(ref this.peer, session);
             if (previous != null)
             {
                 // 1001 "going away", not a bare socket drop: every other exit
@@ -440,8 +435,6 @@ internal sealed class WebSocketServer : IDisposable
         }
         finally
         {
-            this.sessions.TryRemove(session, out _);
-
             // Only clear the shared slot if we are still the current session:
             // a newer client may have replaced us already.
             if (Interlocked.CompareExchange(ref this.peer, null, session) == session)
@@ -459,6 +452,8 @@ internal sealed class WebSocketServer : IDisposable
             }
 
             session.Dispose();
+            await session.Pump.ConfigureAwait(false);
+            this.sessions.TryRemove(session, out _);
         }
     }
 
@@ -761,6 +756,17 @@ internal sealed class WebSocketServer : IDisposable
         return true;
     }
 
+    internal void Disconnect(long sequence)
+    {
+        Session? session;
+        lock (this.gate)
+        {
+            session = this.peer?.Sequence == sequence ? this.peer : null;
+        }
+
+        session?.Dispose();
+    }
+
     /// <summary>Queue a text message to the program. Safe from the draw thread:
     /// returns immediately, preserves order, and never throws.</summary>
     internal void Send(string text)
@@ -914,11 +920,17 @@ internal sealed class WebSocketServer : IDisposable
         Task[] running;
         lock (this.gate)
         {
+            if (this.disposed)
+            {
+                return;
+            }
+
             this.disposed = true;
+            Interlocked.Exchange(ref this.peer, null);
             open = this.sessions.Keys.ToArray();
             // The send pumps as well as the read loops: both run plugin code
             // and neither may outlive the teardown below.
-            running = this.sessions.Values.Concat(open.Select(s => s.Pump)).ToArray();
+            running = this.sessions.Values.Concat(open.Select(s => s.Pump)).Concat(this.acceptTasks).ToArray();
         }
 
         try
@@ -943,8 +955,6 @@ internal sealed class WebSocketServer : IDisposable
         }
 
         this.listeners.Clear();
-        Interlocked.Exchange(ref this.peer, null);
-
         // Every session, not just the current one: a socket read in flight does
         // not honour a token, so closing the socket under it is the only way to
         // end these tasks. One throwing session must not abort the teardown of
@@ -961,9 +971,8 @@ internal sealed class WebSocketServer : IDisposable
             }
         }
 
-        // Returning while a session task is still mid-callback means plugin code
-        // runs after Dalamud has torn the load context down. Bounded, so a
-        // wedged socket cannot hang the game's unload either.
+        // Wait for callbacks to finish, with a deadline so a wedged socket
+        // cannot hang plugin unload.
         try
         {
             if (!Task.WhenAll(running).Wait(DisposeDrainMs))
@@ -988,6 +997,7 @@ internal sealed class WebSocketServer : IDisposable
         private static long counter;
 
         private readonly TcpClient client;
+        private readonly object lifecycleGate;
         private readonly CancellationTokenSource cts = new();
         private readonly TaskCompletionSource drained =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -995,8 +1005,9 @@ internal sealed class WebSocketServer : IDisposable
         private int disposedFlag;
         private int establishedFlag;
 
-        internal Session(TcpClient client)
+        internal Session(TcpClient client, object lifecycleGate)
         {
+            this.lifecycleGate = lifecycleGate;
             this.client = client;
             this.Sequence = Interlocked.Increment(ref counter);
             this.Stream = client.GetStream();
@@ -1047,9 +1058,12 @@ internal sealed class WebSocketServer : IDisposable
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref this.disposedFlag, 1) != 0)
+            lock (this.lifecycleGate)
             {
-                return;
+                if (Interlocked.Exchange(ref this.disposedFlag, 1) != 0)
+                {
+                    return;
+                }
             }
 
             this.Outbox.Writer.TryComplete();

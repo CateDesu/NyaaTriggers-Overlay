@@ -30,6 +30,9 @@ internal sealed class AlertsWindow : OverlayWindow
     private const float LifelineHeight = 2.0f;
 
     private readonly BridgeHost bridge;
+    private readonly Dictionary<LayoutKey, List<MeasuredLine>> layouts = new();
+    private readonly record struct LayoutKey(string Text, float Width, ImFontPtr Font, float FontSize, int Generation, bool Wrap);
+    private readonly record struct MeasuredLine(string Text, float Width);
 
     internal AlertsWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
         : base("NyaaTriggers Alerts###nyaaAlerts", config, fonts)
@@ -76,12 +79,11 @@ internal sealed class AlertsWindow : OverlayWindow
     /// front so the bottom-anchored layout can total the stack's height
     /// before anything is placed.</summary>
     private readonly record struct DrawItem(
-        List<string> Lines, Vector4 Color, float Alpha, bool IsAlarm,
-        float Scale, float LineHeight, float Life);
+        List<MeasuredLine> Lines, Vector4 Color, float Alpha, bool IsAlarm,
+        float Scale, float LineHeight, float MeasuredHeight, float Life);
 
     /// <summary>Scratch for the collect-then-draw pass, cleared each frame.
-    /// The per-callout line lists still allocate, as the wrapped draw always
-    /// did; the outer list no longer does.</summary>
+    /// Layouts survive across frames until the text or font changes.</summary>
     private readonly List<DrawItem> items = new();
 
     protected override void DrawContent()
@@ -248,10 +250,27 @@ internal sealed class AlertsWindow : OverlayWindow
     private DrawItem MakeItemMeasured(
         string text, Vector4 color, float alpha, bool isAlarm, float scale, float life, float width)
     {
-        var lines = this.Config.AlertsWrap
-            ? WrapLines(text, width)
-            : new List<string> { Elide(text, width) };
-        return new DrawItem(lines, color, alpha, isAlarm, scale, ImGui.GetTextLineHeight(), life);
+        var key = new LayoutKey(text, width, ImGui.GetFont(),
+            ImGui.GetFontSize(), this.Fonts.Generation, this.Config.AlertsWrap);
+        if (!this.layouts.TryGetValue(key, out var lines))
+        {
+            if (this.layouts.Count >= 16)
+            {
+                this.layouts.Clear();
+            }
+
+            var wrapped = this.Config.AlertsWrap ? WrapLines(text, width) : new List<string> { Elide(text, width) };
+            lines = new List<MeasuredLine>(wrapped.Count);
+            foreach (var line in wrapped)
+            {
+                lines.Add(new MeasuredLine(line, ImGui.CalcTextSize(line).X));
+            }
+
+            this.layouts[key] = lines;
+        }
+
+        var height = ImGui.GetTextLineHeight();
+        return new DrawItem(lines, color, alpha, isAlarm, scale, height, height, life);
     }
 
     /// <summary>What one callout's block occupies vertically, strip and block
@@ -272,6 +291,12 @@ internal sealed class AlertsWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
         var origin = ImGui.GetCursorScreenPos();
+        var extent = new Vector2(width, this.BlockHeight(item));
+        if (!ImGui.IsRectVisible(origin - new Vector2(8), origin + extent + new Vector2(8)))
+        {
+            ImGui.Dummy(extent);
+            return;
+        }
 
         if (this.Config.AlertsSeverityTint)
         {
@@ -351,7 +376,7 @@ internal sealed class AlertsWindow : OverlayWindow
         var y = 0.0f;
         foreach (var line in item.Lines)
         {
-            var lineWidth = ImGui.CalcTextSize(line).X;
+            var lineWidth = line.Width * ImGui.GetTextLineHeight() / item.MeasuredHeight;
             var x = this.Config.AlertsAlign switch
             {
                 TextAlign.Center => Math.Max((width - lineWidth) * 0.5f, 0.0f),
@@ -359,11 +384,12 @@ internal sealed class AlertsWindow : OverlayWindow
                 _ => 0.0f,
             };
 
-            this.DrawStyledText(
-                drawList,
-                origin + new Vector2(x, y),
-                WithAlpha(item.Color, item.Alpha),
-                line);
+            var position = origin + new Vector2(x, y);
+            if (ImGui.IsRectVisible(position - new Vector2(8),
+                    position + new Vector2(lineWidth + 8, item.LineHeight + 8)))
+            {
+                this.DrawStyledText(drawList, position, WithAlpha(item.Color, item.Alpha), line.Text);
+            }
             y += item.LineHeight;
         }
     }

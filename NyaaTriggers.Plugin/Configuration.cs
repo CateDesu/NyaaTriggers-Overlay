@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
 using System.Text.Json;
 using Dalamud.Configuration;
@@ -87,6 +88,67 @@ internal enum TextAlign
 [Serializable]
 internal sealed class Configuration : IPluginConfiguration
 {
+    private bool saveDisabled;
+
+    internal static Configuration Load(Func<object?> read, string path)
+    {
+        try
+        {
+            var config = read() as Configuration ?? new Configuration();
+            config.Sanitize();
+            return config;
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error($"Could not load NyaaTriggers settings, using defaults: {ex.GetBaseException().Message}");
+            var config = new Configuration();
+            try
+            {
+                var backup = $"{path}.broken.{DateTime.UtcNow:yyyyMMddHHmmss}.{Guid.NewGuid():N}";
+                File.Move(path, backup);
+                Services.Log.Warning($"Damaged NyaaTriggers settings preserved at {backup}");
+            }
+            catch (FileNotFoundException) when (!File.Exists(path) && !Directory.Exists(path))
+            {
+                // The file disappeared after the failed read.
+            }
+            catch (Exception backupError)
+            {
+                config.saveDisabled = true;
+                Services.Log.Error($"Could not preserve damaged settings, saving disabled for this load: {backupError.Message}");
+            }
+
+            return config;
+        }
+    }
+
+    internal void Sanitize()
+    {
+        var defaults = new Configuration();
+        foreach (var property in typeof(Configuration).GetProperties())
+        {
+            var value = property.GetValue(this);
+            if (value is float number && !float.IsFinite(number))
+            {
+                property.SetValue(this, property.GetValue(defaults));
+            }
+            else if (value is Vector2 point && (!float.IsFinite(point.X) || !float.IsFinite(point.Y)))
+            {
+                property.SetValue(this, property.GetValue(defaults));
+            }
+            else if (value is Vector4 color)
+            {
+                var fallback = (Vector4)property.GetValue(defaults)!;
+                property.SetValue(this, new Vector4(
+                    ColorPart(color.X, fallback.X), ColorPart(color.Y, fallback.Y),
+                    ColorPart(color.Z, fallback.Z), ColorPart(color.W, fallback.W)));
+            }
+        }
+    }
+
+    private static float ColorPart(float value, float fallback)
+        => float.IsFinite(value) ? Math.Clamp(value, 0.0f, 1.0f) : fallback;
+
     /// <summary>Bumped only when a stored field changes meaning, so old configs
     /// can be migrated rather than silently reinterpreted. Note the enums in
     /// this file serialize as their integer values: never reorder or insert
@@ -631,6 +693,7 @@ internal sealed class Configuration : IPluginConfiguration
     /// minus the profiles themselves so saved blobs do not nest.</summary>
     public string SnapshotAppearance()
     {
+        this.Sanitize();
         var node = JsonSerializer.SerializeToNode(this, ProfileOptions)!.AsObject();
         node.Remove(nameof(this.AppearanceProfiles));
         return node.ToJsonString();
@@ -722,6 +785,11 @@ internal sealed class Configuration : IPluginConfiguration
     {
         lock (SaveLock)
         {
+            if (this.saveDisabled)
+            {
+                return;
+            }
+
             Services.PluginInterface.SavePluginConfig(this);
         }
     }
@@ -804,6 +872,7 @@ internal sealed class Configuration : IPluginConfiguration
     /// saved profile and resetting to defaults differ only in the source.</summary>
     public void CopyAppearanceFrom(Configuration fresh)
     {
+        fresh.Sanitize();
         TimelineTextScale = fresh.TimelineTextScale;
         TimelineBgOpacity = fresh.TimelineBgOpacity;
         TimelineFade = fresh.TimelineFade;

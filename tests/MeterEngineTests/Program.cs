@@ -263,7 +263,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     eng.OnEncounterEnd = _ => ends++;
     eng.SetInCombat(true, true);
     eng.SetInCombat(false, false);
-    Check(ends == 0, "empty pull finalizes silently");
+    Check(ends == 1, "empty pull sends an end marker");
 }
 
 // A mixed message, one flag falling while the other rises, finalizes the
@@ -720,6 +720,132 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     var snap = eng.LiveSnapshot();
     Check(snap!.Duration == "02:00", "pet target: segment untouched");
     CheckNear(snap.Rows[0].EncDps, 151.8, "pet target: old numbers intact");
+}
+
+// Final duration includes healing but excludes the later combat flag.
+foreach (var heal in new[] { false, true })
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    OverlaySnapshot? ended = null;
+    eng.OnEncounterEnd = snap => ended = snap;
+    eng.NoteJob(0x10000001, 31);
+    eng.SetInCombat(true, true);
+    t = 10;
+    eng.Process(Ability(Player, "Player One", Enemy, "Dummy", "0003", "47280000"));
+    if (heal)
+    {
+        t = 20;
+        eng.Process(Ability(Player, "Player One", Player, "Player One", "0004", "01F40000"));
+    }
+
+    t = 100;
+    Check(eng.LiveSnapshot()!.Duration == "01:40", "live clock keeps the active tail");
+    eng.SetInCombat(false, false);
+    Check(ended!.Duration == (heal ? "00:20" : "00:10"), "final clock uses last recorded activity");
+    CheckNear(ended.EncDps, heal ? 910.8 : 1821.6, "final DPS drops the combat tail");
+}
+
+// Nearby NPC combat cannot extend a player's final duration.
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    OverlaySnapshot? ended = null;
+    eng.OnEncounterEnd = snap => ended = snap;
+    eng.NoteJob(0x10000001, 31);
+    eng.SetInCombat(true, true);
+    t = 10;
+    eng.Process(Ability(Player, "Player One", Enemy, "Dummy", "0003", "47280000"));
+    t = 30;
+    eng.Process(Ability(Enemy, "Dummy", "40000020", "Other Dummy", "0003", "47280000"));
+    eng.Process(Tick("DoT", "40000020", "Other Dummy", "1F4", Enemy, "Dummy"));
+    t = 100;
+    eng.SetInCombat(false, false);
+    Check(ended!.Duration == "00:10", "unrelated damage cannot extend the final clock");
+}
+
+// Finalization still reports the current display segment after an idle reset.
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    OverlaySnapshot? ended = null;
+    eng.OnEncounterEnd = snap => ended = snap;
+    eng.NoteJob(0x10000001, 31);
+    eng.Process(Ability(Player, "Player One", Enemy, "Dummy", "0003", "47280000"));
+    t = 200;
+    eng.Process(Ability(Player, "Player One", Enemy, "Dummy", "0003", "47280000"));
+    t = 210;
+    eng.Process(Ability(Player, "Player One", Player, "Player One", "0004", "01F40000"));
+    t = 300;
+    eng.FeedLost();
+    Check(ended!.Duration == "00:10", "final clock uses the display segment start");
+    CheckNear(ended.EncDps, 1821.6, "final rows contain only the current display segment");
+}
+
+// Both healing paths leave an idle display unchanged.
+foreach (var hot in new[] { false, true })
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    eng.NoteJob(0x10000001, 31);
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Player One", Enemy, "Dummy", "0003", "47280000"));
+    t = 200;
+    var before = eng.LiveSnapshot()!;
+    eng.Process(hot ? Tick("HoT", Player, "Player One", "1F4", Player, "Player One")
+                    : Ability(Player, "Player One", Player, "Player One", "0004", "01F40000"));
+    var after = eng.LiveSnapshot()!;
+    Check(before.Duration == after.Duration && after.Rows[0].Hps == 0, "late healing leaves the paused segment alone");
+    OverlaySnapshot? ended = null;
+    eng.OnEncounterEnd = snap => ended = snap;
+    eng.FeedLost();
+    Check(ended!.Duration == "00:00", "paused healing does not extend final duration");
+}
+
+// Loss resets combat edges and stale identities before reconnect replay.
+{
+    var t = 0.0;
+    var eng = new MeterEngine(() => t);
+    var ended = new List<OverlaySnapshot?>();
+    eng.OnEncounterEnd = ended.Add;
+    eng.SetRoster(new[] { new KeyValuePair<int, int>(0x10000001, 31) });
+    eng.SetInCombat(true, true);
+    eng.Process(Ability(Player, "Old Player", Enemy, "Dummy", "0003", "47280000"));
+    t = 50;
+    eng.FeedLost(incomplete: true);
+    Check(!eng.HasLiveEncounter && ended.Count == 1, "feed loss finalizes once");
+    Check(ended[0]!.Title.Contains("incomplete"), "lost events are marked incomplete");
+    eng.FeedLost();
+    Check(ended.Count == 1, "repeated loss does not duplicate the end");
+    eng.SetInCombat(true, true);
+    Check(eng.HasLiveEncounter, "replayed true flags start a new encounter");
+    eng.Process(Ability(Player, "Old Player", Enemy, "Dummy", "0003", "47280000"));
+    Check(eng.LiveSnapshot()!.Rows.Count == 0, "feed loss retires old jobs");
+}
+
+// Roster members stay known before their first hit despite actor churn.
+{
+    var eng = new MeterEngine(() => 0.0);
+    eng.SetRoster(new[] { new KeyValuePair<int, int>(0x10000001, 31) });
+    for (var i = 0; i < 1500; i++)
+    {
+        eng.NoteJob(0x10001000 + i, 22);
+    }
+
+    eng.Process(Ability(Player, new string('x', 10000), Enemy, "Dummy", "0003", "47280000"));
+    Check(eng.LiveSnapshot()!.Rows[0].Job == "MCH", "roster job survives churn");
+    Check(eng.LiveSnapshot()!.Rows[0].Name.Length <= 256, "names are bounded in combatant storage");
+    eng.SetRoster(Array.Empty<KeyValuePair<int, int>>());
+    for (var i = 0; i < 1500; i++)
+    {
+        eng.NoteJob(0x10002000 + i, 22);
+    }
+
+    eng.Process(Ability(Player, "Player One", Enemy, "Dummy", "0003", "47280000"));
+    CheckNear(eng.LiveSnapshot()!.Rows[0].EncDps, 36432, "active combatant stays known after roster removal");
+    eng.FeedLost();
+    eng.Process(Ability(Player, "Old Player", Enemy, "Dummy", "0003", "47280000"));
+    Check(!eng.HasLiveEncounter, "retired roster cannot open the next session");
 }
 
 Console.WriteLine($"{passes} passed, {failures} failed");

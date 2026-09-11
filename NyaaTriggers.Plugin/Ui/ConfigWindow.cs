@@ -765,9 +765,11 @@ internal sealed class ConfigWindow : Window
 
         // A copy of the entries: Apply and Delete mutate the dictionary mid
         // enumeration otherwise.
+        ImGui.PushID("AppearanceProfiles");
+        var rowId = 0;
         foreach (var (savedName, blob) in this.config.AppearanceProfiles.ToList())
         {
-            ImGui.PushID(savedName);
+            ImGui.PushID(rowId++);
             if (ImGui.Button("Apply"))
             {
                 if (this.config.ApplyAppearanceProfile(blob))
@@ -793,6 +795,8 @@ internal sealed class ConfigWindow : Window
             ImGui.TextUnformatted(savedName);
             ImGui.PopID();
         }
+
+        ImGui.PopID();
     }
 
     /// <summary>One box's duty and combat filters on a single row. The fixed

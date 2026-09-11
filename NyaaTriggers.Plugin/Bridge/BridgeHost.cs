@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -80,11 +79,6 @@ internal sealed class BridgeHost : IDisposable
     /// frame lets a chatty peer stall the render thread.</summary>
     private const int MaxMessagesPerFrame = 64;
 
-    /// <summary>Inbox depth before messages are dropped. Reached only if the
-    /// draw thread has stopped running or the peer is flooding; either way,
-    /// growing without limit is the wrong answer.</summary>
-    private const int MaxInboxDepth = 512;
-
     /// <summary>Alerts on screen at once. Beyond this the oldest goes: a wall
     /// of stale callouts is worse than none.</summary>
     private const int MaxAlerts = 8;
@@ -109,7 +103,9 @@ internal sealed class BridgeHost : IDisposable
     private const int DrainWaitMs = 4000;
 
     private readonly Configuration config;
-    private readonly ConcurrentQueue<string> inbox = new();
+    private readonly MessageInbox inbox = new();
+    private long droppedMessages;
+    private long nextWarning;
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
@@ -124,7 +120,7 @@ internal sealed class BridgeHost : IDisposable
     private readonly object serverLock = new();
 
     /// <summary>Old servers draining in the background; unload waits on them,
-    /// since a session task outliving the load context runs freed code.</summary>
+    /// so background callbacks finish before plugin teardown.</summary>
     private readonly List<Task> pendingDrains = new();
 
     /// <summary>Read unsynchronized from socket threads; volatile so a
@@ -212,9 +208,7 @@ internal sealed class BridgeHost : IDisposable
         // This lives here, not in ClearState: ClearState also runs for the
         // "clear" command, and the program sends clear + new timeline back-to-back
         // on a zone change, so draining there would discard the fresh frames.
-        while (this.inbox.TryDequeue(out _))
-        {
-        }
+        this.inbox.Clear();
 
         if (old == null)
         {
@@ -246,16 +240,28 @@ internal sealed class BridgeHost : IDisposable
     /// must not land behind the replacement's session-start reset.</summary>
     private void Receive(WebSocketServer source, long sequence, string raw)
     {
+        var overloaded = false;
         lock (this.serverLock)
         {
             if (!ReferenceEquals(source, this.server) ||
-                sequence != this.currentSession ||
-                this.inbox.Count >= MaxInboxDepth)
+                sequence != this.currentSession)
             {
                 return;
             }
 
-            this.inbox.Enqueue(raw);
+            if (!this.inbox.TryEnqueue(raw))
+            {
+                this.droppedMessages++;
+                this.inbox.Clear();
+                this.inbox.TryEnqueue("{\"c\":\"clear\"}");
+                overloaded = true;
+            }
+        }
+
+        if (overloaded)
+        {
+            // A reconnect makes the program resend its complete schedule.
+            source.Disconnect(sequence);
         }
     }
 
@@ -312,13 +318,10 @@ internal sealed class BridgeHost : IDisposable
 
                 this.currentSession = sequence;
 
-                // Session-start reset. The new session's read loop starts
-                // after this callback returns, so the clear lands ahead of
-                // its frames. A replacement never runs the old session's
-                // disconnect, and without this that swap leaves the old
-                // pull's clock running and its rows on screen. Same
-                // enqueue-past-the-cap discipline as below.
-                this.inbox.Enqueue("{\"c\":\"clear\"}");
+                // The new session starts with a clear. Its frames arrive only
+                // after this callback, so old work can be discarded in order.
+                this.inbox.Clear();
+                this.inbox.TryEnqueue("{\"c\":\"clear\"}");
                 return;
             }
 
@@ -329,13 +332,9 @@ internal sealed class BridgeHost : IDisposable
                 return;
             }
 
-            // The program going away must not leave a frozen timeline on screen
-            // pretending the pull is still running. Queued so it lands on the
-            // draw thread with everything else. Enqueued directly, past the
-            // depth cap: that cap exists to bound a flooding peer, and this
-            // one frame comes from us — dropping it would leave the peer's
-            // last frames frozen on screen forever.
-            this.inbox.Enqueue("{\"c\":\"clear\"}");
+            // Retire the old session backlog before clearing its display.
+            this.inbox.Clear();
+            this.inbox.TryEnqueue("{\"c\":\"clear\"}");
         }
     }
 
@@ -351,16 +350,26 @@ internal sealed class BridgeHost : IDisposable
     /// <summary>Drain the inbox and expire stale alerts. Draw thread only.</summary>
     internal void Update()
     {
-        var budget = MaxMessagesPerFrame;
-        while (budget-- > 0 && this.inbox.TryDequeue(out var raw))
+        var bytes = MessageInbox.FrameBytes;
+        for (var count = 0; count < MaxMessagesPerFrame &&
+             this.inbox.TryDequeue(ref bytes, count == 0, out var raw); count++)
         {
             try
             {
-                this.Apply(raw);
+                this.Apply(raw!);
             }
             catch (Exception ex)
             {
-                Services.Log.Warning($"bad message from the program: {ex.Message}");
+                this.Warn($"bad message from the program: {ex.Message}");
+            }
+        }
+
+        lock (this.serverLock)
+        {
+            if (this.droppedMessages > 0 && Environment.TickCount64 >= this.nextWarning)
+            {
+                this.Warn($"program inbox overloaded {this.droppedMessages} times, reconnecting to refresh overlay state");
+                this.droppedMessages = 0;
             }
         }
 
@@ -371,6 +380,16 @@ internal sealed class BridgeHost : IDisposable
         // refuses to touch Dps while a session is live, so the program's feed
         // always wins a same-frame race.
         this.standalone.Update();
+    }
+
+    private void Warn(string message)
+    {
+        var now = Environment.TickCount64;
+        if (now >= this.nextWarning)
+        {
+            this.nextWarning = now + 5000;
+            Services.Log.Warning(message);
+        }
     }
 
     private void Apply(string raw)
