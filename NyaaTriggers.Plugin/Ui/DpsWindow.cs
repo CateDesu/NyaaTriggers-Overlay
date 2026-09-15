@@ -176,6 +176,11 @@ internal sealed class DpsWindow : OverlayWindow
         if (!this.Config.DpsSoloOnly && !this.Config.DpsSelfFirst
             && sort == DpsSortOrder.ByDps && rows.Count <= max)
         {
+            for (var i = 0; i < rows.Count; i++)
+            {
+                this.keptRanks.Add(rows[i].Rank > 0 ? rows[i].Rank : i + 1);
+            }
+
             return rows;
         }
 
@@ -189,7 +194,7 @@ internal sealed class DpsWindow : OverlayWindow
             }
 
             kept.Add(row);
-            this.keptRanks.Add(i + 1);
+            this.keptRanks.Add(row.Rank > 0 ? row.Rank : i + 1);
         }
 
         if (sort != DpsSortOrder.ByDps)

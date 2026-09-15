@@ -21,7 +21,7 @@ internal enum StandaloneState
 /// <summary>Runs the dps meter off IINACT directly while the program is away.
 ///
 /// Owns the engine and the feed client. The socket thread only ever enqueues;
-/// everything is applied in <see cref="Update"/> on the draw thread, the same
+/// everything is applied in <see cref="Update"/> under the UI state lock, the same
 /// discipline the bridge uses, so the UI never reads a half-updated meter.
 /// The program's feed always wins: while a program session is live the client
 /// stays off and this writes nothing.
@@ -63,6 +63,7 @@ internal sealed class StandaloneMeter : IDisposable
     /// so receive callbacks finish before plugin teardown.</summary>
     private readonly List<Task> pendingDrains = new();
 
+    private double? messageTime;
     private MeterEngine engine = new();
     private IinactClient? client;
     private bool endpointBad;
@@ -92,7 +93,7 @@ internal sealed class StandaloneMeter : IDisposable
         this.clearLocal = clearLocal;
     }
 
-    /// <summary>Draw thread heartbeat: run or stop the client per the toggle
+    /// <summary>Framework heartbeat: run or stop the client per the toggle
     /// and the program session, apply what the feed queued, push the meter.</summary>
     internal void Update()
     {
@@ -146,10 +147,11 @@ internal sealed class StandaloneMeter : IDisposable
 
         var bytes = MessageInbox.FrameBytes;
         for (var count = 0; count < MaxMessagesPerFrame &&
-             this.inbox.TryDequeue(ref bytes, count == 0, out var raw); count++)
+             this.inbox.TryDequeue(ref bytes, count == 0, out var raw, out var receivedAt); count++)
         {
             try
             {
+                this.messageTime = receivedAt / 1000.0;
                 if (raw == null)
                 {
                     this.engine.FeedLost();
@@ -162,6 +164,10 @@ internal sealed class StandaloneMeter : IDisposable
             catch (Exception ex)
             {
                 this.Warn($"bad IINACT message: {ex.Message}");
+            }
+            finally
+            {
+                this.messageTime = null;
             }
         }
 
@@ -204,6 +210,12 @@ internal sealed class StandaloneMeter : IDisposable
     internal void Restart()
     {
         this.StopClient();
+        this.clearLocal();
+        this.feeding = false;
+        this.wasLive = false;
+        this.pending = Pending.None;
+        this.endSnapshot = null;
+        this.engine = new MeterEngine();
         this.retryAt = 0;
     }
 
@@ -266,7 +278,7 @@ internal sealed class StandaloneMeter : IDisposable
         // A fresh engine per session: identity, jobs and zone are all
         // relearned from the burst IINACT sends on subscribe, and nothing
         // stale can leak in from the last run.
-        this.engine = new MeterEngine();
+        this.engine = new MeterEngine(() => this.messageTime ?? Environment.TickCount64 / 1000.0);
         this.engine.OnEncounterEnd = snap =>
         {
             this.endSnapshot = snap;
@@ -423,14 +435,18 @@ internal sealed class StandaloneMeter : IDisposable
                     if ((zoneId != 0 && zoneId != this.lastZoneId) ||
                         (zoneId == 0 && zoneName.Length > 0 && zoneName != this.lastZone))
                     {
-                        // The engine hears zones only from 01 lines, which
-                        // IINACT never replays, so hand it the change as a
-                        // synthetic one. Its 01 handler reads the name field
-                        // alone. Engine first, then the clear, the same order
-                        // TreatLine runs a real 01 in.
+                        // Cached initial metadata can follow cached identity.
+                        // A later zone change still follows the raw log reset.
                         if (zoneName.Length > 0)
                         {
-                            this.engine.Process(new[] { "01", "", "", zoneName });
+                            if (!this.engine.HasZone)
+                            {
+                                this.engine.SetInitialZone(zoneName);
+                            }
+                            else
+                            {
+                                this.engine.Process(new[] { "01", "", "", zoneName });
+                            }
                         }
 
                         this.pending = Pending.Cleared;
@@ -442,7 +458,7 @@ internal sealed class StandaloneMeter : IDisposable
                         // zone yet: a restarted client still has to learn it,
                         // or every pull is titled Encounter until the next
                         // real change.
-                        this.engine.Process(new[] { "01", "", "", zoneName });
+                        this.engine.SetInitialZone(zoneName);
                     }
 
                     if (zoneId != 0)
@@ -527,7 +543,7 @@ internal sealed class StandaloneMeter : IDisposable
                 job = ReadLong(entry, "job");
             }
 
-            if (id >= 0x10000000 && id <= int.MaxValue && job is > 0 and <= int.MaxValue)
+            if (id is >= 0x10000000 and <= 0x10FFFFFF && job is > 0 and <= int.MaxValue)
             {
                 this.engine.NoteJob((int)id, (int)job);
             }
@@ -579,7 +595,8 @@ internal sealed class StandaloneMeter : IDisposable
                 row.Share,
                 row.Hps,
                 row.IsSelf,
-                row.Deaths));
+                row.Deaths,
+                row.Rank));
         }
 
         return new DpsState

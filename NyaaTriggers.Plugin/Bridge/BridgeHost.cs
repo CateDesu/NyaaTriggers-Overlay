@@ -15,7 +15,7 @@ internal enum Severity
 
 internal readonly record struct TimelineEntry(float Time, string Label, string Kind);
 
-internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths);
+internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0);
 
 /// <summary>The program's latest dps frame. Replaced whole on every update rather
 /// than mutated, so the UI never reads a half-updated meter.</summary>
@@ -65,7 +65,7 @@ internal sealed class ActiveAlert
 /// Owns the link and the state it feeds.
 ///
 /// The socket threads only ever enqueue; everything is applied in
-/// <see cref="Update"/> on the draw thread, so the UI never reads a list that
+/// <see cref="Update"/> under the UI state lock, so the UI never reads a list that
 /// is being mutated underneath it.
 /// </summary>
 internal sealed class BridgeHost : IDisposable
@@ -102,6 +102,9 @@ internal sealed class BridgeHost : IDisposable
     /// a wedged socket must not hang plugin teardown either.</summary>
     private const int DrainWaitMs = 4000;
 
+    internal object StateLock { get; } = new();
+
+    private long? messageStamp;
     private readonly Configuration config;
     private readonly MessageInbox inbox = new();
     private long droppedMessages;
@@ -110,8 +113,7 @@ internal sealed class BridgeHost : IDisposable
     private readonly List<ActiveAlert> alerts = new();
 
     /// <summary>The IINACT-fed meter that runs while no program session is live.
-    /// Ticked from Update so its frames land on the draw thread with the
-    /// program's own.</summary>
+    /// Ticked from Update under the same lock as drawing and settings.</summary>
     private readonly StandaloneMeter standalone;
 
     /// <summary>Guards server swaps, the drain list and the source check in
@@ -199,11 +201,10 @@ internal sealed class BridgeHost : IDisposable
             this.server = null;
         }
 
-        // The standalone meter owns Dps while no program session is live and
-        // runs independent of this server, so a port change must not blank
-        // its rows. Only a session actually live on the old server makes the
-        // program the owner whose frames this reset covers.
-        this.ClearState(resetDps: old?.IsConnected == true);
+        // The listener may have disconnected before its queued clear runs.
+        // Preserve only rows still owned by the independent standalone feed.
+        this.ClearState(resetDps: !ReferenceEquals(this.Dps, this.lastLocal));
+        this.lastLive = null;
         // Drain anything the old server queued (including a synthesised clear
         // from its disconnect) so a Restart / port change does not re-apply stale
         // timeline or dps frames onto the freshly-cleared state next Update.
@@ -222,9 +223,8 @@ internal sealed class BridgeHost : IDisposable
         // would freeze the game — so the teardown drains in the background.
         // Detaching above already silenced it: its callbacks all check the
         // source against the live server. Unload still waits, in Dispose.
-        // Apply is the only Restart caller and only fires on a port change.
-        // A rapid A→B→A flip can still outrun the drain and fail the rebind;
-        // that surfaces as a visible LastError and the next Apply heals it.
+        // A rapid port change can outrun the drain and fail the rebind.
+        // The visible error keeps Apply enabled for another attempt.
         var drain = Task.Run(old.Dispose);
         lock (this.serverLock)
         {
@@ -255,7 +255,7 @@ internal sealed class BridgeHost : IDisposable
             {
                 this.droppedMessages++;
                 this.inbox.Clear();
-                this.inbox.TryEnqueue("{\"c\":\"clear\"}");
+                this.inbox.TryEnqueue(null);
                 overloaded = true;
             }
         }
@@ -330,7 +330,7 @@ internal sealed class BridgeHost : IDisposable
                 // The new session starts with a clear. Its frames arrive only
                 // after this callback, so old work can be discarded in order.
                 this.inbox.Clear();
-                this.inbox.TryEnqueue("{\"c\":\"clear\"}");
+                this.inbox.TryEnqueue(null);
                 return;
             }
 
@@ -343,7 +343,7 @@ internal sealed class BridgeHost : IDisposable
 
             // Retire the old session backlog before clearing its display.
             this.inbox.Clear();
-            this.inbox.TryEnqueue("{\"c\":\"clear\"}");
+            this.inbox.TryEnqueue(null);
         }
     }
 
@@ -356,20 +356,38 @@ internal sealed class BridgeHost : IDisposable
               $"\"plugin\":{JsonSerializer.Serialize(PluginVersion.Value)}}}"
             : null;
 
-    /// <summary>Drain the inbox and expire stale alerts. Draw thread only.</summary>
+    /// <summary>Drain the inbox and expire stale alerts. Serialized with drawing and settings.</summary>
     internal void Update()
+    {
+        lock (this.StateLock) this.UpdateState();
+    }
+
+    private void UpdateState()
     {
         var bytes = MessageInbox.FrameBytes;
         for (var count = 0; count < MaxMessagesPerFrame &&
-             this.inbox.TryDequeue(ref bytes, count == 0, out var raw); count++)
+             this.inbox.TryDequeue(ref bytes, count == 0, out var raw, out var receivedAt); count++)
         {
             try
             {
-                this.Apply(raw!);
+                this.messageStamp = receivedAt;
+                if (raw == null)
+                {
+                    this.lastLive = null;
+                    this.ClearState(resetDps: true);
+                }
+                else
+                {
+                    this.Apply(raw);
+                }
             }
             catch (Exception ex)
             {
                 this.Warn($"bad message from the program: {ex.Message}");
+            }
+            finally
+            {
+                this.messageStamp = null;
             }
         }
 
@@ -417,10 +435,10 @@ internal sealed class BridgeHost : IDisposable
             case "tick":
                 // A tick without a real time is dropped, not applied as zero:
                 // a malformed frame must not rewind the fight clock.
-                if (root.TryGetProperty("t", out var tick) && tick.ValueKind == JsonValueKind.Number)
+                if (root.TryGetProperty("t", out var tick) && TryFinite(tick, out var time))
                 {
-                    this.clockBase = tick.GetDouble();
-                    this.clockStamp = Environment.TickCount64;
+                    this.clockBase = time;
+                    this.clockStamp = this.messageStamp ?? Environment.TickCount64;
                     this.clockRunning = true;
                 }
 
@@ -480,7 +498,7 @@ internal sealed class BridgeHost : IDisposable
 
             var time = entry[0];
             var label = entry[1];
-            if (time.ValueKind != JsonValueKind.Number || label.ValueKind != JsonValueKind.String)
+            if (!TryFinite(time, out var at) || !float.IsFinite((float)at) || label.ValueKind != JsonValueKind.String)
             {
                 continue;
             }
@@ -494,7 +512,7 @@ internal sealed class BridgeHost : IDisposable
             var text = SanitizeText(label.GetString(), MaxTextChars);
             if (!string.IsNullOrWhiteSpace(text))
             {
-                this.timeline.Add(new TimelineEntry((float)time.GetDouble(), text, kind));
+                this.timeline.Add(new TimelineEntry((float)at, text, kind));
             }
 
             if (this.timeline.Count >= MaxTimelineEntries)
@@ -546,16 +564,18 @@ internal sealed class BridgeHost : IDisposable
             _ => this.config.AlertSeconds,
         };
 
-        if (root.TryGetProperty("ttl", out var ttl) && ttl.ValueKind == JsonValueKind.Number)
+        if (root.TryGetProperty("ttl", out var ttl))
         {
-            seconds = (float)ttl.GetDouble();
+            if (!TryFinite(ttl, out var ttlSeconds)) return;
+            seconds = (float)Math.Clamp(ttlSeconds, 0.5, 30.0);
         }
 
         // Clamped: a zero would flicker and never be read, and a program bug
         // sending a huge value would pin a stale callout on screen all fight.
         seconds = Math.Clamp(seconds, 0.5f, 30.0f);
 
-        var now = Environment.TickCount64;
+        var now = this.messageStamp ?? Environment.TickCount64;
+        if (now + (long)(seconds * 1000) <= Environment.TickCount64) return;
         this.Push(new ActiveAlert
         {
             Text = text,
@@ -604,7 +624,7 @@ internal sealed class BridgeHost : IDisposable
         {
             title = SanitizeText(ReadString(enc, "t"), MaxTextChars);
             duration = SanitizeText(ReadString(enc, "d"), MaxTextChars);
-            encDps = ReadDouble(enc, "dps");
+            if (enc.TryGetProperty("dps", out var total) && !TryFinite(total, out encDps)) return;
         }
 
         var rows = new List<DpsRow>();
@@ -628,8 +648,8 @@ internal sealed class BridgeHost : IDisposable
                 var share = entry[3];
                 if (name.ValueKind != JsonValueKind.String ||
                     job.ValueKind != JsonValueKind.String ||
-                    dps.ValueKind != JsonValueKind.Number ||
-                    share.ValueKind != JsonValueKind.Number)
+                    !TryFinite(dps, out var rowDps) ||
+                    !TryFinite(share, out var rowShare))
                 {
                     continue;
                 }
@@ -639,7 +659,7 @@ internal sealed class BridgeHost : IDisposable
                 var deaths = 0;
                 if (entry.GetArrayLength() > 4 && entry[4].ValueKind == JsonValueKind.Number)
                 {
-                    hps = entry[4].GetDouble();
+                    if (!TryFinite(entry[4], out hps)) continue;
                 }
 
                 if (entry.GetArrayLength() > 5 && entry[5].ValueKind == JsonValueKind.True)
@@ -656,9 +676,9 @@ internal sealed class BridgeHost : IDisposable
                 rows.Add(new DpsRow(
                     SanitizeText(name.GetString(), MaxTextChars),
                     SanitizeText(job.GetString(), MaxTextChars),
-                    dps.GetDouble(),
-                    share.GetDouble(),
-                    hps,
+                    Math.Max(0, rowDps),
+                    Math.Clamp(rowShare, 0, 100),
+                    Math.Max(0, hps),
                     isSelf,
                     deaths));
 
@@ -675,7 +695,7 @@ internal sealed class BridgeHost : IDisposable
             Show = true,
             Title = title,
             Duration = duration,
-            EncDps = encDps,
+            EncDps = Math.Max(0, encDps),
             Rows = rows,
         };
 
@@ -725,7 +745,7 @@ internal sealed class BridgeHost : IDisposable
         if (this.config.AlertsCollapseDupes && this.alerts.Count > 0)
         {
             var last = this.alerts[^1];
-            if (last.Text == alert.Text && last.Severity == alert.Severity)
+            if (last.Text == alert.Text && last.Severity == alert.Severity && last.ExpiresAt > alert.ShownAt)
             {
                 last.Count++;
                 last.ShownAt = alert.ShownAt;
@@ -745,10 +765,11 @@ internal sealed class BridgeHost : IDisposable
         }
     }
 
-    private static double ReadDouble(JsonElement root, string name)
-        => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            ? value.GetDouble()
-            : 0.0;
+    private static bool TryFinite(JsonElement value, out double number)
+    {
+        number = 0;
+        return value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out number) && double.IsFinite(number);
+    }
 
     private static string ReadString(JsonElement root, string name)
         => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

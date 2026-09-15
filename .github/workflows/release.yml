@@ -132,6 +132,8 @@ jobs:
           dotnet run --project tests/BridgeTests
           env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/HeadlessDpsTests
           python3 tests/test_release_version.py
+          python3 tests/test_release_channel.py
+          env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/OverlayRegressionTests
 
       - name: Check the package came out
         env:
@@ -176,11 +178,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
-        run: |
-          gh release create "$TAG" "$PACKAGE" \
-            --title "$TAG" \
-            --target "$GITHUB_SHA" \
-            --generate-notes
+        run: python3 tools/release_channel.py publish
 
       - name: Republish pluginmaster.json
         if: steps.fresh.outputs.publish == 'true'
@@ -209,10 +207,8 @@ jobs:
           git pull --rebase origin main
           git push origin main
 
-  # Keep the releases page a single current build: after a rolling build
-  # publishes, delete EVERY other release (and its tag), old rolling builds and
-  # hand-cut milestones alike. Runs after build, so the previous release is
-  # never deleted before the new one is visible.
+  # Cleanup starts only after the new package and listing are available.
+  # Newer pending releases and unpublished channels are preserved.
   prune-rolling:
     needs: [meta, build]
     if: needs.meta.outputs.rolling == 'true' && needs.build.outputs.published == 'true'
@@ -221,16 +217,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - name: Delete superseded releases
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          KEEP: ${{ needs.meta.outputs.tag }}
-        run: |
-          gh release list --limit 100 --json tagName,isPrerelease \
-            --jq '.[] | select(.isPrerelease | not) | .tagName' | while read -r t; do
-            [ -z "$t" ] && continue
-            [ "$t" = "$KEEP" ] && continue
-            echo "Pruning superseded release $t"
-            gh release delete "$t" --cleanup-tag --yes || true
-          done
+        run: python3 tools/release_channel.py prune

@@ -103,6 +103,7 @@ internal sealed class WebSocketServer : IDisposable
     /// passed by ref to Interlocked, which rejects volatile fields, so reads go
     /// through Volatile.Read instead.</summary>
     private Session? peer;
+    private long newestEstablished;
 
     internal WebSocketServer(
         int port,
@@ -387,12 +388,13 @@ internal sealed class WebSocketServer : IDisposable
             lock (this.gate)
             {
                 if (this.disposed || session.IsDisposed ||
-                    (this.peer != null && this.peer.Sequence > session.Sequence))
+                    session.Sequence <= this.newestEstablished)
                 {
                     return;
                 }
 
                 // Eviction, disposal and publication share this gate.
+                this.newestEstablished = session.Sequence;
                 session.MarkEstablished();
                 var greeting = this.onGreeting();
                 if (greeting != null)

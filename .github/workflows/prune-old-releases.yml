@@ -1,10 +1,6 @@
 name: Prune old releases
 
-# Manual one-off cleanup, run from the Actions tab: deletes every release (and
-# its tag) EXCEPT the current rolling Latest (whatever /releases/latest points
-# at). The automatic prune in release.yml already does this after every rolling
-# build; this one is for cleaning up on demand. The dry_run input lists what
-# would be deleted without deleting anything.
+# Manual cleanup preserves the published version and any pending newer release.
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +9,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
 jobs:
   prune:
     runs-on: ubuntu-latest
@@ -20,22 +20,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Delete all but the current rolling release
+      - uses: actions/checkout@v4
+      - name: Delete superseded releases
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           DRY: ${{ inputs.dry_run }}
-        run: |
-          KEEP=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
-          [ -n "$KEEP" ] || { echo "::error::could not resolve the current rolling release"; exit 1; }
-          echo "Keeping latest: $KEEP"
-          gh release list --limit 200 --json tagName --jq '.[].tagName' | while read -r t; do
-            [ -z "$t" ] && continue
-            [ "$t" = "$KEEP" ] && continue
-            if [ "$DRY" = "true" ]; then
-              echo "Would delete $t"
-            else
-              echo "Deleting $t"
-              gh release delete "$t" --cleanup-tag --yes || true
-            fi
-          done
+        run: python3 tools/release_channel.py prune

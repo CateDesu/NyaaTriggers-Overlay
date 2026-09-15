@@ -171,7 +171,7 @@ internal sealed class ConfigWindow : Window
         var outOfRange = this.pendingPort is < 1024 or > 65535;
         // Out of range counts as changed too, so a hand edited config with a
         // port outside the range can still be clamped back in from here.
-        var canApply = this.pendingPort != this.config.Port || outOfRange;
+        var canApply = this.pendingPort != this.config.Port || outOfRange || this.bridge.LastError != null;
         if (!canApply)
         {
             ImGui.BeginDisabled();
@@ -781,7 +781,8 @@ internal sealed class ConfigWindow : Window
             ImGui.SameLine();
             if (ImGui.Button("Copy"))
             {
-                ImGui.SetClipboardText(blob);
+                var clean = Configuration.ValidateProfileBlob(blob);
+                if (clean != null) ImGui.SetClipboardText(clean);
             }
 
             ImGui.SameLine();

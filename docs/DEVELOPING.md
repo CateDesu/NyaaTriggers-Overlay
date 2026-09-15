@@ -50,8 +50,14 @@ Push to main and the release happens on its own. The workflow builds the plugin 
 `0.1.0.42`), publishes it with the zip, regenerates `pluginmaster.json` to point at it, and
 commits that back to main with `[skip ci]` so the listing update doesn't retrigger the build.
 Anyone who added the repo URL gets the update on their next Dalamud refresh, same as any other
-plugin update. Older rolling releases are pruned once the new one is up, so the releases page
-stays a single current build.
+plugin update. Older releases are pruned after the new package and listing are available.
+Publication and manual cleanup share one workflow queue. Cleanup preserves the listed version,
+newer versions awaiting publication, drafts, prereleases and tags it cannot recognize.
+
+A rerun can finish a publication whose release was created before its listing update failed.
+It checks the workflow run, tag commit and packaged version before reusing an uploaded package.
+Missing uploads and interrupted upload placeholders can be retried. An existing release from
+another run is refused.
 
 Hand-cut milestones still work when a release is worth naming: bump `<Version>` in the csproj,
 then
@@ -64,9 +70,9 @@ The tag must equal the csproj version or the workflow fails before building. A m
 pruned like everything else once the next rolling build is up: nothing on the releases page is
 permanent, only the current build stays downloadable.
 
-The manual **Prune old releases** workflow runs the same cleanup on demand: every release and
-tag except the current rolling Latest. Run it from the Actions tab; the dry run input lists
-what would go before anything is deleted.
+The manual **Prune old releases** workflow runs the same cleanup on demand. Run it from the
+Actions tab. The dry run input lists older releases without deleting them. Cleanup requires
+the listing's current release package to exist before removing fallback releases.
 
 Running the workflow by hand from main does the same as a push; from any other branch it refuses
 to publish.
@@ -96,7 +102,8 @@ The program already had reconnect handling for talking to IINACT, and the same c
   session's teardown. Only sessions still in the handshake can be evicted to make room, and if all
   four slots are established sessions the newcomer is refused. Bare connect-and-hold floods cannot
   evict the program. A local process that completes handshakes can replace it by design.
-- A handshake gets 5 seconds, then the slot is reclaimed.
+- A handshake gets 5 seconds, then the slot is reclaimed. An older accepted socket cannot take
+  ownership after a newer session has connected, even if that newer session has disconnected.
 - TCP keepalive is on (30s idle, then 3 probes 10s apart), so a half-open peer dies in about a
   minute instead of the OS default of hours.
 - Any handshake carrying an `Origin` header is refused. WebSocket is exempt from the same-origin
@@ -107,6 +114,10 @@ The program already had reconnect handling for talking to IINACT, and the same c
   and resend its schedule.
 - Text frames are capped at 1 MiB and must be valid UTF-8. Anything outside the protocol closes
   the session with the proper RFC 6455 code rather than being guessed at.
+
+Feed processing runs from Dalamud's framework update, independently of whether the UI draws.
+A shared lock serializes updates with drawing and settings changes. Queued messages carry their
+receipt time. Delayed ticks advance from that time and expired callouts are discarded.
 
 ### Program → plugin
 
@@ -136,6 +147,10 @@ wants both: `clear` drops the schedule and live alerts, then a fresh `show:false
 ending so hold-last survives the wipe. A sender that ends fights with `clear` alone never
 produces the ended marker and hold-last has nothing to hold. The plugin keeps only the latest
 snapshot; there is nothing to acknowledge.
+
+A new program session clears the previous session's final DPS history. Same-session wipe
+sequences still retain their final rows. Wire numbers must be finite. Timeline values must also
+fit a float, and damage shares are bounded to 0 through 100.
 
 Unknown commands are ignored rather than treated as errors, so a newer program can talk to an older
 plugin.
@@ -168,6 +183,22 @@ live the IINACT client stays off, and when the program goes away mid-fight the e
 classifying the party from the subscribe burst and a one-shot `getCombatants`, the same way the
 program handles a mid-instance start.
 
+Applying a different feed endpoint clears the old standalone result. Cached initial zone data
+preserves the local identity delivered by the subscription. Combatant snapshots use the same
+player ID range as spawn lines so NPC jobs cannot enter player totals.
+
+The snapshot carries the top 24 damage rows and the local row if ranked lower. Solo and self-first
+views keep that row's original rank. Each encounter and display segment retain at most 1024 actor
+records. Local and current party members are protected from eviction. Older nonparty records are
+retired under pressure, with their damage retained in the encounter total. The title then shows
+`[limited actors]`. A returning retired player still contributes damage if its job cache entry has expired.
+It starts a new individual row, so individual history
+and ranks are limited in that case. The next display segment starts clean.
+
+Appearance profiles export only settings they can apply. Copying a profile saved by an older
+build removes its connection and placement fields. Loaded and imported dimensions are bounded
+to the supported settings ranges before drawing.
+
 `tests/MeterEngineTests` is a dependency-free harness that drives the engine with synthetic log
 lines, including the wire-decode examples from `dps_meter.py`'s docstring. Run it with
 `dotnet run --project tests/MeterEngineTests`.
@@ -184,7 +215,17 @@ a real disconnect and reconnect. The checks cover damage totals, pets, healing, 
 all three meter styles, encounter endings, zone changes and handoffs to the program.
 Drawing calls go to a recording adapter. Game conditions, fonts and textures are stubbed,
 so this verifies the state and drawing commands but does not test native rendering in game.
-The release workflow runs this alongside the engine and bridge tests.
+The release workflow also runs the broader regression suite:
+
+```sh
+env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/OverlayRegressionTests
+python3 tests/test_release_channel.py
+```
+
+This suite includes the production plugin lifecycle and all windows with recording service
+adapters. It exercises suppressed drawing, delayed queues, concurrent updates, session changes,
+profile sharing, extreme geometry and actor retention. Release tests use a recording GitHub CLI
+substitute and do not publish or delete live releases.
 
 ## Status
 

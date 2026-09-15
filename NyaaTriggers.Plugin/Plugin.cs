@@ -1,6 +1,7 @@
 using System;
 using Dalamud.Game.Command;
 using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
 using NyaaTriggers.Plugin.Bridge;
 using NyaaTriggers.Plugin.Ui;
 
@@ -51,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
                 HelpMessage = "Open NyaaTriggers settings. /nyaa lock toggles the overlay lock.",
             });
 
+            Services.Framework.Update += this.OnFrameworkUpdate;
             pluginInterface.UiBuilder.Draw += this.ui.Draw;
             pluginInterface.UiBuilder.OpenConfigUi += this.ui.OpenConfig;
             pluginInterface.UiBuilder.OpenMainUi += this.ui.OpenConfig;
@@ -63,6 +65,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch
         {
+            Services.Framework.Update -= this.OnFrameworkUpdate;
             if (ui != null)
             {
                 pluginInterface.UiBuilder.Draw -= ui.Draw;
@@ -95,6 +98,8 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void OnFrameworkUpdate(IFramework framework) => this.ui.Update();
+
     private void OnCommand(string command, string arguments)
     {
         switch (arguments.Trim().ToLowerInvariant())
@@ -119,6 +124,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        Services.Framework.Update -= this.OnFrameworkUpdate;
         Services.PluginInterface.UiBuilder.Draw -= this.ui.Draw;
         Services.PluginInterface.UiBuilder.OpenConfigUi -= this.ui.OpenConfig;
         Services.PluginInterface.UiBuilder.OpenMainUi -= this.ui.OpenConfig;

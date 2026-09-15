@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Numerics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dalamud.Configuration;
 
 namespace NyaaTriggers.Plugin;
@@ -144,7 +147,69 @@ internal sealed class Configuration : IPluginConfiguration
                     ColorPart(color.Z, fallback.Z), ColorPart(color.W, fallback.W)));
             }
         }
+
+        TimelinePos = BoundPosition(TimelinePos);
+        AlertsPos = BoundPosition(AlertsPos);
+        DpsPos = BoundPosition(DpsPos);
+        TimelineSize = BoundSize(TimelineSize);
+        AlertsSize = BoundSize(AlertsSize);
+        DpsSize = BoundSize(DpsSize);
+        TimelineTextScale = Math.Clamp(TimelineTextScale, 0.5f, 6.0f);
+        TimelineBgOpacity = Math.Clamp(TimelineBgOpacity, 0.0f, 1.0f);
+        TimelineFade = Math.Clamp(TimelineFade, 0.0f, 1.0f);
+        TimelineBarHeight = Math.Clamp(TimelineBarHeight, 12.0f, 48.0f);
+        TimelineBarSpacing = Math.Clamp(TimelineBarSpacing, 0.0f, 16.0f);
+        TimelineBarRounding = Math.Clamp(TimelineBarRounding, 0.0f, 12.0f);
+        TimelineBarBorderThickness = Math.Clamp(TimelineBarBorderThickness, 0.0f, 4.0f);
+        TimelineBarTrackOpacity = Math.Clamp(TimelineBarTrackOpacity, 0.0f, 1.0f);
+        ImminentSeconds = Math.Clamp(ImminentSeconds, 0.0f, 15.0f);
+        TimelineWindow = Math.Clamp(TimelineWindow, 5.0f, 120.0f);
+        AlertsTextScale = Math.Clamp(AlertsTextScale, 0.5f, 6.0f);
+        AlertsBgOpacity = Math.Clamp(AlertsBgOpacity, 0.0f, 1.0f);
+        AlertsFade = Math.Clamp(AlertsFade, 0.0f, 1.0f);
+        AlertSeconds = Math.Clamp(AlertSeconds, 0.5f, 15.0f);
+        AlertSecondsAlert = Math.Clamp(AlertSecondsAlert, 0.5f, 15.0f);
+        AlertSecondsAlarm = Math.Clamp(AlertSecondsAlarm, 0.5f, 15.0f);
+        AlertsAlarmScale = Math.Clamp(AlertsAlarmScale, 1.0f, 2.0f);
+        AlertsSeverityTintOpacity = Math.Clamp(AlertsSeverityTintOpacity, 0.0f, 1.0f);
+        AlarmScreenFlashSize = Math.Clamp(AlarmScreenFlashSize, 0.0f, 1.0f);
+        DpsTextScale = Math.Clamp(DpsTextScale, 0.5f, 6.0f);
+        DpsBgOpacity = Math.Clamp(DpsBgOpacity, 0.0f, 1.0f);
+        DpsFade = Math.Clamp(DpsFade, 0.0f, 1.0f);
+        DpsRowStripeOpacity = Math.Clamp(DpsRowStripeOpacity, 0.0f, 1.0f);
+        DpsBarHeight = Math.Clamp(DpsBarHeight, 12.0f, 48.0f);
+        DpsBarSpacing = Math.Clamp(DpsBarSpacing, 0.0f, 16.0f);
+        DpsBarRounding = Math.Clamp(DpsBarRounding, 0.0f, 12.0f);
+        DpsBarBorderThickness = Math.Clamp(DpsBarBorderThickness, 0.0f, 4.0f);
+        DpsBarTrackOpacity = Math.Clamp(DpsBarTrackOpacity, 0.0f, 1.0f);
+        DpsHorizMaxBarWidth = Math.Clamp(DpsHorizMaxBarWidth, 40.0f, 400.0f);
+        DpsHorizBarHeight = Math.Clamp(DpsHorizBarHeight, 10.0f, 60.0f);
+        DpsHorizSkew = Math.Clamp(DpsHorizSkew, 0.0f, 45.0f);
+        DpsHorizIconSize = Math.Clamp(DpsHorizIconSize, 8.0f, 64.0f);
+        DpsHorizCellPadding = Math.Clamp(DpsHorizCellPadding, 0.0f, 24.0f);
+        DpsHorizStatScale = Math.Clamp(DpsHorizStatScale, 0.4f, 1.5f);
+        DpsHorizPercentScale = Math.Clamp(DpsHorizPercentScale, 0.4f, 1.5f);
+        DpsHorizBarOpacity = Math.Clamp(DpsHorizBarOpacity, 0.0f, 1.0f);
+        BarHeight = Math.Clamp(BarHeight, 12.0f, 48.0f);
+        BarSpacing = Math.Clamp(BarSpacing, 0.0f, 16.0f);
+        BarRounding = Math.Clamp(BarRounding, 0.0f, 12.0f);
+        BarBorderThickness = Math.Clamp(BarBorderThickness, 0.0f, 4.0f);
+        BgOpacity = Math.Clamp(BgOpacity, 0.0f, 1.0f);
+        TimelineEffectThickness = Math.Clamp(TimelineEffectThickness, 0, 4);
+        AlertsEffectThickness = Math.Clamp(AlertsEffectThickness, 0, 4);
+        DpsEffectThickness = Math.Clamp(DpsEffectThickness, 0, 4);
+        OutlineThickness = Math.Clamp(OutlineThickness, 0, 4);
+        TimelineRows = Math.Clamp(TimelineRows, 1, 12);
+        AlertsMaxVisible = Math.Clamp(AlertsMaxVisible, 1, 8);
+        DpsMaxRows = Math.Clamp(DpsMaxRows, 1, 24);
+        DpsHorizDecimals = Math.Clamp(DpsHorizDecimals, 0, 2);
     }
+
+    private static Vector2 BoundPosition(Vector2 point)
+        => Vector2.Clamp(point, new Vector2(-32768), new Vector2(32768));
+
+    private static Vector2 BoundSize(Vector2 size)
+        => Vector2.Clamp(size, new Vector2(1), new Vector2(32768));
 
     private static float ColorPart(float value, float fallback)
         => float.IsFinite(value) ? Math.Clamp(value, 0.0f, 1.0f) : fallback;
@@ -689,13 +754,15 @@ internal sealed class Configuration : IPluginConfiguration
         IncludeFields = true,
     };
 
-    /// <summary>This configuration as a JSON blob for AppearanceProfiles,
-    /// minus the profiles themselves so saved blobs do not nest.</summary>
+    /// <summary>Only the fields that applying an appearance profile can change.</summary>
     public string SnapshotAppearance()
     {
         this.Sanitize();
-        var node = JsonSerializer.SerializeToNode(this, ProfileOptions)!.AsObject();
-        node.Remove(nameof(this.AppearanceProfiles));
+        var node = new JsonObject();
+        foreach (var property in AppearanceProperties)
+        {
+            node[property.Name] = JsonSerializer.SerializeToNode(property.GetValue(this), property.PropertyType, ProfileOptions);
+        }
         return node.ToJsonString();
     }
 
@@ -873,133 +940,141 @@ internal sealed class Configuration : IPluginConfiguration
     public void CopyAppearanceFrom(Configuration fresh)
     {
         fresh.Sanitize();
-        TimelineTextScale = fresh.TimelineTextScale;
-        TimelineBgOpacity = fresh.TimelineBgOpacity;
-        TimelineFade = fresh.TimelineFade;
-        TimelineTextEffect = fresh.TimelineTextEffect;
-        TimelineEffectThickness = fresh.TimelineEffectThickness;
-        TimelineEffectColor = fresh.TimelineEffectColor;
-        TimelineTextColor = fresh.TimelineTextColor;
-        TimelineBarHeight = fresh.TimelineBarHeight;
-        TimelineBarSpacing = fresh.TimelineBarSpacing;
-        TimelineBarRounding = fresh.TimelineBarRounding;
-        TimelineBarBorderThickness = fresh.TimelineBarBorderThickness;
-        TimelineBarTrackOpacity = fresh.TimelineBarTrackOpacity;
-        TimelineBarColor = fresh.TimelineBarColor;
-        TimelineBarTrackColor = fresh.TimelineBarTrackColor;
-        TimelineBarBorderColor = fresh.TimelineBarBorderColor;
-        BarFill = fresh.BarFill;
-        BarRightToLeft = fresh.BarRightToLeft;
-        BarTextAlign = fresh.BarTextAlign;
-        ImminentSeconds = fresh.ImminentSeconds;
-        ImminentPulse = fresh.ImminentPulse;
-        Countdown = fresh.Countdown;
-        CountdownSplit = fresh.CountdownSplit;
-        TimelineWindow = fresh.TimelineWindow;
-        TimelineRows = fresh.TimelineRows;
-        TimelineShowClock = fresh.TimelineShowClock;
-        TimelineAnchorBottom = fresh.TimelineAnchorBottom;
-        TimelineFireFlash = fresh.TimelineFireFlash;
-        TimelineShowTankbuster = fresh.TimelineShowTankbuster;
-        TimelineShowRaidwide = fresh.TimelineShowRaidwide;
-        TimelineShowMechanic = fresh.TimelineShowMechanic;
-        ColorImminent = fresh.ColorImminent;
-        TimelineKindColors = fresh.TimelineKindColors;
-        TimelineTankbusterColor = fresh.TimelineTankbusterColor;
-        TimelineRaidwideColor = fresh.TimelineRaidwideColor;
-        TimelineMechanicColor = fresh.TimelineMechanicColor;
-        AlertsTextScale = fresh.AlertsTextScale;
-        AlertsBgOpacity = fresh.AlertsBgOpacity;
-        AlertsFade = fresh.AlertsFade;
-        AlertsTextEffect = fresh.AlertsTextEffect;
-        AlertsEffectThickness = fresh.AlertsEffectThickness;
-        AlertsEffectColor = fresh.AlertsEffectColor;
-        AlertSeconds = fresh.AlertSeconds;
-        AlertSecondsAlert = fresh.AlertSecondsAlert;
-        AlertSecondsAlarm = fresh.AlertSecondsAlarm;
-        AlertsMaxVisible = fresh.AlertsMaxVisible;
-        AlertOrder = fresh.AlertOrder;
-        AlertsAlign = fresh.AlertsAlign;
-        AlertsAnimate = fresh.AlertsAnimate;
-        AlertsAlarmScale = fresh.AlertsAlarmScale;
-        AlertsLifeline = fresh.AlertsLifeline;
-        AlertsShowInfo = fresh.AlertsShowInfo;
-        AlertsShowAlert = fresh.AlertsShowAlert;
-        AlertsShowAlarm = fresh.AlertsShowAlarm;
-        AlertsAnchorBottom = fresh.AlertsAnchorBottom;
-        AlertsWrap = fresh.AlertsWrap;
-        AlertsCollapseDupes = fresh.AlertsCollapseDupes;
-        AlertsSeverityTint = fresh.AlertsSeverityTint;
-        AlertsSeverityTintOpacity = fresh.AlertsSeverityTintOpacity;
-        AlertsAlarmFlash = fresh.AlertsAlarmFlash;
-        AlarmScreenFlash = fresh.AlarmScreenFlash;
-        AlarmScreenFlashSize = fresh.AlarmScreenFlashSize;
-        ColorInfo = fresh.ColorInfo;
-        ColorAlert = fresh.ColorAlert;
-        ColorAlarm = fresh.ColorAlarm;
-        DpsTextScale = fresh.DpsTextScale;
-        DpsBgOpacity = fresh.DpsBgOpacity;
-        DpsFade = fresh.DpsFade;
-        DpsTextEffect = fresh.DpsTextEffect;
-        DpsEffectThickness = fresh.DpsEffectThickness;
-        DpsEffectColor = fresh.DpsEffectColor;
-        DpsTextColor = fresh.DpsTextColor;
-        DpsSoloOnly = fresh.DpsSoloOnly;
-        DpsSelfFirst = fresh.DpsSelfFirst;
-        DpsSortOrder = fresh.DpsSortOrder;
-        DpsNamePrivacy = fresh.DpsNamePrivacy;
-        DpsSelfNameYou = fresh.DpsSelfNameYou;
-        DpsRowsShowRank = fresh.DpsRowsShowRank;
-        DpsRowsShowIcons = fresh.DpsRowsShowIcons;
-        DpsRowStripes = fresh.DpsRowStripes;
-        DpsRowStripeOpacity = fresh.DpsRowStripeOpacity;
-        DpsMaxRows = fresh.DpsMaxRows;
-        DpsBarHeight = fresh.DpsBarHeight;
-        DpsBarSpacing = fresh.DpsBarSpacing;
-        DpsBarRounding = fresh.DpsBarRounding;
-        DpsBarBorderThickness = fresh.DpsBarBorderThickness;
-        DpsBarTrackOpacity = fresh.DpsBarTrackOpacity;
-        DpsBarColor = fresh.DpsBarColor;
-        DpsBarTrackColor = fresh.DpsBarTrackColor;
-        DpsBarBorderColor = fresh.DpsBarBorderColor;
-        DpsBarRightToLeft = fresh.DpsBarRightToLeft;
-        DpsBarJobColors = fresh.DpsBarJobColors;
-        DpsBarsShowShare = fresh.DpsBarsShowShare;
-        DpsRowsShowHps = fresh.DpsRowsShowHps;
-        DpsRowsCompact = fresh.DpsRowsCompact;
-        DpsBarSelfHighlight = fresh.DpsBarSelfHighlight;
-        DpsBarSelfColor = fresh.DpsBarSelfColor;
-        DpsBarTopHighlight = fresh.DpsBarTopHighlight;
-        DpsBarTopColor = fresh.DpsBarTopColor;
-        DpsShowDeaths = fresh.DpsShowDeaths;
-        DpsHoldLast = fresh.DpsHoldLast;
-        DpsHeaderFormat = fresh.DpsHeaderFormat;
-        DpsStyle = fresh.DpsStyle;
-        DpsHorizTheme = fresh.DpsHorizTheme;
-        DpsHorizShowNames = fresh.DpsHorizShowNames;
-        DpsHorizShowRank = fresh.DpsHorizShowRank;
-        DpsHorizShowIcons = fresh.DpsHorizShowIcons;
-        DpsHorizShowHps = fresh.DpsHorizShowHps;
-        DpsHorizHighlight = fresh.DpsHorizHighlight;
-        DpsHorizShowPercent = fresh.DpsHorizShowPercent;
-        DpsHorizMaxBarWidth = fresh.DpsHorizMaxBarWidth;
-        DpsHorizBarHeight = fresh.DpsHorizBarHeight;
-        DpsHorizSkew = fresh.DpsHorizSkew;
-        DpsHorizIconSize = fresh.DpsHorizIconSize;
-        DpsHorizCellPadding = fresh.DpsHorizCellPadding;
-        DpsHorizStatScale = fresh.DpsHorizStatScale;
-        DpsHorizPercentScale = fresh.DpsHorizPercentScale;
-        DpsHorizDecimals = fresh.DpsHorizDecimals;
-        DpsHorizCompact = fresh.DpsHorizCompact;
-        DpsHorizBarOpacity = fresh.DpsHorizBarOpacity;
-        DpsHorizSelfColor = fresh.DpsHorizSelfColor;
-        DpsHorizSelfTextColor = fresh.DpsHorizSelfTextColor;
-        DpsHorizDpsColor = fresh.DpsHorizDpsColor;
-        DpsHorizTankColor = fresh.DpsHorizTankColor;
-        DpsHorizHealerColor = fresh.DpsHorizHealerColor;
-        DpsHorizDimColor = fresh.DpsHorizDimColor;
-        DpsShowHeader = fresh.DpsShowHeader;
-        DpsHeaderDuration = fresh.DpsHeaderDuration;
-        DpsHeaderTotalDps = fresh.DpsHeaderTotalDps;
+        foreach (var property in AppearanceProperties)
+        {
+            property.SetValue(this, property.GetValue(fresh));
+        }
     }
+
+    private static readonly PropertyInfo[] AppearanceProperties = new[]
+    {
+        nameof(TimelineTextScale),
+        nameof(TimelineBgOpacity),
+        nameof(TimelineFade),
+        nameof(TimelineTextEffect),
+        nameof(TimelineEffectThickness),
+        nameof(TimelineEffectColor),
+        nameof(TimelineTextColor),
+        nameof(TimelineBarHeight),
+        nameof(TimelineBarSpacing),
+        nameof(TimelineBarRounding),
+        nameof(TimelineBarBorderThickness),
+        nameof(TimelineBarTrackOpacity),
+        nameof(TimelineBarColor),
+        nameof(TimelineBarTrackColor),
+        nameof(TimelineBarBorderColor),
+        nameof(BarFill),
+        nameof(BarRightToLeft),
+        nameof(BarTextAlign),
+        nameof(ImminentSeconds),
+        nameof(ImminentPulse),
+        nameof(Countdown),
+        nameof(CountdownSplit),
+        nameof(TimelineWindow),
+        nameof(TimelineRows),
+        nameof(TimelineShowClock),
+        nameof(TimelineAnchorBottom),
+        nameof(TimelineFireFlash),
+        nameof(TimelineShowTankbuster),
+        nameof(TimelineShowRaidwide),
+        nameof(TimelineShowMechanic),
+        nameof(ColorImminent),
+        nameof(TimelineKindColors),
+        nameof(TimelineTankbusterColor),
+        nameof(TimelineRaidwideColor),
+        nameof(TimelineMechanicColor),
+        nameof(AlertsTextScale),
+        nameof(AlertsBgOpacity),
+        nameof(AlertsFade),
+        nameof(AlertsTextEffect),
+        nameof(AlertsEffectThickness),
+        nameof(AlertsEffectColor),
+        nameof(AlertSeconds),
+        nameof(AlertSecondsAlert),
+        nameof(AlertSecondsAlarm),
+        nameof(AlertsMaxVisible),
+        nameof(AlertOrder),
+        nameof(AlertsAlign),
+        nameof(AlertsAnimate),
+        nameof(AlertsAlarmScale),
+        nameof(AlertsLifeline),
+        nameof(AlertsShowInfo),
+        nameof(AlertsShowAlert),
+        nameof(AlertsShowAlarm),
+        nameof(AlertsAnchorBottom),
+        nameof(AlertsWrap),
+        nameof(AlertsCollapseDupes),
+        nameof(AlertsSeverityTint),
+        nameof(AlertsSeverityTintOpacity),
+        nameof(AlertsAlarmFlash),
+        nameof(AlarmScreenFlash),
+        nameof(AlarmScreenFlashSize),
+        nameof(ColorInfo),
+        nameof(ColorAlert),
+        nameof(ColorAlarm),
+        nameof(DpsTextScale),
+        nameof(DpsBgOpacity),
+        nameof(DpsFade),
+        nameof(DpsTextEffect),
+        nameof(DpsEffectThickness),
+        nameof(DpsEffectColor),
+        nameof(DpsTextColor),
+        nameof(DpsSoloOnly),
+        nameof(DpsSelfFirst),
+        nameof(DpsSortOrder),
+        nameof(DpsNamePrivacy),
+        nameof(DpsSelfNameYou),
+        nameof(DpsRowsShowRank),
+        nameof(DpsRowsShowIcons),
+        nameof(DpsRowStripes),
+        nameof(DpsRowStripeOpacity),
+        nameof(DpsMaxRows),
+        nameof(DpsBarHeight),
+        nameof(DpsBarSpacing),
+        nameof(DpsBarRounding),
+        nameof(DpsBarBorderThickness),
+        nameof(DpsBarTrackOpacity),
+        nameof(DpsBarColor),
+        nameof(DpsBarTrackColor),
+        nameof(DpsBarBorderColor),
+        nameof(DpsBarRightToLeft),
+        nameof(DpsBarJobColors),
+        nameof(DpsBarsShowShare),
+        nameof(DpsRowsShowHps),
+        nameof(DpsRowsCompact),
+        nameof(DpsBarSelfHighlight),
+        nameof(DpsBarSelfColor),
+        nameof(DpsBarTopHighlight),
+        nameof(DpsBarTopColor),
+        nameof(DpsShowDeaths),
+        nameof(DpsHoldLast),
+        nameof(DpsHeaderFormat),
+        nameof(DpsStyle),
+        nameof(DpsHorizTheme),
+        nameof(DpsHorizShowNames),
+        nameof(DpsHorizShowRank),
+        nameof(DpsHorizShowIcons),
+        nameof(DpsHorizShowHps),
+        nameof(DpsHorizHighlight),
+        nameof(DpsHorizShowPercent),
+        nameof(DpsHorizMaxBarWidth),
+        nameof(DpsHorizBarHeight),
+        nameof(DpsHorizSkew),
+        nameof(DpsHorizIconSize),
+        nameof(DpsHorizCellPadding),
+        nameof(DpsHorizStatScale),
+        nameof(DpsHorizPercentScale),
+        nameof(DpsHorizDecimals),
+        nameof(DpsHorizCompact),
+        nameof(DpsHorizBarOpacity),
+        nameof(DpsHorizSelfColor),
+        nameof(DpsHorizSelfTextColor),
+        nameof(DpsHorizDpsColor),
+        nameof(DpsHorizTankColor),
+        nameof(DpsHorizHealerColor),
+        nameof(DpsHorizDimColor),
+        nameof(DpsShowHeader),
+        nameof(DpsHeaderDuration),
+        nameof(DpsHeaderTotalDps),
+    }.Select(name => typeof(Configuration).GetProperty(name)!).ToArray();
 }

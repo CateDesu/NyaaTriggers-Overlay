@@ -41,7 +41,7 @@ namespace NyaaTriggers.Plugin.Meter;
 // empty-pull check needs it, enc.last and enc.last_damage stay for the
 // duration math and the idle logic.
 
-internal readonly record struct MeterRow(string Name, string Job, double EncDps, double Share, double Hps, bool IsSelf, int Deaths);
+internal readonly record struct MeterRow(string Name, string Job, double EncDps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0);
 
 /// <summary>The live display frame. Rebuilt on every read rather than
 /// mutated, so the UI never reads a half-updated meter.</summary>
@@ -68,9 +68,12 @@ internal sealed class MeterEngine
     /// fresh segment. Display only, the recorded pull is never split.</summary>
     private const double DefaultIdleTimeout = 120.0;
 
-    /// <summary>Most player rows the overlay carries. Alliance raids run to
-    /// 24, more would only ever be a bug.</summary>
+    /// <summary>Top damage rows plus the local player when ranked below them.</summary>
     private const int MaxOverlayRows = 24;
+
+    // Keep local and party records under pressure. Retired damage remains
+    // in the encounter total and the title marks reduced actor history.
+    private const int MaxEncounterActors = 1024;
 
     private const int HealType = 0x04;
     private const int MaxNameChars = 256;
@@ -124,6 +127,12 @@ internal sealed class MeterEngine
     /// share, so the feed checks this before passing a replayed zone in.</summary>
     internal bool HasZone => this.zone.Length > 0;
 
+    /// <summary>Install cached zone metadata without erasing cached identity.</summary>
+    internal void SetInitialZone(string name)
+    {
+        if (!this.HasZone) this.zone = BoundName(name);
+    }
+
     /// <summary>How long the meter keeps ticking after the last damage before
     /// it pauses, resetting on the next hit. Display only, the recorded pull
     /// is never split or shortened by this. Bad input is ignored.</summary>
@@ -174,7 +183,7 @@ internal sealed class MeterEngine
     /// reading the party as enemies once the roster lands.</summary>
     internal void NoteJob(int aid, int job)
     {
-        if (job == 0)
+        if (job <= 0 || (uint)aid >> 24 != 0x10)
         {
             return;
         }
@@ -209,7 +218,7 @@ internal sealed class MeterEngine
         this.rosterJobs.Clear();
         foreach (var member in members.Take(MaxOverlayRows))
         {
-            if (member.Key > 0 && member.Value > 0)
+            if ((uint)member.Key >> 24 == 0x10 && member.Value > 0)
             {
                 this.rosterJobs[member.Key] = member.Value;
                 this.NoteJob(member.Key, member.Value);
@@ -232,8 +241,10 @@ internal sealed class MeterEngine
         return this.jobs.Get(id);
     }
 
+    // Retired players can return after their job cache entry expires.
     private bool IsPlayer(int? aid)
-        => aid is int id && (id == this.meId || this.JobFor(id) != 0);
+        => aid is int id && (id == this.meId || this.JobFor(id) != 0 ||
+            (this.current?.ActorsLimited == true && (uint)id >> 24 == 0x10));
 
     /// <summary>Does the event credit the player meter: damage a player or a
     /// player's pet dealt, or damage a player directly took. A pet target
@@ -266,14 +277,36 @@ internal sealed class MeterEngine
         name = BoundName(name);
         if (!enc.Combatants.TryGetValue(key, out var c))
         {
+            if (enc.Combatants.Count >= MaxEncounterActors)
+            {
+                var oldest = enc.ActorOrder.First;
+                while (oldest != null && (oldest.Value == this.meId || this.rosterJobs.ContainsKey(oldest.Value)))
+                {
+                    oldest = oldest.Next;
+                }
+
+                if (oldest != null)
+                {
+                    var retired = enc.Combatants[oldest.Value];
+                    enc.RetiredDamage += retired.Damage;
+                    enc.ActorsLimited = true;
+                    enc.Combatants.Remove(oldest.Value);
+                    enc.ActorOrder.Remove(oldest);
+                }
+            }
+
             c = new Combatant(
                 key,
                 name.Length > 0 ? name : this.names.Get(key) ?? string.Empty,
                 this.JobFor(key));
             enc.Combatants[key] = c;
+            c.OrderNode = enc.ActorOrder.AddLast(key);
         }
         else
         {
+            enc.ActorOrder.Remove(c.OrderNode!);
+            enc.ActorOrder.AddLast(c.OrderNode!);
+
             // Records created by a pet's line start nameless, the line only
             // names the pet. The owner's name lands once an 03 or an owner
             // line supplies it.
@@ -850,7 +883,7 @@ internal sealed class MeterEngine
             : Math.Min(this.clock(), idleBase + this.idleTimeout);
         var duration = Math.Max(0.0, spanEnd - enc.Start);
         var encPer = Math.Max(1.0, duration);
-        long totalDamage = 0;
+        long totalDamage = enc.RetiredDamage;
         foreach (var c in enc.Combatants.Values)
         {
             totalDamage += c.Damage;
@@ -870,13 +903,14 @@ internal sealed class MeterEngine
                 c.Deaths));
         }
 
-        var sorted = rows
-            .OrderByDescending(r => r.EncDps)
-            .Take(MaxOverlayRows)
+        var sorted = rows.OrderByDescending(r => r.EncDps)
+            .Select((row, index) => row with { Rank = index + 1 })
+            .Where(row => row.Rank <= MaxOverlayRows || row.IsSelf)
             .ToList();
         return new OverlaySnapshot
         {
-            Title = incomplete ? $"{enc.Title} [incomplete feed]" : enc.Title,
+            Title = enc.Title + (enc.ActorsLimited ? " [limited actors]" : string.Empty)
+                + (incomplete ? " [incomplete feed]" : string.Empty),
             Duration = MmSs(duration),
             EncDps = Math.Round(totalDamage / Math.Max(1.0, duration), 1),
             Rows = sorted,
@@ -978,6 +1012,9 @@ internal sealed class MeterEngine
         internal double? LastDamage { get; set; }
 
         internal Dictionary<int, Combatant> Combatants { get; } = new();
+        internal LinkedList<int> ActorOrder { get; } = new();
+        internal long RetiredDamage { get; set; }
+        internal bool ActorsLimited { get; set; }
     }
 
     /// <summary>One player's running totals for the current encounter. Pets
@@ -991,6 +1028,8 @@ internal sealed class MeterEngine
             this.Name = name;
             this.Job = job;
         }
+
+        internal LinkedListNode<int>? OrderNode { get; set; }
 
         internal int Aid { get; }
 

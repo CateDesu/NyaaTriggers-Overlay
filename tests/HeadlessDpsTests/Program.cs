@@ -78,6 +78,7 @@ internal static class Program
     private static void Draw(PluginUi ui)
     {
         ImGui.Reset();
+        ui.Update();
         ui.Draw();
     }
 

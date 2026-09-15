@@ -15,6 +15,7 @@ internal sealed class PluginUi : IDisposable
     private const float AlarmFadeSeconds = 0.6f;
     private const float AlarmRiseSeconds = 0.12f;
 
+    private bool disposed;
     private readonly Configuration config;
     private readonly BridgeHost bridge;
     private readonly ScaledFonts fonts;
@@ -45,28 +46,57 @@ internal sealed class PluginUi : IDisposable
         this.windows.AddWindow(this.configWindow);
     }
 
-    internal void ToggleConfig() => this.configWindow.Toggle();
+    internal void ToggleConfig()
+    {
+        lock (this.bridge.StateLock)
+        {
+            if (!this.disposed) this.configWindow.Toggle();
+        }
+    }
 
-    internal void OpenConfig() => this.configWindow.IsOpen = true;
+    internal void OpenConfig()
+    {
+        lock (this.bridge.StateLock)
+        {
+            if (!this.disposed) this.configWindow.IsOpen = true;
+        }
+    }
 
     /// <summary>Lock or unlock the boxes. Geometry is only written back while
     /// unlocked, so this is the moment it is worth persisting.</summary>
     internal void SetLocked(bool locked)
     {
-        this.config.Locked = locked;
-        this.config.Save();
+        lock (this.bridge.StateLock)
+        {
+            if (this.disposed) return;
+            this.config.Locked = locked;
+            this.config.Save();
+        }
     }
 
     /// <summary>Whether the alerts box was drawable on the last frame, for the
     /// settings window to explain a test callout that goes nowhere.</summary>
     internal bool AlertsVisible { get; private set; } = true;
 
+    /// <summary>Feed processing continues when Dalamud suppresses drawing.</summary>
+    internal void Update()
+    {
+        lock (this.bridge.StateLock)
+        {
+            if (!this.disposed) this.bridge.Update();
+        }
+    }
+
     internal void Draw()
     {
-        // Everything the socket threads queued is applied here, on the draw
-        // thread, before anything reads it.
-        this.bridge.Update();
+        lock (this.bridge.StateLock)
+        {
+            if (!this.disposed) this.DrawWindows();
+        }
+    }
 
+    private void DrawWindows()
+    {
         this.AlertsVisible = this.ShouldShow(this.config.AlertsOnlyInDuty, this.config.AlertsOnlyInCombat);
         this.alerts.IsOpen = this.AlertsVisible && this.config.ShowAlerts;
         this.timeline.IsOpen = this.ShouldShow(this.config.TimelineOnlyInDuty, this.config.TimelineOnlyInCombat)
@@ -174,7 +204,12 @@ internal sealed class PluginUi : IDisposable
 
     public void Dispose()
     {
-        this.windows.RemoveAllWindows();
-        this.fonts.Dispose();
+        lock (this.bridge.StateLock)
+        {
+            if (this.disposed) return;
+            this.disposed = true;
+            this.windows.RemoveAllWindows();
+            this.fonts.Dispose();
+        }
     }
 }
