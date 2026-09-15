@@ -157,7 +157,9 @@ internal sealed class BridgeHost : IDisposable
 
     internal DpsState Dps { get; private set; } = new();
 
-    /// <summary>The newest accepted nonempty live frame, kept in the state
+    private DpsState? lastLocal;
+
+    /// <summary>The newest accepted live frame, kept in the state
     /// layer rather than only in the window: an end marker landing in the
     /// same drain batch as its final live frame would otherwise leave
     /// hold-last showing older numbers. A clear deliberately keeps it, the
@@ -284,14 +286,21 @@ internal sealed class BridgeHost : IDisposable
         if (!this.IsConnected)
         {
             this.Dps = state;
+            this.lastLocal = state;
         }
     }
 
-    /// <summary>The standalone meter's teardown clear. Not guarded like the
-    /// write path: an idle program sends no dps frames at all, so a handoff clear
-    /// that deferred to the program would leave the standalone's last rows frozen
-    /// on screen indefinitely. A mid-fight program repaints within a second.</summary>
-    private void ClearLocalDps() => this.Dps = new DpsState();
+    /// <summary>Clear only the state the standalone feed still owns.
+    /// A program frame applied earlier in this update must survive.</summary>
+    private void ClearLocalDps()
+    {
+        if (ReferenceEquals(this.Dps, this.lastLocal))
+        {
+            this.Dps = new DpsState();
+        }
+
+        this.lastLocal = null;
+    }
 
     private void OnConnectionChanged(WebSocketServer source, long sequence, bool connected)
     {
@@ -670,11 +679,7 @@ internal sealed class BridgeHost : IDisposable
             Rows = rows,
         };
 
-        if (state.Rows.Count > 0)
-        {
-            this.lastLive = state;
-        }
-
+        this.lastLive = state;
         this.Dps = state;
     }
 

@@ -58,12 +58,6 @@ internal sealed class DpsWindow : OverlayWindow
     /// count of mistakes, it should read like one.</summary>
     private static readonly Vector4 DeathsColor = new(0.95f, 0.42f, 0.42f, 1.00f);
 
-    /// <summary>The last live snapshot, replaced every frame one is running
-    /// and adopted from the ended state's rows when a fight closes. The
-    /// hold-last option draws it after the encounter ends, so the final
-    /// numbers stay up until the next pull or a zone change.</summary>
-    private DpsState? held;
-
     /// <summary>How tall the last frame's content was, window padding
     /// included. The locked Horizon Overlay sizes its window to this: a strip
     /// has exactly one right height, and a taller configured box only ever
@@ -142,46 +136,23 @@ internal sealed class DpsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Config.DpsEffectColor;
 
-    /// <summary>Whether the held final meter should stay on screen right now:
-    /// hold-last on, the encounter ended rather than the state clearing, and a
-    /// held snapshot to draw. The ended state's own rows count too: the state
-    /// layer carries them for frames no draw observed, and gating on the
-    /// private copy alone would keep the box closed before it could adopt
-    /// them. PluginUi gates the locked box's visibility on
-    /// this so the box survives the fight it outlasted.</summary>
+    /// <summary>The ended state carries the final rows even when no draw
+    /// observed the fight. Older encounters must never supply held content.</summary>
     internal bool HasHeldContent =>
         this.Config.DpsHoldLast && !this.bridge.Dps.Show && this.bridge.Dps.Ended
-        && (this.held is { Rows.Count: > 0 } || this.bridge.Dps.Rows.Count > 0);
+        && this.bridge.Dps.Rows.Count > 0;
 
     protected override void DrawContent()
     {
         var dps = this.bridge.Dps;
-        if (dps.Show && dps.Rows.Count > 0)
+        if ((dps.Show && dps.Rows.Count > 0) || this.HasHeldContent)
         {
-            this.held = dps;
             this.DrawMeter(dps.Title, dps.Duration, dps.EncDps, this.FilterRows(dps.Rows));
         }
-        else
+        else if (!this.Config.Locked)
         {
-            // The ended state carries the final frame's rows, including
-            // frames no draw ever observed: adopt them so hold-last shows
-            // the newest numbers the state layer has.
-            if (dps.Ended && dps.Rows.Count > 0)
-            {
-                this.held = dps;
-            }
-
-            if (this.HasHeldContent)
-            {
-                // The fight is over and the option keeps its final numbers up.
-                var last = this.held!;
-                this.DrawMeter(last.Title, last.Duration, last.EncDps, this.FilterRows(last.Rows));
-            }
-            else if (!this.Config.Locked)
-            {
-                // Placeholder so an unlocked box being positioned is never blank.
-                this.DrawMeter("Sample Encounter", "03:12", 81234.5, this.FilterRows(SampleRows));
-            }
+            // Show sample rows while the box is being positioned.
+            this.DrawMeter("Sample Encounter", "03:12", 81234.5, this.FilterRows(SampleRows));
         }
 
         // Where the content ended, bottom padding included: the locked

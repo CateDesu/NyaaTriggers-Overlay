@@ -172,6 +172,20 @@ program handles a mid-instance start.
 lines, including the wire-decode examples from `dps_meter.py`'s docstring. Run it with
 `dotnet run --project tests/MeterEngineTests`.
 
+`tests/HeadlessDpsTests` checks the complete DPS path without a display or the game:
+
+```sh
+env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/HeadlessDpsTests
+```
+
+It compiles the meter, bridge, DPS window and visibility code from the program's source.
+A local WebSocket server replays synthetic IINACT events, including fragmented frames and
+a real disconnect and reconnect. The checks cover damage totals, pets, healing, deaths,
+all three meter styles, encounter endings, zone changes and handoffs to the program.
+Drawing calls go to a recording adapter. Game conditions, fonts and textures are stubbed,
+so this verifies the state and drawing commands but does not test native rendering in game.
+The release workflow runs this alongside the engine and bridge tests.
+
 ## Status
 
 Both halves work and are in use in game. The program side is `plugin_link.py` in the
