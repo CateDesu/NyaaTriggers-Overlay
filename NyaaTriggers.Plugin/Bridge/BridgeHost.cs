@@ -17,20 +17,15 @@ internal readonly record struct TimelineEntry(float Time, string Label, string K
 
 internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0);
 
-/// <summary>The program's latest dps frame. Replaced whole on every update rather
-/// than mutated, so the UI never reads a half-updated meter.</summary>
+/// <summary>Replaced as a whole so drawing never sees a partially updated DPS
+/// frame.</summary>
 internal sealed class DpsState
 {
     internal bool Show { get; init; }
 
-    /// <summary>The encounter ended, as opposed to a clear wiping the state:
-    /// the meter's hold-last option keeps showing the final rows on this one.
-    /// The last frame of a fight wins. A clear landing after the show:false
-    /// still wipes the state and the hold never engages, which is the program's
-    /// sample-fight reset and its zone change by design. On a wipe the program
-    /// re-sends the end frame after its clear, so the hold survives it.
-    /// The final rows ride the ended state itself: an end marker consumed in
-    /// the same drain batch as its last live frame still keeps them.</summary>
+    /// <summary>Keeps the final rows available to the hold option, even if the last live
+    /// frame and ending arrive in one update. A later clear hides them. Wipes send clear
+    /// before the ending so the final rows remain visible.</summary>
     internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;
@@ -48,58 +43,43 @@ internal sealed class ActiveAlert
 
     internal required Severity Severity { get; init; }
 
-    /// <summary>Monotonic milliseconds at which this alert stops drawing.
-    /// Settable so a merged repeat can push the expiry out.</summary>
+    /// <summary>Expiry in monotonic milliseconds. Repeated alerts can extend it.</summary>
     internal required long ExpiresAt { get; set; }
 
-    /// <summary>Settable so a merged repeat re-runs the rise-in and reads as
-    /// fired again rather than sitting unchanged.</summary>
+    /// <summary>Reset on a merged repeat to restart the entry animation.</summary>
     internal required long ShownAt { get; set; }
 
-    /// <summary>How many times this callout has fired while it stayed on top.
-    /// One means shown as-is; above one the window appends a times counter.</summary>
+    /// <summary>Repeat count for the current top callout. The counter is displayed only
+    /// above one.</summary>
     internal int Count { get; set; } = 1;
 }
 
-/// <summary>
-/// Owns the link and the state it feeds.
-///
-/// The socket threads only ever enqueue; everything is applied in
-/// <see cref="Update"/> under the UI state lock, so the UI never reads a list that
-/// is being mutated underneath it.
-/// </summary>
+/// <summary>Socket threads queue messages. <see cref="Update"/> applies them under the UI
+/// state lock shared with drawing and settings.</summary>
 internal sealed class BridgeHost : IDisposable
 {
-    /// <summary>Bumped when the wire format changes incompatibly. The program
-    /// checks it in the hello and refuses to drive a plugin it does not
-    /// understand, rather than sending commands into the void.</summary>
+    /// <summary>Increment for incompatible protocol changes. The program checks this in the
+    /// greeting.</summary>
     internal const int ProtocolVersion = 1;
 
-    /// <summary>Messages applied per frame. Draining an unbounded queue in one
-    /// frame lets a chatty peer stall the render thread.</summary>
+    /// <summary>Limits message processing to avoid stalling the render thread.</summary>
     private const int MaxMessagesPerFrame = 64;
 
-    /// <summary>Alerts on screen at once. Beyond this the oldest goes: a wall
-    /// of stale callouts is worse than none.</summary>
     private const int MaxAlerts = 8;
 
-    /// <summary>Timeline entries kept. The program pushes its whole schedule, and
-    /// the stock timelines run past 300 entries for twenty-minute fights; the
-    /// window walks the list each frame, so the cap only bounds memory.</summary>
+    /// <summary>Allows complete timelines with hundreds of entries while bounding retained
+    /// state.</summary>
     private const int MaxTimelineEntries = 1024;
 
-    /// <summary>DPS rows kept. The program caps at a full alliance of 24; more
-    /// would only ever be a bug, and the window walks the list each frame.
-    /// The user's Max combatants setting narrows this down for display.</summary>
+    /// <summary>A full alliance. The display setting may show fewer rows.</summary>
     private const int MaxDpsRows = 24;
 
-    /// <summary>Longest name, label or title kept from a frame. The wire cap
-    /// is 1 MiB, but every stored string is measured and drawn every frame,
-    /// and nothing legit is past a couple of lines.</summary>
+    /// <summary>Bounds text measured and drawn every frame, independently of the wire size
+    /// limit.</summary>
     private const int MaxTextChars = 256;
 
-    /// <summary>How long unload waits for background server drains. Bounded:
-    /// a wedged socket must not hang plugin teardown either.</summary>
+    /// <summary>Maximum wait in milliseconds for background server disposal during
+    /// unload.</summary>
     private const int DrainWaitMs = 4000;
 
     internal object StateLock { get; } = new();
@@ -112,31 +92,27 @@ internal sealed class BridgeHost : IDisposable
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
-    /// <summary>The IINACT-fed meter that runs while no program session is live.
-    /// Ticked from Update under the same lock as drawing and settings.</summary>
+    /// <summary>Runs when no program session is connected. Updated under the UI state
+    /// lock.</summary>
     private readonly StandaloneMeter standalone;
 
-    /// <summary>Guards server swaps, the drain list and the source check in
-    /// Receive, so an old server's background teardown cannot race a new one
-    /// being published and its frames cannot land after Stop drains.</summary>
+    /// <summary>Makes server replacement, source checks and inbox writes atomic with
+    /// shutdown.</summary>
     private readonly object serverLock = new();
 
-    /// <summary>Old servers draining in the background; unload waits on them,
-    /// so background callbacks finish before plugin teardown.</summary>
+    /// <summary>Unload waits for these server tasks so their callbacks can
+    /// finish.</summary>
     private readonly List<Task> pendingDrains = new();
 
-    /// <summary>Read unsynchronized from socket threads; volatile so a
-    /// detached server is seen as superseded at once.</summary>
+    /// <summary>Read by socket threads without taking serverLock.</summary>
     private volatile WebSocketServer? server;
 
-    /// <summary>Sequence of the session that currently owns the link, under
-    /// serverLock. Frames and disconnect callbacks from any other session are
-    /// stale: a replaced session can outlive its replacement long enough to
-    /// land both, and the server object cannot tell them apart.</summary>
+    /// <summary>Current session sequence, guarded by serverLock. Rejects late messages and
+    /// disconnects from replaced sessions on the same server.</summary>
     private long currentSession;
 
-    /// <summary>Fight clock as of <see cref="clockStamp"/>, interpolated from
-    /// there so bars move smoothly between the program's ticks.</summary>
+    /// <summary>Fight time at <see cref="clockStamp"/>, interpolated between program
+    /// ticks.</summary>
     private double clockBase;
     private long clockStamp;
     private bool clockRunning;
@@ -147,8 +123,8 @@ internal sealed class BridgeHost : IDisposable
         this.standalone = new StandaloneMeter(config, () => this.IsConnected, this.ApplyLocalDps, this.ClearLocalDps);
     }
 
-    /// <summary>Read straight off the server rather than mirrored into a field,
-    /// so a callback from a superseded server cannot leave this stuck on.</summary>
+    /// <summary>Read from the current server so an old callback cannot leave a stale
+    /// connection flag.</summary>
     internal bool IsConnected => this.server?.IsConnected ?? false;
 
     internal string? LastError => this.server?.LastError;
@@ -161,27 +137,22 @@ internal sealed class BridgeHost : IDisposable
 
     private DpsState? lastLocal;
 
-    /// <summary>The newest accepted live frame, kept in the state
-    /// layer rather than only in the window: an end marker landing in the
-    /// same drain batch as its final live frame would otherwise leave
-    /// hold-last showing older numbers. A clear deliberately keeps it, the
-    /// wipe sequence is clear then show:false and the hold must survive it.</summary>
+    /// <summary>Retains the latest rows even if no draw occurs before the ending. Survives
+    /// clear so a wipe followed by show:false can preserve the final rows.</summary>
     private DpsState? lastLive;
 
     internal double Clock => this.clockRunning
         ? this.clockBase + ((Environment.TickCount64 - this.clockStamp) / 1000.0)
         : this.clockBase;
 
-    /// <summary>Whether a tick has ever landed, so the timeline box's clock
-    /// line can stay hidden until a fight clock actually exists.</summary>
+    /// <summary>Keeps the timeline clock hidden until the first tick.</summary>
     internal bool ClockRunning => this.clockRunning;
 
     internal void Start()
     {
         this.Stop();
 
-        // The callback needs to know which server it came from, so a late
-        // callback from one we already disposed can be ignored.
+        // Capture the source to reject callbacks from a replaced server.
         WebSocketServer? created = null;
         created = new WebSocketServer(
             this.config.Port,
@@ -205,12 +176,8 @@ internal sealed class BridgeHost : IDisposable
         // Preserve only rows still owned by the independent standalone feed.
         this.ClearState(resetDps: !ReferenceEquals(this.Dps, this.lastLocal));
         this.lastLive = null;
-        // Drain anything the old server queued (including a synthesised clear
-        // from its disconnect) so a Restart / port change does not re-apply stale
-        // timeline or dps frames onto the freshly-cleared state next Update.
-        // This lives here, not in ClearState: ClearState also runs for the
-        // "clear" command, and the program sends clear + new timeline back-to-back
-        // on a zone change, so draining there would discard the fresh frames.
+        // Discard queued frames from the old server. Keep this out of ClearState because a
+        // zone change queues a fresh timeline immediately after clear.
         this.inbox.Clear();
 
         if (old == null)
@@ -218,13 +185,9 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Dispose waits up to DisposeDrainMs for the old sessions to unwind,
-        // and Stop runs on the render thread (port Apply), where that wait
-        // would freeze the game — so the teardown drains in the background.
-        // Detaching above already silenced it: its callbacks all check the
-        // source against the live server. Unload still waits, in Dispose.
-        // A rapid port change can outrun the drain and fail the rebind.
-        // The visible error keeps Apply enabled for another attempt.
+        // Dispose in the background because settings apply on the render thread. Old
+        // callbacks are already rejected, and unload waits for disposal. A port rebind may
+        // need a retry if the old listener has not closed yet.
         var drain = Task.Run(old.Dispose);
         lock (this.serverLock)
         {
@@ -233,13 +196,9 @@ internal sealed class BridgeHost : IDisposable
         }
     }
 
-    /// <summary>Socket thread: queue only, never touch the state the UI reads.
-    /// Guarded on the source under serverLock so the check and the enqueue are
-    /// atomic with Stop's detach and drain: a frame from a superseded server
-    /// lands before the drain or not at all, never after it onto freshly
-    /// cleared state. The sequence guard does the same within one server: a
-    /// session being replaced can still be mid-read-loop, and its late frames
-    /// must not land behind the replacement's session-start reset.</summary>
+    /// <summary>Queue socket messages under serverLock. Source and session checks must be
+    /// atomic with replacement and inbox clearing so stale frames cannot arrive after a
+    /// reset.</summary>
     private void Receive(WebSocketServer source, long sequence, string raw)
     {
         var overloaded = false;
@@ -270,17 +229,13 @@ internal sealed class BridgeHost : IDisposable
     /// <summary>Rebind after a port change.</summary>
     internal void Restart() => this.Start();
 
-    /// <summary>Re-dial IINACT after the standalone endpoint was applied.</summary>
     internal void RestartStandalone() => this.standalone.Restart();
 
-    /// <summary>Standalone meter state for the config window's link section.</summary>
     internal StandaloneState StandaloneStatus => this.standalone.State;
 
     internal string StandaloneStatusText => this.standalone.Status;
 
-    /// <summary>The standalone meter's write path. The program owns the meter
-    /// while it is connected, so a local frame landing during a session is
-    /// dropped rather than fighting the program's feed.</summary>
+    /// <summary>Apply standalone frames only while the program is disconnected.</summary>
     private void ApplyLocalDps(DpsState state)
     {
         if (!this.IsConnected)
@@ -304,11 +259,8 @@ internal sealed class BridgeHost : IDisposable
 
     private void OnConnectionChanged(WebSocketServer source, long sequence, bool connected)
     {
-        // A superseded server tearing down must not touch the live one's state.
-        // The check and the enqueue stay under serverLock so they are atomic
-        // with Stop's swap and drain, same as Receive: without it a callback
-        // preempted between the two could land a stale clear on the fresh
-        // server's inbox.
+        // Keep the source check and enqueue atomic with Stop so an old disconnect cannot
+        // clear the new server state.
         lock (this.serverLock)
         {
             if (!ReferenceEquals(source, this.server))
@@ -318,8 +270,7 @@ internal sealed class BridgeHost : IDisposable
 
             if (connected)
             {
-                // A superseded session can still be queued behind its
-                // replacement: only the newest session earns the reset.
+                // Reject a session start that was overtaken by a newer session.
                 if (sequence <= this.currentSession)
                 {
                     return;
@@ -327,29 +278,26 @@ internal sealed class BridgeHost : IDisposable
 
                 this.currentSession = sequence;
 
-                // The new session starts with a clear. Its frames arrive only
-                // after this callback, so old work can be discarded in order.
+                // New session frames arrive after this callback, so the old backlog can be
+                // cleared.
                 this.inbox.Clear();
                 this.inbox.TryEnqueue(null);
                 return;
             }
 
-            // A replaced session's late disconnect must not clear its
-            // replacement's freshly pushed schedule.
+            // An old disconnect must not clear the current session.
             if (sequence != this.currentSession)
             {
                 return;
             }
 
-            // Retire the old session backlog before clearing its display.
             this.inbox.Clear();
             this.inbox.TryEnqueue(null);
         }
     }
 
-    /// <summary>The session's first frame. Returned rather than sent so the
-    /// server can queue it before publishing the session, which is what makes
-    /// "hello arrives first" true rather than merely likely.</summary>
+    /// <summary>Return the greeting so the server can queue it before publishing the
+    /// session. This guarantees it is the first frame.</summary>
     private string? Greeting(WebSocketServer source)
         => ReferenceEquals(source, this.server)
             ? $"{{\"ev\":\"hello\",\"protocol\":{ProtocolVersion}," +
@@ -403,9 +351,8 @@ internal sealed class BridgeHost : IDisposable
         var now = Environment.TickCount64;
         this.alerts.RemoveAll(a => a.ExpiresAt <= now);
 
-        // The standalone meter ticks after the program's frames, and its writer
-        // refuses to touch Dps while a session is live, so the program's feed
-        // always wins a same-frame race.
+        // Process standalone updates last. ApplyLocalDps rejects them while a program
+        // session is connected.
         this.standalone.Update();
     }
 
@@ -433,8 +380,7 @@ internal sealed class BridgeHost : IDisposable
         switch (command.GetString())
         {
             case "tick":
-                // A tick without a real time is dropped, not applied as zero:
-                // a malformed frame must not rewind the fight clock.
+                // Invalid ticks must not reset the fight clock to zero.
                 if (root.TryGetProperty("t", out var tick) && TryFinite(tick, out var time))
                 {
                     this.clockBase = time;
@@ -457,8 +403,7 @@ internal sealed class BridgeHost : IDisposable
                 break;
 
             case "clear":
-                // Arrives over a live program session, so the program owns
-                // the dps rows and this reset covers them too.
+                // The program owns the meter for this session, so clear its DPS rows too.
                 this.ClearState(resetDps: true);
                 break;
 
@@ -467,16 +412,14 @@ internal sealed class BridgeHost : IDisposable
                 break;
 
             default:
-                // Forward-compatible: a newer program sending a command this build
-                // does not know is ignored, not an error.
+                // Ignore unknown commands for compatibility with newer senders.
                 break;
         }
     }
 
     private void ApplyTimeline(JsonElement root)
     {
-        // Validate before touching the live schedule: a malformed frame is
-        // dropped whole, the same discipline the tick and dps handlers follow.
+        // Validate before replacing the live schedule.
         if (!root.TryGetProperty("v", out var entries) || entries.ValueKind != JsonValueKind.Array)
         {
             return;
@@ -486,11 +429,8 @@ internal sealed class BridgeHost : IDisposable
 
         foreach (var entry in entries.EnumerateArray())
         {
-            // [time, label] pairs, optionally [time, label, kind], matching
-            // what the program's timeline engine produces. The kind is a free
-            // string ("tankbuster", "raidwide", "mechanic"); an old program's
-            // 2-field entries and kinds we do not know both draw as plain
-            // mechanics.
+            // Entries are [time, label] or [time, label, kind]. Missing and unknown kinds
+            // use the default mechanic appearance.
             if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
             {
                 continue;
@@ -533,10 +473,7 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Clamp length and flatten: the wire cap is 1 MiB, but no callout
-        // needs that. AlertsWindow.WrapLines would otherwise Split(' ') the
-        // whole string every frame for the alert's lifetime, a GC-pressure
-        // foot-gun under a flood of max-length frames.
+        // Limit text before wrapping to bound allocations and layout work on each frame.
         const int MaxAlertTextChars = 4096;
         var text = SanitizeText(textElement.GetString(), MaxAlertTextChars);
         if (string.IsNullOrWhiteSpace(text))
@@ -555,8 +492,7 @@ internal sealed class BridgeHost : IDisposable
             };
         }
 
-        // Each severity falls back to its own configured time. An explicit ttl
-        // on the wire still wins over all three.
+        // Use the configured duration for this severity unless the message supplies a ttl.
         var seconds = severity switch
         {
             Severity.Alarm => this.config.AlertSecondsAlarm,
@@ -570,8 +506,7 @@ internal sealed class BridgeHost : IDisposable
             seconds = (float)Math.Clamp(ttlSeconds, 0.5, 30.0);
         }
 
-        // Clamped: a zero would flicker and never be read, and a program bug
-        // sending a huge value would pin a stale callout on screen all fight.
+        // Keep callouts readable without allowing them to remain indefinitely.
         seconds = Math.Clamp(seconds, 0.5f, 30.0f);
 
         var now = this.messageStamp ?? Environment.TickCount64;
@@ -587,19 +522,14 @@ internal sealed class BridgeHost : IDisposable
 
     private void ApplyDps(JsonElement root)
     {
-        // The contract always carries "show"; a frame without it is malformed
-        // and ignored like any other bad frame.
         if (!root.TryGetProperty("show", out var show) ||
             show.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
         {
             return;
         }
 
-        // Encounter over: hide the meter, with the final rows riding the
-        // marker so hold-last keeps the newest numbers even when no draw
-        // observed them live. Marked as an ending rather than a clear, so
-        // the hold-last option can tell "fight done" apart from "zone
-        // changed" and keep the final rows up.
+        // Attach final rows to the ending so the hold option works even if no draw saw the
+        // last live frame.
         if (show.ValueKind == JsonValueKind.False)
         {
             var last = this.lastLive;
@@ -633,10 +563,8 @@ internal sealed class BridgeHost : IDisposable
         {
             foreach (var entry in rowsElement.EnumerateArray())
             {
-                // [name, job, encdps, share, hps, isSelf, deaths] rows, sorted
-                // by encdps desc, matching what the program's meter produces. The
-                // trailing fields arrived one version at a time; an old program's
-                // shorter rows just get the defaults.
+                // Rows are [name, job, encdps, share, hps, isSelf, deaths] in descending
+                // DPS order. Missing trailing fields from older senders use defaults.
                 if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
                 {
                     continue;
@@ -703,9 +631,8 @@ internal sealed class BridgeHost : IDisposable
         this.Dps = state;
     }
 
-    /// <summary>Wipe the state the program pushed. The dps rows only when
-    /// resetDps: they can belong to the standalone meter, which is fed
-    /// independent of this server and must survive its restarts.</summary>
+    /// <summary>Clear program state. Clear DPS only when resetDps is true because
+    /// standalone rows must survive server restarts.</summary>
     internal void ClearState(bool resetDps)
     {
         this.timeline.Clear();
@@ -719,10 +646,8 @@ internal sealed class BridgeHost : IDisposable
         this.clockRunning = false;
     }
 
-    /// <summary>The test buttons in the config window: push one sample alert
-    /// so the box, its colours and the per severity knobs can be checked
-    /// outside a fight. The severity names the text, so testing several at
-    /// once does not fold them into one merged repeat.</summary>
+    /// <summary>Use distinct text for each test severity so the samples do not
+    /// merge.</summary>
     internal void PushTestAlert(Severity severity)
     {
         var now = Environment.TickCount64;
@@ -735,11 +660,8 @@ internal sealed class BridgeHost : IDisposable
         });
     }
 
-    /// <summary>Add an alert and hold the stack to its cap, oldest out first: a
-    /// burst inside one alert's lifetime must not grow the display without
-    /// limit. Every alert goes through here so no path can skip the trim.
-    /// With merge repeats on, a repeat of the callout already on top bumps its
-    /// counter and expiry instead of stacking another row.</summary>
+    /// <summary>Merge repeats of the top callout when enabled. Otherwise append and remove
+    /// the oldest alerts above the limit.</summary>
     private void Push(ActiveAlert alert)
     {
         if (this.config.AlertsCollapseDupes && this.alerts.Count > 0)
@@ -750,9 +672,7 @@ internal sealed class BridgeHost : IDisposable
                 last.Count++;
                 last.ShownAt = alert.ShownAt;
 
-                // Max, not a straight take: the wire allows a per-alert ttl,
-                // so a repeat carrying a shorter one must not clip the life
-                // the showing callout has left.
+                // A repeat with a shorter duration must not shorten the current alert.
                 last.ExpiresAt = Math.Max(last.ExpiresAt, alert.ExpiresAt);
                 return;
             }
@@ -776,11 +696,8 @@ internal sealed class BridgeHost : IDisposable
             ? value.GetString() ?? string.Empty
             : string.Empty;
 
-    /// <summary>Bound and flatten a wire string. Newlines go first: the
-    /// windows reserve one row per string, so an embedded one would draw
-    /// over the next row. Then the length cap, so a flood of max-length
-    /// frames cannot keep the render thread measuring novels. Internal so
-    /// the standalone meter can hold its feed to the same hygiene.</summary>
+    /// <summary>Remove line breaks to prevent row overlap and cap text length to bound
+    /// layout work. Shared with the standalone meter.</summary>
     internal static string SanitizeText(string? text, int maxChars)
     {
         if (string.IsNullOrEmpty(text))
@@ -794,8 +711,7 @@ internal sealed class BridgeHost : IDisposable
             return text;
         }
 
-        // Never split a surrogate pair at the cap: a lone half draws as a
-        // replacement glyph, so the cut backs off the leading half.
+        // Avoid truncating inside a surrogate pair.
         var cut = maxChars;
         if (cut > 0 && char.IsHighSurrogate(text[cut - 1]) && char.IsLowSurrogate(text[cut]))
         {
@@ -810,10 +726,8 @@ internal sealed class BridgeHost : IDisposable
         this.Stop();
         this.standalone.Dispose();
 
-        // The background drains Stop started must finish before the load
-        // context goes away: a session task outliving it runs freed code.
-        // Bounded like the server's own drain, plus slack for the drain
-        // task to be scheduled at all.
+        // Wait for background server disposal before unload, with time for those tasks to
+        // start.
         Task[] drains;
         lock (this.serverLock)
         {
@@ -841,8 +755,8 @@ internal sealed class BridgeHost : IDisposable
 
 internal static class PluginVersion
 {
-    /// <summary>All four components: rolling builds differ only in the last
-    /// one, and the program shows this string in its status label.</summary>
+    /// <summary>Include the fourth version component to distinguish rolling builds in the
+    /// program status.</summary>
     internal static readonly string Value =
         typeof(PluginVersion).Assembly.GetName().Version?.ToString(4)
         ?? "0.0.0";

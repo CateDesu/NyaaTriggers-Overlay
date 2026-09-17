@@ -4,20 +4,10 @@ using Dalamud.Interface.Textures.TextureWraps;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>
-/// The metallic gold job icons, loaded from the game's own icon pack
-/// (ui/icon/062000). The dps meter's Horizon Overlay style centres one on
-/// each bar like the ACT original; nothing else uses them. The wire format carries
-/// the acronym, so the map is acronym to icon id: classes are 062301 onward,
-/// jobs are 062400 + the ClassJob sheet's JobIndex (062401 PLD through 062423
-/// BST, verified against the game files). Hi-res variants exist for the whole
-/// set, so the request asks for them; Dalamud falls back to the standard one
-/// when an icon lacks it. Unknown or blank jobs get no icon, like the
-/// original's empty.png. The textures stay owned by Dalamud's shared cache
-/// (ISharedImmediateTexture is not disposable on this API), so the cache
-/// below holds managed handles only and there is nothing to release at
-/// teardown.
-/// </summary>
+/// <summary>Load gold job icons from ui/icon/062000. Class IDs start at 062301 and job IDs
+/// are 062400 plus ClassJob.JobIndex. Request high resolution icons with the standard
+/// resolution as fallback. Dalamud owns the cached textures, so these handles need no
+/// disposal.</summary>
 internal static class JobIcons
 {
     private static readonly Dictionary<string, uint> ByJob = new(System.StringComparer.OrdinalIgnoreCase)
@@ -58,9 +48,8 @@ internal static class JobIcons
 
     private static readonly Dictionary<uint, ISharedImmediateTexture> Cache = new();
 
-    /// <summary>The job's gold icon texture, or null for an acronym we do not
-    /// know. Textures load in the background; the wrap may be the empty one
-    /// for a frame or two, which draws as nothing and is fine.</summary>
+    /// <summary>Return null for unknown jobs. Textures may be unavailable while
+    /// loading.</summary>
     internal static IDalamudTextureWrap? Get(string job)
     {
         if (string.IsNullOrWhiteSpace(job) || !ByJob.TryGetValue(job, out var iconId))

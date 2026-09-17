@@ -6,26 +6,15 @@ using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>
-/// Callout text, colour-coded by severity and fading out as it expires. Text
-/// is wrapped rather than clipped: a long callout truncated at the box edge is
-/// worse than useless mid-pull. Wrapping is done by hand so each line can be
-/// aligned, which ImGui's own wrapped text cannot do.
-/// </summary>
+/// <summary>Wrap callouts manually so each line can use the configured alignment.</summary>
 internal sealed class AlertsWindow : OverlayWindow
 {
-    /// <summary>Seconds of fade at the end of an alert's life.</summary>
     private const float FadeSeconds = 0.6f;
 
-    /// <summary>Seconds of grow-in at the start, so a new alert reads as new
-    /// even when it replaces one with the same text.</summary>
     private const float RiseSeconds = 0.12f;
 
-    /// <summary>Gap between one callout's block and the next.</summary>
     private const float BlockSpacing = 4.0f;
 
-    /// <summary>Gap under a callout's text before its remaining-time strip,
-    /// and the strip's own height.</summary>
     private const float LifelineGap = 2.0f;
     private const float LifelineHeight = 2.0f;
 
@@ -72,18 +61,14 @@ internal sealed class AlertsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Config.AlertsEffectColor;
 
-    /// <summary>One callout laid out for drawing: the wrapped or elided
-    /// lines, the severity colour, the fade, whether it is an alarm, the
-    /// alarm's size multiplier, its line height at that size, and the share
-    /// of its lifetime still left. Lines and line height are resolved up
-    /// front so the bottom-anchored layout can total the stack's height
-    /// before anything is placed.</summary>
+    /// <summary>Resolve line layout before drawing so a stack anchored at the bottom can be
+    /// positioned from its total height.</summary>
     private readonly record struct DrawItem(
         List<MeasuredLine> Lines, Vector4 Color, float Alpha, bool IsAlarm,
         float Scale, float LineHeight, float MeasuredHeight, float Life);
 
-    /// <summary>Scratch for the collect-then-draw pass, cleared each frame.
-    /// Layouts survive across frames until the text or font changes.</summary>
+    /// <summary>Reuse drawing storage each frame. Cache text layouts until the text or font
+    /// changes.</summary>
     private readonly List<DrawItem> items = new();
 
     protected override void DrawContent()
@@ -105,8 +90,7 @@ internal sealed class AlertsWindow : OverlayWindow
             }
         }
 
-        // The box border pulses while an alarm is up, fading with the alarm
-        // itself rather than cutting out at the expiry tick.
+        // Fade the alarm border with the callout.
         var alarmAlpha = 0.0f;
         foreach (var item in items)
         {
@@ -132,8 +116,8 @@ internal sealed class AlertsWindow : OverlayWindow
         }
     }
 
-    /// <summary>The visible callouts in draw order, filters applied. An empty
-    /// stack draws samples while unlocked so the box is never a blank frame.</summary>
+    /// <summary>Collect visible callouts in display order. Use samples when empty and
+    /// unlocked.</summary>
     private List<DrawItem> CollectItems()
     {
         var items = this.items;
@@ -143,7 +127,6 @@ internal sealed class AlertsWindow : OverlayWindow
         {
             if (!this.Config.Locked)
             {
-                // Full lifelines: the strip previews solid while idle.
                 items.Add(this.MakeItem("Sample callout", this.Config.ColorAlarm, 1.0f, false, 1.0f, 1.0f));
                 items.Add(this.MakeItem("Sample callout", this.Config.ColorAlert, 1.0f, false, 1.0f, 1.0f));
             }
@@ -151,9 +134,8 @@ internal sealed class AlertsWindow : OverlayWindow
             return items;
         }
 
-        // The newest alert lives at the end of the list. Either way the stack
-        // is the most recent few, filtered severities costing no slot; the
-        // order setting only picks which way up they stack.
+        // Take the newest visible alerts before applying display order. Filtered severities
+        // do not consume slots.
         var max = Math.Clamp(this.Config.AlertsMaxVisible, 1, 8);
         for (var i = alerts.Count - 1; i >= 0 && items.Count < max; i--)
         {
@@ -200,8 +182,7 @@ internal sealed class AlertsWindow : OverlayWindow
                 age >= RiseSeconds ? 1.0f : Math.Max(age, 0.0f) / RiseSeconds);
         }
 
-        // Share of the callout's life still left, for the strip under it. A
-        // merged repeat resets both ends, so the strip refills with it.
+        // A merged repeat resets both timestamps, refilling the remaining time strip.
         var span = alert.ExpiresAt - alert.ShownAt;
         var life = span > 0
             ? Math.Clamp((alert.ExpiresAt - now) / (float)span, 0.0f, 1.0f)
@@ -220,9 +201,8 @@ internal sealed class AlertsWindow : OverlayWindow
         items.Add(this.MakeItem(text, color, alpha, alert.Severity == Severity.Alarm, scale, life));
     }
 
-    /// <summary>Resolve one callout's lines: wrapped to the box width, or one
-    /// elided line when wrapping is off. An alarm scaled up is measured in its
-    /// own font so the wrap and the line height match what DrawAlert paints.</summary>
+    /// <summary>Measure wrapped or truncated lines using the alarm font size so layout
+    /// matches drawing.</summary>
     private DrawItem MakeItem(string text, Vector4 color, float alpha, bool isAlarm, float scale, float life)
     {
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
@@ -237,9 +217,7 @@ internal sealed class AlertsWindow : OverlayWindow
                 }
             }
 
-            // Bucket still building: wrap against a narrowed width and scale
-            // the line height, a close guess at the scaled layout for the few
-            // frames until the atlas catches up.
+            // Approximate the target layout with scaled dimensions until the font is ready.
             var item = this.MakeItemMeasured(text, color, alpha, isAlarm, scale, life, width / scale);
             return item with { LineHeight = item.LineHeight * scale };
         }
@@ -273,8 +251,7 @@ internal sealed class AlertsWindow : OverlayWindow
         return new DrawItem(lines, color, alpha, isAlarm, scale, height, height, life);
     }
 
-    /// <summary>What one callout's block occupies vertically, strip and block
-    /// gap included.</summary>
+    /// <summary>Include the remaining time strip and gap in the block height.</summary>
     private float BlockHeight(DrawItem item)
     {
         var height = item.Lines.Count * item.LineHeight;
@@ -310,9 +287,8 @@ internal sealed class AlertsWindow : OverlayWindow
                 4.0f);
         }
 
-        // An alarm scaled up draws in its own font. The layout already
-        // reserved its height. While the bucket builds, stretch the window
-        // font instead, the same fallback the base draw uses.
+        // Use the alarm font when ready, or scale the current font to match its reserved
+        // height.
         if (item.Scale > 1.0f)
         {
             var handle = this.Fonts.Get(this.TextPx * item.Scale);
@@ -343,9 +319,7 @@ internal sealed class AlertsWindow : OverlayWindow
             this.DrawAlertLines(drawList, item, origin, width);
         }
 
-        // The remaining-time strip empties as the callout ages. It hugs the
-        // box edge the alignment points at, so a right aligned stack drains
-        // toward the left and a centred one toward its middle.
+        // Anchor the remaining time strip to the callout alignment.
         if (this.Config.AlertsLifeline)
         {
             var fillWidth = width * Math.Clamp(item.Life, 0.0f, 1.0f);
@@ -366,8 +340,7 @@ internal sealed class AlertsWindow : OverlayWindow
             }
         }
 
-        // Reserve the block so the next callout lands underneath it: the text
-        // goes straight to the draw list and takes no layout space by default.
+        // Draw list calls reserve no layout space, so advance past this block explicitly.
         ImGui.Dummy(new Vector2(width, this.BlockHeight(item)));
     }
 
@@ -394,9 +367,8 @@ internal sealed class AlertsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Greedy word wrap measured with the current font. A word wider
-    /// than the box is left to overflow and be clipped rather than broken
-    /// mid-word.</summary>
+    /// <summary>Wrap at word boundaries using the current font. Words wider than the window
+    /// remain intact and are clipped.</summary>
     private static List<string> WrapLines(string text, float width)
     {
         var lines = new List<string>();

@@ -142,8 +142,7 @@ public sealed class Plugin : IDalamudPlugin
             this.bridge.Dispose();
         }
 
-        // Geometry is only tracked in memory while unlocked; make sure the last
-        // drag survives a reload rather than only a settings click.
+        // Save the last window placement, which is tracked in memory while unlocked.
         this.config.Save();
     }
 }

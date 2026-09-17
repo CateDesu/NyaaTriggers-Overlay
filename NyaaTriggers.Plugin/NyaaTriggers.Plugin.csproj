@@ -1,10 +1,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
 
   <PropertyGroup>
-    <!-- Must equal InternalName in the manifest. Dalamud resolves an installed
-         plugin as <InternalName>/<version>/<InternalName>.dll, so an assembly
-         named after the project instead would simply never be found: the log
-         says "No DLL found for plugin" and nothing loads. -->
+    <!-- Must match the manifest InternalName so Dalamud can locate the DLL. -->
     <AssemblyName>NyaaTriggers</AssemblyName>
     <RootNamespace>NyaaTriggers.Plugin</RootNamespace>
     <Version>0.2.0.0</Version>
@@ -16,8 +13,6 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Warnings are errors: a Dalamud plugin that misbehaves takes the game
-         down with it, so nothing sloppy gets to ship quietly. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 

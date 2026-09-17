@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 """Drive the NyaaTriggers companion plugin without the program.
 
-Connects to the plugin's loopback WebSocket and feeds it a fake pull: a
-timeline that counts down, and callouts at fixed points. Lets the in-game
-drawing be checked before the program knows anything about the plugin.
+Send a sample timeline and callouts, or a DPS encounter, over loopback WebSocket.
 
     python test_bridge.py [--port 27080] [--speed 1.0]
     python test_bridge.py --dps          fake encounter for the DPS meter instead
 
-Needs the `websockets` package (the program itself uses Qt's client instead; this
-is a standalone tool, not part of the program).
+Requires the websockets package.
 
-Note on --speed: the plugin interpolates the fight clock in real time between
-ticks, so a fast-forwarded clock makes the bars step rather than glide. Above
-1x, trust the callout timings, not the animation.
+The plugin interpolates time between ticks. Speeds above 1x are useful for
+checking callout timing but make bar motion uneven.
 """
 import argparse
 import asyncio
@@ -29,16 +25,12 @@ except ImportError:
           file=sys.stderr)
     raise SystemExit(1)
 
-# Wire format this tool speaks. Must match BridgeHost.ProtocolVersion.
+# Must match BridgeHost.ProtocolVersion.
 PROTOCOL_VERSION = 1
 
-# A plugin that upgrades the socket but never greets is broken; do not wait on
-# it forever with nothing on screen to say so.
 HELLO_TIMEOUT = 5.0
 
-# (timeline second, label, kind) - the wire shape the program's timeline_frame
-# produces, the engine's time and label pairs plus the kind tag it derives
-# from the label text. Two tagged entries exercise the per-kind colours.
+# Entries contain timeline seconds, label and cue kind.
 SCHEDULE = [
     (8.0, "Wing of Ruin", "mechanic"),
     (16.0, "Akh Morn raidwide", "raidwide"),
@@ -48,7 +40,7 @@ SCHEDULE = [
     (52.0, "Enrage", "mechanic"),
 ]
 
-# (timeline second, text, severity)
+# Entries contain timeline seconds, text and severity.
 CALLOUTS = [
     (6.0, "Wing of Ruin - move out", "info"),
     (14.0, "Akh Morn - stack for towers", "alert"),
@@ -57,9 +49,7 @@ CALLOUTS = [
     (39.0, "Soak your tower", "alert"),
 ]
 
-# (name, job, base encdps, base enchps, is the local player, deaths) - the
-# same shape the program's meter rows produce, already close to sorted; each
-# frame jitters and re-sorts them.
+# Rows contain name, job, base DPS, base HPS, local player flag and deaths.
 PARTY = [
     ("Alphinaud L", "SGE", 10234.5, 9123.4, False, 0),
     ("Beta Tester", "DRG", 9876.0, 0.0, True, 0),
@@ -73,13 +63,13 @@ PARTY = [
 
 TICK_SECONDS = 0.25
 
-# The program's meter cadence: one dps frame per second while the encounter runs.
+# Match the program's meter update interval.
 DPS_SECONDS = 1.0
 DPS_FRAMES = 6
 
 
 async def handshake(ws) -> None:
-    """Read the hello and refuse to drive a plugin we do not understand."""
+    """Check protocol compatibility before sending sample data."""
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=HELLO_TIMEOUT)
     except asyncio.TimeoutError:
@@ -90,8 +80,6 @@ async def handshake(ws) -> None:
     hello = json.loads(raw)
     print(f"plugin says: {hello}")
 
-    # Gate rather than warn: driving a plugin whose wire format we do not
-    # understand produces confusing in-game behaviour, not a clean failure.
     if hello.get("protocol") != PROTOCOL_VERSION:
         raise SystemExit(
             f"plugin speaks protocol {hello.get('protocol')!r}, this tool speaks "

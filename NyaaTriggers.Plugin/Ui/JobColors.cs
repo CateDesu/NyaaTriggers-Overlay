@@ -4,9 +4,6 @@ using System.Numerics;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>The three Horizon Overlay colour groups. Tanks and healers are
-/// listed; every other combat job is dps, matching the ACT original's
-/// jobRoles table.</summary>
 internal enum JobRole
 {
     Dps,
@@ -14,12 +11,7 @@ internal enum JobRole
     Healer,
 }
 
-/// <summary>
-/// Job accent colours for the dps meter styles where the colour carries the
-/// job (the Horizon Overlay's segments, kagerou's underlines) instead of
-/// printing the acronym. The values are the cactbot-standard job colours; anything unknown
-/// gets a neutral grey rather than a wrong colour.
-/// </summary>
+/// <summary>Job accent colours based on cactbot. Unknown jobs use neutral grey.</summary>
 internal static class JobColors
 {
     private static readonly Vector4 Unknown = Hex(0x9A9A9A);
@@ -41,9 +33,7 @@ internal static class JobColors
         "BST",
     };
 
-    /// <summary>The job's Horizon Overlay role, or null for an acronym we do
-    /// not know: the original leaves unknown jobs on the plain dark bar rather
-    /// than guessing a colour.</summary>
+    /// <summary>Return null for unknown jobs so they use the neutral bar colour.</summary>
     internal static JobRole? RoleOf(string job)
     {
         if (string.IsNullOrWhiteSpace(job))
@@ -66,8 +56,7 @@ internal static class JobColors
 
     private static readonly Dictionary<string, Vector4> ByJob = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Base classes take their job's colour: the program sends class acronyms
-        // for sub-50 content, and kagerou colours them the same.
+        // Base classes share their associated job colours.
         ["GLA"] = Hex(0xA8D2E6),
         ["PGL"] = Hex(0xD69C00),
         ["MRD"] = Hex(0xCF2621),
@@ -99,19 +88,15 @@ internal static class JobColors
         ["RDM"] = Hex(0xE87B7B),
         ["BLU"] = Hex(0x2459FF),
         ["PCT"] = Hex(0xFCA8E0),
-        // No upstream colour for the new limited job yet, so this copper is
-        // ours: warm and earthy like the job, clear of every hue already taken.
+        // Custom Beastmaster colour.
         ["BST"] = Hex(0xA65E2E),
     };
 
-    /// <summary>The job's accent colour, or neutral grey for an acronym we do
-    /// not know (or none at all).</summary>
     internal static Vector4 Get(string job)
         => !string.IsNullOrWhiteSpace(job) && ByJob.TryGetValue(job, out var color)
             ? color
             : Unknown;
 
-    /// <summary>0xRRGGBB to the 0-1 floats ImGui colours are stored as.</summary>
     private static Vector4 Hex(int rgb)
         => new(
             ((rgb >> 16) & 0xFF) / 255.0f,

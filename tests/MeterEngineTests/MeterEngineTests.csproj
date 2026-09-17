@@ -4,14 +4,11 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
-    <!-- Mirror the plugin build: anything sloppy should fail here too. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Compile the engine straight in, no project reference: the harness
-         stays dependency-free and the plugin csproj stays untouched. The
-         engine's internals are visible since they land in this assembly. -->
+    <!-- Compile the source directly to access internals without Dalamud dependencies. -->
     <Compile Include="..\..\NyaaTriggers.Plugin\Meter\MeterEngine.cs" Link="MeterEngine.cs" />
   </ItemGroup>
 

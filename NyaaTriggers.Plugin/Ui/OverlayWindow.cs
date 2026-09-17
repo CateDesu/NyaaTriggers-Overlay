@@ -6,14 +6,8 @@ using Dalamud.Interface.Windowing;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>
-/// Shared behaviour for the overlay boxes.
-///
-/// Locked is the raid-night state: no chrome, no background, no input, so the
-/// box is invisible except for what it draws and clicks land on the game.
-/// Unlocked gives back a frame and a title bar so it can be dragged, and the
-/// owner fills it with sample content so it is never an invisible empty box.
-/// </summary>
+/// <summary>Locked windows have no frame and pass clicks through to the game. Unlocked
+/// windows can be moved and resized and show sample content when empty.</summary>
 internal abstract class OverlayWindow : Window
 {
     private const ImGuiWindowFlags LockedFlags =
@@ -29,14 +23,11 @@ internal abstract class OverlayWindow : Window
         ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings |
         ImGuiWindowFlags.NoDocking;
 
-    /// <summary>Ignore sub-pixel jitter so a window that is merely being drawn
-    /// does not rewrite the config file every frame.</summary>
+    /// <summary>Ignore small geometry changes caused by rendering jitter.</summary>
     private const float GeometryEpsilon = 0.5f;
 
-    /// <summary>Set by ResetGeometry so the next PreDraw force-applies the
-    /// stored geometry even while unlocked, where FirstUseEver would keep the
-    /// window wherever it currently sits. A closed window never runs PreDraw,
-    /// so the flag simply waits there until the box is shown again.</summary>
+    /// <summary>Apply reset geometry on the next PreDraw, including while unlocked. A
+    /// hidden window keeps this pending until shown.</summary>
     private bool forceGeometry;
 
     protected OverlayWindow(string name, Configuration config, ScaledFonts fonts)
@@ -45,10 +36,8 @@ internal abstract class OverlayWindow : Window
         this.Config = config;
         this.Fonts = fonts;
 
-        // The overlay is not a window the user closes; it is turned off in
-        // settings. Without these, one panic Escape mid-pull hides it, and the
-        // unlocked box grows an X that cannot work: IsOpen is rewritten every
-        // frame, so clicking it just flickers the window.
+        // Settings control visibility. Escape and the close button must not hide a window
+        // whose IsOpen is set each frame.
         this.RespectCloseHotkey = false;
         this.ShowCloseButton = false;
         this.DisableWindowSounds = true;
@@ -56,50 +45,34 @@ internal abstract class OverlayWindow : Window
 
     protected Configuration Config { get; }
 
-    /// <summary>Size-snapped fonts for crisp text, shared by both boxes.</summary>
     protected ScaledFonts Fonts { get; }
 
-    /// <summary>Where this window's geometry is stored, so the base class can
-    /// persist a drag without each subclass repeating it.</summary>
     protected abstract Vector2 StoredPosition { get; set; }
 
     protected abstract Vector2 StoredSize { get; set; }
 
-    /// <summary>Text scale for this box, so the timeline bars and the alerts
-    /// are sized independently in settings.</summary>
     protected abstract float TextScale { get; }
 
-    /// <summary>Backdrop opacity for this box; the boxes are configured
-    /// independently so a loud timeline can sit next to frameless alerts.</summary>
     protected abstract float BgOpacity { get; }
 
-    /// <summary>What keeps this box's text readable over the game: nothing, an
-    /// outline, or a soft glow. Each box carries its own so a loud alert
-    /// effect does not force itself onto the timeline.</summary>
     protected abstract TextEffectStyle TextEffect { get; }
 
-    /// <summary>Whole-box opacity multiplier. Every colour the box draws is
-    /// folded through it in ToColor, the backdrop included. Clamped just
-    /// above zero: a box faded to nothing could never be found again.</summary>
+    /// <summary>Applied to every colour through ToColor, including the backdrop.</summary>
     protected virtual float FadeOpacity => 1.0f;
 
-    /// <summary>The fade for this frame, clamped to the drawable range.</summary>
+    /// <summary>Keep a minimum opacity so the window remains visible for
+    /// placement.</summary>
     private float Fade => Math.Clamp(this.FadeOpacity, 0.05f, 1.0f);
 
-    /// <summary>Effect reach in pixels for this box.</summary>
     protected abstract int EffectThickness { get; }
 
-    /// <summary>Effect colour for this box; the alpha is the effect's opacity.</summary>
     protected abstract Vector4 EffectColor { get; }
 
-    /// <summary>The effective on-screen pixel size of this box's text for the
-    /// frame being drawn, set in Draw before DrawContent. Sub-captions that
-    /// should read smaller than the body text derive their font from it.</summary>
+    /// <summary>Effective text size in screen pixels, set before DrawContent. Smaller
+    /// captions derive their size from it.</summary>
     protected float TextPx { get; private set; }
 
-    /// <summary>Clamp a text scale to the range the settings sliders offer,
-    /// 0.5x to 6x. Every window draws through this so a hand-edited config
-    /// cannot push text past what the font buckets cover.</summary>
+    /// <summary>Keep text within the settings range covered by the font atlas.</summary>
     protected static float ClampTextScale(float scale) => Math.Clamp(scale, 0.5f, 6.0f);
 
     public override void PreDraw()
@@ -107,50 +80,37 @@ internal abstract class OverlayWindow : Window
         var locked = this.Config.Locked;
         this.Flags = locked ? LockedFlags : UnlockedFlags;
 
-        // The window bg honors the configured backdrop opacity (0 = invisible),
-        // scaled by the box's fade like everything else it draws.
-        // The locked state stays NoBackground and gets a custom rect in Draw()
-        // instead, so its click-through and chromeless shape are unaffected.
+        // Locked windows use NoBackground and draw their backdrop separately.
         ImGui.SetNextWindowBgAlpha(Math.Clamp(this.BgOpacity, 0.0f, 1.0f) * this.Fade);
 
-        // Dalamud multiplies Size by GlobalScale on the way out but leaves
-        // Position alone, so the stored size is divided back out here. Skipping
-        // this draws the box GlobalScale times too big at any UI scale, and
-        // compounds every session as the scaled size is captured and re-scaled.
+        // Divide stored size by GlobalScale because Dalamud scales Size but leaves Position
+        // unchanged. Otherwise captured sizes grow again on each reload.
         this.Position = this.StoredPosition;
         this.Size = this.StoredSize / ImGuiHelpers.GlobalScale;
 
-        // Pinned while locked; while unlocked the stored value is only a
-        // starting point, or dragging would snap straight back every frame.
-        // A geometry reset forces one Always pass so it also lands unlocked.
+        // Apply geometry every frame while locked and once after reset. Unlocked windows
+        // must remain draggable.
         var condition = locked || this.forceGeometry ? ImGuiCond.Always : ImGuiCond.FirstUseEver;
         this.forceGeometry = false;
         this.PositionCondition = condition;
         this.SizeCondition = condition;
     }
 
-    /// <summary>Back to the shipped position and size, for a box dragged off
-    /// screen or stranded by a resolution change.</summary>
     internal abstract void ResetGeometry();
 
-    /// <summary>Arm the one-shot force PreDraw honors. Called by the subclass
-    /// once the stored geometry holds the fresh defaults.</summary>
+    /// <summary>Apply the updated stored geometry on the next PreDraw.</summary>
     protected void ForceGeometry() => this.forceGeometry = true;
 
     public override void Draw()
     {
         var scale = ClampTextScale(this.TextScale);
 
-        // The current font here is the window's default: its size already
-        // includes Dalamud's UI scale, so it is the honest base for what the
-        // plain bitmap-scaling path would have produced.
+        // The default font size already includes the Dalamud UI scale.
         var targetPx = ImGui.GetFont().FontSize * scale;
         this.TextPx = targetPx;
 
-        // Crisp text at any size: push a font rasterized at (just above) the
-        // target size and let the window scale cover only the few-percent
-        // remainder. Only while the font is still building, or if the atlas
-        // failed, fall back to stretching the default font for the frame.
+        // Use a font rasterized near the target size. Scale the default font only while the
+        // requested font is unavailable.
         var handle = this.Fonts.Get(targetPx);
         if (handle is { Available: true })
         {
@@ -165,8 +125,8 @@ internal abstract class OverlayWindow : Window
                 }
                 finally
                 {
-                    // Font scale is window state, not a stack: leaving it set
-                    // would scale the next thing drawn into this window too.
+                    // Window font scale persists outside the font stack, so reset it
+                    // explicitly.
                     ImGui.SetWindowFontScale(1.0f);
                 }
             }
@@ -193,8 +153,8 @@ internal abstract class OverlayWindow : Window
 
     protected abstract void DrawContent();
 
-    /// <summary>Locked boxes are NoBackground by design: draw the configured
-    /// backdrop ourselves (a no-op at 0 opacity, which is the default).</summary>
+    /// <summary>Draw the configured backdrop because locked windows disable the ImGui
+    /// background.</summary>
     private void DrawBackdrop()
     {
         if (!this.Config.Locked || this.BgOpacity <= 0.0f)
@@ -212,9 +172,8 @@ internal abstract class OverlayWindow : Window
             3.0f);
     }
 
-    /// <summary>Remember where the user dragged this box to. Held in memory and
-    /// written out when the overlay is locked or the plugin unloads, rather
-    /// than rewriting the config file every frame of a drag.</summary>
+    /// <summary>Track geometry in memory. Persist it when locking or unloading, rather than
+    /// on every drag frame.</summary>
     private void CaptureGeometry()
     {
         var position = ImGui.GetWindowPos();
@@ -231,17 +190,13 @@ internal abstract class OverlayWindow : Window
         }
     }
 
-    /// <summary>Float rgba to a draw-list colour with the box's fade folded
-    /// into the alpha, so everything drawn through here answers the fade knob.
-    /// </summary>
+    /// <summary>Apply the window fade when converting RGBA to an ImGui colour.</summary>
     protected uint ToColor(Vector4 rgba) => ImGui.ColorConvertFloat4ToU32(WithAlpha(rgba, this.Fade));
 
-    /// <summary>Fade a colour's alpha, for alerts on their way out.</summary>
     protected static Vector4 WithAlpha(Vector4 rgba, float alpha)
         => new(rgba.X, rgba.Y, rgba.Z, rgba.W * Math.Clamp(alpha, 0.0f, 1.0f));
 
-    /// <summary>Blend a colour toward white, keeping its alpha. The lit top
-    /// edge of a bar fill, so the fill reads lit rather than flat.</summary>
+    /// <summary>Blend toward white while preserving alpha.</summary>
     protected static Vector4 Lighten(Vector4 rgba, float amount)
     {
         var t = Math.Clamp(amount, 0.0f, 1.0f);
@@ -252,9 +207,8 @@ internal abstract class OverlayWindow : Window
             rgba.W);
     }
 
-    /// <summary>Draw a fill with a lit top edge settling to the base colour at
-    /// the bottom, plus a hairline highlight along the top. ImGui cannot round
-    /// a gradient, so a rounded bar keeps the plain flat fill.</summary>
+    /// <summary>Draw a vertical gradient with a highlighted top edge. Rounded bars use a
+    /// flat fill because this gradient cannot be rounded.</summary>
     protected void AddBarFill(
         ImDrawListPtr drawList, Vector2 min, Vector2 max, Vector4 fill, float rounding)
     {
@@ -272,11 +226,8 @@ internal abstract class OverlayWindow : Window
         drawList.AddLine(min + new Vector2(0.0f, 0.5f), new Vector2(max.X, min.Y + 0.5f), sheen);
     }
 
-    /// <summary>Trim text to fit a width, ending it with an ellipsis when it
-    /// had to be cut. Measured with the current font. Width only grows as
-    /// characters are appended, so the fitting prefix is bisected: a
-    /// one-character walk is quadratic on long strings, and wire text can be
-    /// long even after the bridge's clamp.</summary>
+    /// <summary>Fit text with an ellipsis using the current font. Binary search avoids
+    /// measuring every prefix of a long string.</summary>
     protected static string Elide(string text, float maxWidth)
     {
         if (ImGui.CalcTextSize(text).X <= maxWidth)
@@ -287,7 +238,7 @@ internal abstract class OverlayWindow : Window
         const string Ellipsis = "…";
         var budget = Math.Max(maxWidth - ImGui.CalcTextSize(Ellipsis).X, 0.0f);
 
-        // The empty prefix always fits; the full text is known not to.
+        // The empty prefix fits and the full text does not.
         var fits = 0;
         var tooLong = text.Length;
         while (tooLong - fits > 1)
@@ -303,9 +254,7 @@ internal abstract class OverlayWindow : Window
             }
         }
 
-        // One char less always fits, so a cut that would split a surrogate
-        // pair backs off the leading half rather than draw a lone one as a
-        // replacement glyph.
+        // Keep surrogate pairs intact when truncating.
         if (fits > 0 && char.IsHighSurrogate(text[fits - 1]) && char.IsLowSurrogate(text[fits]))
         {
             fits--;
@@ -314,11 +263,8 @@ internal abstract class OverlayWindow : Window
         return string.Concat(text.AsSpan(0, fits), Ellipsis);
     }
 
-    /// <summary>Draw text with the box's configured effect. Overlay text floats
-    /// over the game with little or no backdrop, and unadorned text washes out
-    /// over bright arenas; the outline or glow is what keeps a callout readable
-    /// mid-pull. The colour's own alpha carries any fade, and the effect's
-    /// opacity is scaled by it so the two never split visually.</summary>
+    /// <summary>Draw text with its configured effect. Scale effect opacity by text alpha so
+    /// both fade together.</summary>
     protected void DrawStyledText(ImDrawListPtr drawList, Vector2 pos, Vector4 color, string text)
     {
         var alpha = Math.Clamp(color.W, 0.0f, 1.0f);
@@ -330,8 +276,7 @@ internal abstract class OverlayWindow : Window
         {
             switch (this.TextEffect)
             {
-                // Stamps on concentric rings: a filled circle stays round
-                // where a filled square grid leaves blocky corners.
+                // Use circular stamps to keep outline corners rounded.
                 case TextEffectStyle.Outline:
                 {
                     var ink = ImGui.GetColorU32(new Vector4(effect.X, effect.Y, effect.Z, effectAlpha));
@@ -343,8 +288,7 @@ internal abstract class OverlayWindow : Window
                     break;
                 }
 
-                // Wider, fainter rings stacked outward: the overlap reads as a
-                // soft halo rather than a hard edge.
+                // Reduce opacity toward the outer rings for a soft glow.
                 case TextEffectStyle.Glow:
                 {
                     for (var radius = thickness + 2; radius >= 1; radius--)
@@ -363,8 +307,7 @@ internal abstract class OverlayWindow : Window
         drawList.AddText(pos, ToColor(color), text);
     }
 
-    /// <summary>Stamp the text around a circle of the given radius. The stamp
-    /// count grows with the radius so wider rings have no gaps.</summary>
+    /// <summary>Increase stamp count with radius to avoid gaps in the ring.</summary>
     private static void StampRing(ImDrawListPtr drawList, Vector2 pos, string text, uint color, int radius)
     {
         var steps = Math.Max(8, radius * 8);

@@ -1,19 +1,6 @@
-# Cuts releases and republishes the Dalamud repository listing.
-#
-# Two ways this runs:
-#   * push to MAIN -> a ROLLING release with no manual tagging. The version is
-#     <csproj base>.<run_number> (e.g. 0.1.0.42): the 4th segment increases on
-#     every push, so anyone on the repo URL updates continuously. Older rolling
-#     releases are pruned once the new one is up.
-#   * push a v* TAG -> a hand-cut milestone release. The tag must equal
-#     <Version> in the csproj or the run fails, so a release can never
-#     advertise one version and ship another. A milestone is only the current
-#     build until the next rolling release: nothing on the releases page is
-#     kept permanently.
-#
-# Only first-party actions are used here. A plugin gets injected into the game
-# process, so the build that produces it is not somewhere to run a random
-# marketplace action.
+# Main builds use the csproj base version with the workflow run number.
+# Tag builds must match the csproj version. Older releases can be pruned
+# after the new package and listing are published.
 name: Release
 
 on:
@@ -22,8 +9,6 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Least-privilege default. build and prune-rolling re-declare contents: write;
-# meta only reads the csproj, so it inherits this.
 permissions:
   contents: read
 
@@ -34,16 +19,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Pinned to the API level the plugin targets. Tracking "latest" would mean a
-  # Dalamud API bump silently rebuilds this against headers it was never
-  # written for.
+  # Keep builds on the plugin's supported Dalamud API level.
   DALAMUD_DISTRIB: https://goatcorp.github.io/dalamud-distrib/api15/latest.zip
   PACKAGE: NyaaTriggers.Plugin/bin/Release/NyaaTriggers/latest.zip
   MANIFEST: NyaaTriggers.Plugin/bin/Release/NyaaTriggers.json
 
 jobs:
-  # Resolve tag / version / rolling ONCE so a branch push (no tag ref) and a
-  # tag push flow through the exact same build+publish pipeline below.
   meta:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -64,15 +45,12 @@ jobs:
           if [ "$REF_TYPE" = "tag" ]; then
             TAG="$REF_NAME"
             VER="${TAG#v}"
-            # The tag is the version and must equal the csproj's. Building with
-            # the tag would mask a disagreement, so compare first.
+            # Check before overriding the build version so mismatches remain visible.
             if [ "$VER" != "$CS" ]; then
               echo "::error::tag $TAG disagrees with csproj <Version> $CS"; exit 1
             fi
             ROLL=false
           else
-            # Only main has a release channel. A manual run from another branch
-            # must never publish over it, so fail rather than guess.
             if [ "$REF_NAME" != "main" ]; then
               echo "::error::branch $REF_NAME has no release channel"; exit 1
             fi
@@ -108,8 +86,7 @@ jobs:
 
       - name: Fetch the Dalamud assemblies
         run: |
-          # There is no XIVLauncher on a runner, so the SDK is pointed at an
-          # unpacked distrib instead of a local install.
+          # Use downloaded assemblies because CI has no XIVLauncher installation.
           mkdir -p "$HOME/dalamud"
           curl -fsSL "$DALAMUD_DISTRIB" -o /tmp/dalamud.zip
           unzip -q /tmp/dalamud.zip -d "$HOME/dalamud"
@@ -117,10 +94,7 @@ jobs:
             echo "::error::Dalamud.dll missing from the distrib zip"; exit 1; }
           echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
 
-      # -p:Version flows into the assembly AND the manifest DalamudPackager
-      # writes, and the step below checks the manifest against the resolved
-      # version, so the listing can never advertise one version while the zip
-      # reports another.
+      # Set the assembly and packaged manifest to the same resolved version.
       - name: Build
         env:
           VERSION: ${{ needs.meta.outputs.version }}
@@ -151,13 +125,10 @@ jobs:
           PY
           unzip -l "$PACKAGE"
 
-      # Everything below only runs for a real tag push.
       - name: Refuse a tag that is not on main
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          # pluginmaster.json is committed to main, so releasing a commit that
-          # never reached main would publish a listing for code main does not
-          # have.
+          # Published tags must contain code already included in main.
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
             echo "::error::tag ${GITHUB_REF_NAME} is not an ancestor of main"; exit 1; }
 
@@ -170,9 +141,7 @@ jobs:
           git show origin/main:pluginmaster.json > /tmp/current-pluginmaster.json
           python3 tools/check_publish_version.py /tmp/current-pluginmaster.json "$VERSION" >> "$GITHUB_OUTPUT"
 
-      # The listing only updates in the next step, so the release being visible
-      # for a few seconds before the listing points at it harms nothing: nobody
-      # discovers builds except through the listing.
+      # Upload the package before publishing its download URL in the listing.
       - name: Publish the release
         if: steps.fresh.outputs.publish == 'true'
         env:
@@ -201,8 +170,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pluginmaster.json
-          # [skip ci]: this commit lands on main, and main pushes trigger this
-          # workflow. Without the marker the listing update would build forever.
+          # Prevent the listing commit from starting another release build.
           git commit -m "Publish ${TAG} to the plugin repository [skip ci]"
           git pull --rebase origin main
           git push origin main

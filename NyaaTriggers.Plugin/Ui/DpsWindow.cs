@@ -11,37 +11,23 @@ using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>
-/// The program's dps meter: a header with the encounter, its duration and the
-/// party's dps, then the members in the configured style — the
-/// timeline-style share bars, the Horizon Overlay's skewed side-by-side bars
-/// with the job icon straddling the top edge, or kagerou's underlined text
-/// rows. The program sends a whole snapshot about once a second, so there is
-/// nothing to interpolate; the window just draws the latest one.
-/// </summary>
 internal sealed class DpsWindow : OverlayWindow
 {
     private const float TextPadding = 6.0f;
 
     private static readonly Vector4 HorizonChip = new(0.000f, 0.000f, 0.000f, 0.25f);
 
-    /// <summary>The two-tone seam across a bar, measured from the left: the
-    /// ACT original's 51% gradient stop. The side nearer the member's relevant
-    /// stat is solid; a healing healer (hps above dps) flips it.</summary>
+    /// <summary>Split between the two bar shades. Emphasize HPS for healers whose HPS
+    /// exceeds DPS, otherwise DPS.</summary>
     private const float HorizonSeam = 0.49f;
 
-    /// <summary>The unit caption beside an in-bar number draws at this share
-    /// of the number's own size, the original's 8px caption under a 13px
-    /// body.</summary>
+    /// <summary>Unit caption size relative to its number.</summary>
     private const float HorizonLabelRatio = 0.625f;
 
-    /// <summary>Shrink steps for an in-bar stat that is too wide for its half
-    /// of the bar, tried in order after the unit label is dropped.</summary>
+    /// <summary>Try smaller stat fonts in this order after dropping the unit
+    /// label.</summary>
     private static readonly float[] StatFitRatios = { 1.0f, 0.85f, 0.7f, 0.55f };
 
-    /// <summary>What an unlocked box draws while no encounter is running, so
-    /// every style shows its own look instead of a blank frame. A couple of
-    /// deaths sprinkled in so the deaths marker previews too.</summary>
     private static readonly DpsRow[] SampleRows =
     {
         new("Y'shtola R", "BLM", 10234.5, 21.4, 14.0, true, 0),
@@ -54,25 +40,18 @@ internal sealed class DpsWindow : OverlayWindow
 
     private readonly BridgeHost bridge;
 
-    /// <summary>The deaths marker's red. Fixed rather than a knob: it is a
-    /// count of mistakes, it should read like one.</summary>
     private static readonly Vector4 DeathsColor = new(0.95f, 0.42f, 0.42f, 1.00f);
 
-    /// <summary>How tall the last frame's content was, window padding
-    /// included. The locked Horizon Overlay sizes its window to this: a strip
-    /// has exactly one right height, and a taller configured box only ever
-    /// clipped the encounter line or trapped dead space.</summary>
+    /// <summary>Content height including padding, used to fit the locked Horizon Overlay
+    /// window.</summary>
     private float contentHeight;
 
-    /// <summary>Tracks the lock edge so unlocking once re-applies the stored
-    /// height. Without it imgui's remembered size is the auto-fit one, and
-    /// the geometry capture would save that over the user's own.</summary>
+    /// <summary>Restore the stored height on unlock so geometry capture does not overwrite
+    /// it with the fitted height.</summary>
     private bool wasLocked;
 
-    /// <summary>The 1 based places the kept rows held in the full list, filled
-    /// by FilterRows. Empty means no filter bit and the rank is the row index
-    /// plus one. Solo mode keeps one middle row, and renumbering it to 1
-    /// would claim a first place the player did not earn.</summary>
+    /// <summary>Original ranks for filtered rows. Empty when the original list is used
+    /// unchanged.</summary>
     private readonly List<int> keptRanks = new();
 
     internal DpsWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
@@ -95,8 +74,8 @@ internal sealed class DpsWindow : OverlayWindow
             }
             else if (!this.Config.Locked && this.wasLocked)
             {
-                // Back from the auto-fit height to the stored one, this once.
-                // FirstUseEver would keep imgui's remembered auto-fit size.
+                // Force the stored height once because FirstUseEver would preserve the
+                // fitted height.
                 this.SizeCondition = ImGuiCond.Always;
             }
         }
@@ -136,8 +115,8 @@ internal sealed class DpsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Config.DpsEffectColor;
 
-    /// <summary>The ended state carries the final rows even when no draw
-    /// observed the fight. Older encounters must never supply held content.</summary>
+    /// <summary>Use only final rows attached to this ending, even if no draw saw them
+    /// live.</summary>
     internal bool HasHeldContent =>
         this.Config.DpsHoldLast && !this.bridge.Dps.Show && this.bridge.Dps.Ended
         && this.bridge.Dps.Rows.Count > 0;
@@ -151,23 +130,18 @@ internal sealed class DpsWindow : OverlayWindow
         }
         else if (!this.Config.Locked)
         {
-            // Show sample rows while the box is being positioned.
             this.DrawMeter("Sample Encounter", "03:12", 81234.5, this.FilterRows(SampleRows));
         }
 
-        // Where the content ended, bottom padding included: the locked
-        // Horizon Overlay's next PreDraw sizes the window to this.
+        // Use the measured height, including padding, for the next locked Horizon Overlay
+        // draw.
         this.contentHeight = ImGui.GetCursorScreenPos().Y - ImGui.GetWindowPos().Y
             + ImGui.GetStyle().WindowPadding.Y;
     }
 
-    /// <summary>The rows after the solo-only filter, the sort, the self-first
-    /// pin and the max-combatants cap. The common case, nothing of it biting,
-    /// hands the input back without a copy. keptRanks records where each kept
-    /// row sat in the full list so none of the reshuffling can renumber a row
-    /// to 1. The pin runs before the cap, so self-first with a tight cap still
-    /// keeps the local player rather than trimming them away.
-    /// </summary>
+    /// <summary>Filter and sort while preserving original ranks. Pin the local player
+    /// before limiting row count. Return the input unchanged when no transformation is
+    /// needed.</summary>
     private IReadOnlyList<DpsRow> FilterRows(IReadOnlyList<DpsRow> rows)
     {
         var max = Math.Clamp(this.Config.DpsMaxRows, 1, 24);
@@ -199,8 +173,7 @@ internal sealed class DpsWindow : OverlayWindow
 
         if (sort != DpsSortOrder.ByDps)
         {
-            // Rows and ranks move as one, so the rank number keeps telling
-            // the truth under a re-sorted list. Stable: ties keep rank order.
+            // Move ranks with their rows and preserve original order for ties.
             var order = new int[kept.Count];
             for (var i = 0; i < order.Length; i++)
             {
@@ -231,9 +204,8 @@ internal sealed class DpsWindow : OverlayWindow
                     continue;
                 }
 
-                // The strip draws left to right and the lists top to bottom,
-                // so slot zero is the pinned place in every style. The rank
-                // moves with the row and still tells the truth.
+                // The first slot places the pinned player at the left of the strip or top
+                // of a list.
                 var row = kept[i];
                 var rank = this.keptRanks[i];
                 kept.RemoveAt(i);
@@ -253,11 +225,8 @@ internal sealed class DpsWindow : OverlayWindow
         return kept;
     }
 
-    /// <summary>The sort orders other than the feed's own. Alphabetical reads
-    /// the displayed name, so the privacy options decide what it keys on and
-    /// hidden names simply tie and keep the feed's order. By role groups tanks
-    /// then healers then dps like the party list. Ties fall back to the rows'
-    /// original places, keeping the sort stable.</summary>
+    /// <summary>Sort using displayed names or role. Hidden names compare equally. Original
+    /// order breaks ties.</summary>
     private int CompareRows(DpsRow a, DpsRow b, int indexA, int indexB, DpsSortOrder sort)
     {
         var by = sort switch
@@ -269,8 +238,6 @@ internal sealed class DpsWindow : OverlayWindow
         return by != 0 ? by : indexA.CompareTo(indexB);
     }
 
-    /// <summary>Party-list grouping for the by-role sort: tanks, healers, dps,
-    /// unknown jobs last.</summary>
     private static int RoleRank(string job) => JobColors.RoleOf(job) switch
     {
         JobRole.Tank => 0,
@@ -279,8 +246,6 @@ internal sealed class DpsWindow : OverlayWindow
         _ => 3,
     };
 
-    /// <summary>The name as the privacy options display it: YOU for the local
-    /// player when asked, everyone else shown, initialled or hidden.</summary>
     private string RowName(DpsRow row)
     {
         if (row.IsSelf)
@@ -296,8 +261,7 @@ internal sealed class DpsWindow : OverlayWindow
         };
     }
 
-    /// <summary>"Y'shtola Rhul" becomes "Y. R.", the streamer-friendly middle
-    /// ground between a full name and none.</summary>
+    /// <summary>Format names such as Y'shtola Rhul as Y. R.</summary>
     private static string Initials(string name)
     {
         var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -305,8 +269,7 @@ internal sealed class DpsWindow : OverlayWindow
         foreach (var part in parts)
         {
             builder.Append(char.ToUpperInvariant(part[0]));
-            // Keep an astral initial whole: the pair's other half rides
-            // along so no lone surrogate draws as a replacement glyph.
+            // Keep a surrogate pair intact when taking an initial.
             if (part.Length > 1 && char.IsHighSurrogate(part[0]) && char.IsLowSurrogate(part[1]))
             {
                 builder.Append(part[1]);
@@ -318,22 +281,15 @@ internal sealed class DpsWindow : OverlayWindow
         return builder.ToString().TrimEnd();
     }
 
-    /// <summary>The deaths marker for a row, " x2" in the deaths red, or null
-    /// when the option is off or the member never died.</summary>
     private string? DeathsMarker(DpsRow row)
         => this.Config.DpsShowDeaths && row.Deaths > 0 ? $" x{row.Deaths}" : null;
 
-    /// <summary>The 1 based rank of kept row i: its place in the full list
-    /// when a filter ran, else its own index.</summary>
     private int RankOf(int i)
         => this.keptRanks.Count == 0 ? i + 1 : this.keptRanks[i];
 
     private void DrawMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
     {
-        // The Horizon Overlay is one strip across the top with the members
-        // side by side; like the ACT original, its header reads centred
-        // underneath, on its own little skewed chip, a 5px margin below the
-        // strip.
+        // Horizon Overlay places the encounter header below its strip.
         if (this.Config.DpsStyle == DpsMeterStyle.HorizonOverlay)
         {
             this.DrawHorizonStrip(rows);
@@ -347,10 +303,6 @@ internal sealed class DpsWindow : OverlayWindow
         this.DrawRows(rows);
     }
 
-    /// <summary>The member rows in the row-based styles. The header is drawn
-    /// the same way for both; only the rows change. The Horizon Overlay never
-    /// reaches here: it is a strip, not rows, and is drawn by DrawMeter
-    /// itself.</summary>
     private void DrawRows(IReadOnlyList<DpsRow> rows)
     {
         switch (this.Config.DpsStyle)
@@ -382,9 +334,6 @@ internal sealed class DpsWindow : OverlayWindow
             return;
         }
 
-        // Skip whichever parts the frame did not carry or the user turned
-        // off rather than printing dangling separators; with none of them
-        // there is no header at all.
         var text = this.FormatHeaderLine(title, duration, encDps);
         if (text.Length == 0)
         {
@@ -407,8 +356,7 @@ internal sealed class DpsWindow : OverlayWindow
 
         if (chip)
         {
-            // The original's encounter line sits on a fit-content chip with
-            // the same skew as the bars.
+            // Fit the header background to its text and use the bar skew.
             var scale = ClampTextScale(this.TextScale);
             var chipTop = origin.Y - (2.0f * scale);
             var chipHeight = textSize.Y + (4.0f * scale);
@@ -424,28 +372,21 @@ internal sealed class DpsWindow : OverlayWindow
 
         this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, text);
 
-        // Reserve the line like a bar row. The row styles draw the header
-        // above the rows, so it also carries the gap onto the first row; the
-        // Horizon Overlay chip sits last and needs none.
+        // Reserve spacing after headers above rows. Horizon Overlay draws its header last.
         ImGui.Dummy(new Vector2(
             Math.Max(ImGui.GetContentRegionAvail().X, 1.0f),
             ImGui.GetTextLineHeight() + (chip ? 0.0f : Math.Max(this.Config.DpsBarSpacing, 0.0f))));
     }
 
-    /// <summary>Whitespace runs collapse to one space, for the gap a skipped
-    /// header token leaves behind.</summary>
+    /// <summary>Collapse spaces left by omitted header tokens.</summary>
     private static readonly Regex HeaderSpaces = new(@"\s+", RegexOptions.Compiled);
 
-    /// <summary>Two or more separators left adjacent by a skipped token,
-    /// collapsed back to one.</summary>
+    /// <summary>Collapse adjacent separators left by omitted header tokens.</summary>
     private static readonly Regex HeaderSepRuns = new(
         @"\s*[·•|/\-–—]\s*(\s*[·•|/\-–—]\s*)+", RegexOptions.Compiled);
 
-    /// <summary>The encounter line's text. The parts are the title, the fight
-    /// clock and the party dps, each skippable. An empty format joins them
-    /// with a dot, the long standing look. A set format places the {title}
-    /// {duration} {dps} tokens freely, and the tidy-up keeps a skipped part
-    /// from leaving doubled or dangling separators behind.</summary>
+    /// <summary>Expand optional header tokens and remove separators left by omitted values.
+    /// An empty format uses dot separators.</summary>
     private string FormatHeaderLine(string title, string duration, double encDps)
     {
         var titleText = string.IsNullOrWhiteSpace(title) ? string.Empty : title;
@@ -484,8 +425,6 @@ internal sealed class DpsWindow : OverlayWindow
         return text.Trim(' ', '·', '•', '|', '/', '-', '–', '—');
     }
 
-    /// <summary>A separator run's replacement: its own first separator, single
-    /// spaced.</summary>
     private static string FirstSeparator(Match match)
     {
         foreach (var ch in match.Value)
@@ -499,11 +438,6 @@ internal sealed class DpsWindow : OverlayWindow
         return " ";
     }
 
-    /// <summary>Bars: the damage share filled into a dark full-length slot
-    /// behind the text, exactly like a timeline bar. The meter's own bar
-    /// settings drive it, independent of the timeline box. The label carries
-    /// the rank, an optional job icon, the name as the privacy options show
-    /// it, and the deaths marker in red.</summary>
     private void DrawBarsRow(int rank, int index, DpsRow row)
     {
         var drawList = ImGui.GetWindowDrawList();
@@ -524,10 +458,8 @@ internal sealed class DpsWindow : OverlayWindow
             var fillOrigin = this.Config.DpsBarRightToLeft
                 ? origin + new Vector2(width - fillWidth, 0.0f)
                 : origin;
-            // The self highlight wins over the rank 1 highlight, which wins
-            // over job coloured bars. Job colours keep the configured bar
-            // colour's alpha so the tint knob still governs how loud the
-            // fill reads.
+            // Local highlight takes priority over top rank, then job colour. Job fills
+            // retain the configured bar alpha.
             var fill = this.Config.DpsBarSelfHighlight && row.IsSelf
                 ? this.Config.DpsBarSelfColor
                 : this.Config.DpsBarTopHighlight && rank == 1
@@ -539,8 +471,7 @@ internal sealed class DpsWindow : OverlayWindow
                 fill, rounding);
         }
 
-        // The stripe lightens the whole row evenly, fill included, so it sits
-        // over both rather than only reading in the unfilled tail.
+        // Draw stripes over the fill and track so the whole row lightens evenly.
         if (this.Config.DpsRowStripes && (index & 1) == 1)
         {
             var stripe = Math.Clamp(this.Config.DpsRowStripeOpacity, 0.0f, 0.5f);
@@ -586,15 +517,11 @@ internal sealed class DpsWindow : OverlayWindow
         var deaths = this.DeathsMarker(row);
         var deathsWidth = deaths == null ? 0.0f : ImGui.CalcTextSize(deaths).X;
 
-        // The job icon sits before the label when asked, the label's start
-        // sliding right to make room. The slot stays reserved when the job
-        // resolves to no icon, so those rows still line up with the rest.
+        // Reserve the icon slot even when no texture is available to keep labels aligned.
         var textLeft = TextPadding;
         if (this.Config.DpsRowsShowIcons)
         {
-            // No floor beyond a pixel: a row shorter than the text line
-            // shrinks the icon to fit rather than spilling onto its
-            // neighbours.
+            // Shrink icons to fit short rows.
             var iconSize = Math.Clamp(
                 ImGui.GetTextLineHeight() + 2.0f, 1.0f, Math.Max(height - 4.0f, 1.0f));
             var icon = JobIcons.Get(row.Job);
@@ -613,8 +540,7 @@ internal sealed class DpsWindow : OverlayWindow
             textLeft = TextPadding + iconSize + TextPadding;
         }
 
-        // The name ends in an ellipsis rather than running into the pinned
-        // number on a narrow box.
+        // Reserve DPS and death marker widths before fitting the name.
         label = Elide(label, Math.Max(width - dpsWidth - textLeft - (TextPadding * 2.0f) - deathsWidth, 1.0f));
         var textY = origin.Y + ((height - ImGui.CalcTextSize(label).Y) * 0.5f);
 
@@ -631,26 +557,16 @@ internal sealed class DpsWindow : OverlayWindow
                 deaths);
         }
 
-        // The dps pins to the right edge so the numbers never shift the names
-        // as they tick over, same as the timeline's split countdown.
         this.DrawStyledText(
             drawList,
             new Vector2(origin.X + Math.Max(width - dpsWidth - TextPadding, TextPadding), textY),
             this.Config.DpsTextColor,
             dpsText);
 
-        // Reserve the row so the next one lands underneath it: the bars are
-        // drawn straight to the draw list and take no layout space by default.
+        // Draw list calls reserve no layout space, so advance past this row explicitly.
         ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
-    /// <summary>The Horizon Overlay: the ACT original's single row of skewed
-    /// bars, one equal-width cell per member, rank 1 on the left. A cell is
-    /// the rank and name centred above a parallelogram bar in the role's tint
-    /// (solid white for the local player, dark for the black-and-white theme),
-    /// the gold job icon straddling the bar's top edge, hps and dps anchored
-    /// to the bar's bottom corners, and the damage share as a thin skewed
-    /// strip plus a figure underneath.</summary>
     private void DrawHorizonStrip(IReadOnlyList<DpsRow> rows)
     {
         if (rows.Count == 0)
@@ -663,10 +579,6 @@ internal sealed class DpsWindow : OverlayWindow
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
         var scale = ClampTextScale(this.TextScale);
 
-        // The ACT original's proportions come from a 13px body font: the name
-        // and the in-bar numbers share it, the unit labels are 8px and the
-        // percent figure 7px. The box's text runs larger than that, so the
-        // strip draws in a smaller font, 0.8x of the body by default.
         var statFont = this.Fonts.Get(this.TextPx * this.HorizonStatScale());
         if (statFont is { Available: true })
         {
@@ -678,9 +590,7 @@ internal sealed class DpsWindow : OverlayWindow
             return;
         }
 
-        // Until the bucket is built, shrink the body font to the same
-        // effective size instead of laying out at body size: a strip that
-        // re-lays out when the atlas catches up visibly snaps after load.
+        // Match the target font size while it loads to keep layout stable.
         var fontSize = ImGui.GetFont().FontSize;
         if (fontSize <= 0.0f)
         {
@@ -695,8 +605,7 @@ internal sealed class DpsWindow : OverlayWindow
         }
         finally
         {
-            // Back to the body size the base draw established; the header is
-            // drawn after the strip, at body size.
+            // Restore body size for the header drawn after the strip.
             ImGui.SetWindowFontScale(this.TextPx / fontSize);
         }
     }
@@ -706,9 +615,7 @@ internal sealed class DpsWindow : OverlayWindow
     {
         var lineHeight = ImGui.GetTextLineHeight();
 
-        // The group is centred; a narrower window shrinks every cell equally,
-        // and a wide one caps each bar at the configured width, the
-        // configured empty space on either side of it.
+        // Center the group and shrink cells equally when the available width is limited.
         var padding = Math.Max(this.Config.DpsHorizCellPadding, 0.0f) * scale;
         var maxBarWidth = Math.Clamp(this.Config.DpsHorizMaxBarWidth, 40.0f, 400.0f) * scale;
         var cellWidth = Math.Min(width / rows.Count, maxBarWidth + (2.0f * padding));
@@ -726,20 +633,15 @@ internal sealed class DpsWindow : OverlayWindow
         var barSkew = this.HorizonSkew() * barHeight;
         var iconSize = Math.Clamp(this.Config.DpsHorizIconSize, 8.0f, 64.0f) * scale;
 
-        // The icon pokes a quarter of its height above the bar. The name line
-        // already covers that overhang; with names off, reserve it instead so
-        // the icon cannot paint above the content area.
+        // Reserve the icon overhang when no name line provides that space.
         var iconOverhang = showIcons ? iconSize * 0.25f : 0.0f;
         var nameBand = showNames ? lineHeight + (3.0f * scale) : 0.0f;
         var barTop = origin.Y + Math.Max(nameBand, iconOverhang + scale);
         var stripTop = barTop + barHeight + scale;
         var stripHeight = Math.Max(2.0f * scale, 1.5f);
 
-        // The icon's lower edge sits three quarters of its size below the
-        // bar's top edge. A tall icon on a short bar hangs over the share
-        // strip and past the cell, clipping at the window's bottom, so its
-        // edge reserves cell height the same way barTop reserves the
-        // overhang above the bar.
+        // Include the icon bottom in cell height so large icons cannot overlap the share
+        // strip or be clipped.
         var iconBottom = showIcons ? barTop - iconOverhang + iconSize : barTop;
         var cellBottom = Math.Max(barTop + barHeight, iconBottom);
         for (var i = 0; i < rows.Count; i++)
@@ -755,10 +657,8 @@ internal sealed class DpsWindow : OverlayWindow
 
             var barColor = this.HorizonBarColor(row);
 
-            // The two-tone "highlight" bar: faint overall, solid on the side
-            // of the relevant number — the dps side, or the hps side for a
-            // healer who out-heals their dps. Self bars and unknown jobs stay
-            // solid, as does the whole strip with the highlight turned off.
+            // Emphasize HPS for healers with HPS above DPS, otherwise DPS. Local and
+            // unknown job bars use a uniform tint.
             var role = JobColors.RoleOf(row.Job);
             if (!twoTone || row.IsSelf || role == null)
             {
@@ -781,9 +681,7 @@ internal sealed class DpsWindow : OverlayWindow
                     ToColor(barColor));
             }
 
-            // A very narrow cell has no room for the name, icon or numbers:
-            // leave the bare bar rather than stacking them all into a few
-            // unreadable pixels.
+            // Omit text and icons when the cell is too narrow to fit them.
             if (barWidth < 36.0f * scale)
             {
                 continue;
@@ -794,10 +692,7 @@ internal sealed class DpsWindow : OverlayWindow
                 cellBottom = Math.Max(cellBottom, stripTop + stripHeight);
             }
 
-            // Rank and name centred over the cell, in the box's text colour
-            // and effect, for the self bar too. The name goes through the
-            // privacy options. The ACT original lets a long name overflow
-            // into the margins rather than ellipsizing it.
+            // Allow names to extend into cell margins, matching the original overlay.
             if (showNames)
             {
                 var name = showRank ? $"{this.RankOf(i)}. {this.RowName(row)}" : this.RowName(row);
@@ -809,9 +704,7 @@ internal sealed class DpsWindow : OverlayWindow
                     this.Config.DpsTextColor,
                     name);
 
-                // The deaths marker is a red second run beside the name, the
-                // same red the bars and kagerou rows use, so it neither blends
-                // into the name nor pulls the name off its centring.
+                // Center the name and death marker as a single group.
                 var deaths = this.DeathsMarker(row);
                 if (deaths != null)
                 {
@@ -823,10 +716,7 @@ internal sealed class DpsWindow : OverlayWindow
                 }
             }
 
-            // The icon straddles the bar's top edge. When it dips into the
-            // text line its span is a no-text zone the stats keep out of;
-            // when the bar is tall enough that the bottom-anchored stats sit
-            // clear of it, they get the bar's full halves instead.
+            // Reserve horizontal space for the icon only when it overlaps the stat line.
             var hasIcon = false;
             var iconLeft = barLeft + ((barWidth - iconSize) * 0.5f);
             if (showIcons)
@@ -846,12 +736,8 @@ internal sealed class DpsWindow : OverlayWindow
                 }
             }
 
-            // hps on the left, dps on the right, anchored to the bar's bottom
-            // like the ACT original. Each stat is confined to its zone and
-            // shrinks or sheds its unit label rather than crossing out of it,
-            // so a figure can never paint over the job icon. The bar clip
-            // keeps the numbers off the slanted edges. With hps off the job
-            // acronym takes its slot, like the original.
+            // Keep HPS and DPS inside separate regions below the icon. Clip to the bar
+            // bounds and show the job acronym when HPS is disabled.
             var inset = 8.0f * scale;
             var middle = barLeft + (barWidth * 0.5f);
             var statBottom = barTop + barHeight - scale;
@@ -886,10 +772,7 @@ internal sealed class DpsWindow : OverlayWindow
                 continue;
             }
 
-            // Damage share: the thin skewed strip under the bar, shifted left
-            // like the original's, plus the percent figure below its right end.
-            // The shift never crosses the content origin: a flush left cell
-            // with thin padding would paint the strip over the window's edge.
+            // Keep the shifted damage share strip inside the content area.
             var stripLeftEdge = Math.Max(barLeft - (8.0f * scale), origin.X);
             var stripSkew = this.HorizonSkew() * stripHeight;
             AddSkewedQuad(
@@ -913,20 +796,13 @@ internal sealed class DpsWindow : OverlayWindow
                 this.DrawSmallText(drawList, pct, pctRight, pctTop, this.Config.DpsTextColor) + (2.0f * scale));
         }
 
-        // Reserve exactly what the strip drew: the gap onto the encounter
-        // line is the header's own, not the bar spacing knob's.
+        // The header adds its own gap after the strip.
         ImGui.Dummy(new Vector2(width, cellBottom - origin.Y));
     }
 
-    /// <summary>One statistic inside a Horizon Overlay bar: the number with
-    /// its unit label in the smaller caption font ("5450.30 DPS"), bottom
-    /// anchored and confined to [zoneLeft, zoneRight]. A number too wide for
-    /// its zone first sheds the label, then steps down through smaller font
-    /// buckets, and only ellipsizes as a last resort, so the figure can never
-    /// paint over the job icon no matter the cell width. Left-aligned from
-    /// zoneLeft, or right-aligned ending at zoneRight. The self bar's stats
-    /// use its own text colour and no text effect.
-    /// </summary>
+    /// <summary>Fit a stat within its assigned region by dropping the unit label, trying
+    /// smaller fonts, then truncating. Local player stats use their own colour without a
+    /// text effect.</summary>
     private void DrawHorizonStat(
         ImDrawListPtr drawList, float zoneLeft, float zoneRight, float bottom,
         bool rightAligned, string number, string label, bool self)
@@ -945,9 +821,8 @@ internal sealed class DpsWindow : OverlayWindow
 
         foreach (var ratio in StatFitRatios)
         {
-            // Ratio 1.0 is the font the strip already pushed; smaller steps
-            // need their bucket, and a bucket still building simply skips
-            // that step for the frame.
+            // Reuse the current font at full size. Skip smaller sizes that are still
+            // loading.
             var handle = ratio >= 1.0f ? null : this.Fonts.Get(statPx * ratio);
             if (ratio < 1.0f && handle is not { Available: true })
             {
@@ -979,7 +854,7 @@ internal sealed class DpsWindow : OverlayWindow
                     && numberWidth + gap + labelWidth <= maxWidth;
                 if (!fitsLabel && numberWidth > maxWidth)
                 {
-                    continue;   // even the bare number is too wide: go smaller
+                    continue;
                 }
 
                 this.PaintHorizonStat(
@@ -990,7 +865,7 @@ internal sealed class DpsWindow : OverlayWindow
             }
         }
 
-        // Nothing fit whole: ellipsize the number at the strip's font size.
+        // Fall back to truncating at the current strip font size.
         var trimmed = Elide(number, maxWidth);
         this.PaintHorizonStat(
             drawList, zoneLeft, zoneRight, bottom, rightAligned,
@@ -998,9 +873,8 @@ internal sealed class DpsWindow : OverlayWindow
             gap, color, self);
     }
 
-    /// <summary>The draw half of DrawHorizonStat, with the number's font
-    /// already current. The label bottom-aligns with the number, like the
-    /// original's caption.</summary>
+    /// <summary>Use the current number font and align the unit label to its bottom
+    /// edge.</summary>
     private void PaintHorizonStat(
         ImDrawListPtr drawList, float zoneLeft, float zoneRight, float bottom,
         bool rightAligned, string number, string label, IFontHandle? labelFont,
@@ -1041,9 +915,8 @@ internal sealed class DpsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Small caption text (the damage percent figure), right-aligned
-    /// to end at right. Returns the bottom edge, so the strip can size the
-    /// cell.</summary>
+    /// <summary>Draw a caption aligned to the right and return its bottom edge for
+    /// layout.</summary>
     private float DrawSmallText(ImDrawListPtr drawList, string text, float right, float top, Vector4 color)
     {
         var small = this.Fonts.Get(this.TextPx * this.HorizonPercentScale());
@@ -1066,16 +939,13 @@ internal sealed class DpsWindow : OverlayWindow
             color,
             text);
 
-        // Report the size the bucket will have rather than the fallback's:
-        // a stable cell height is worth the transient few frames where the
-        // fallback's larger text descends past what this reserves.
+        // Reserve the target font height while it loads to keep cell height stable.
         return top + (this.TextPx * this.HorizonPercentScale());
     }
 
-    /// <summary>The bar tint for one member: the configured self colour for
-    /// the local player in either theme, otherwise the role's tint, or the
-    /// plain dark bar for the black-and-white theme and for jobs we do not
-    /// know. The role tints scale by the configured bar opacity.</summary>
+    /// <summary>Local colour takes priority in both themes. Apply configured opacity to
+    /// role colours and use the dim colour for unknown jobs or the black &amp; white
+    /// theme.</summary>
     private Vector4 HorizonBarColor(DpsRow row)
     {
         if (row.IsSelf)
@@ -1098,29 +968,21 @@ internal sealed class DpsWindow : OverlayWindow
         };
     }
 
-    /// <summary>The damage-share strip colours derive from the bar tint: the
-    /// background track at the original's 0.3 alpha (0.5 for the white self
-    /// bar), the filled share at 0.7 (solid white for self).</summary>
     private static Vector4 HorizonStripColor(Vector4 barColor, bool self, bool foreground)
     {
         var alpha = foreground ? (self ? 1.00f : 0.70f) : (self ? 0.50f : 0.30f);
         return new Vector4(barColor.X, barColor.Y, barColor.Z, alpha);
     }
 
-    /// <summary>How far the bottom edge of a bar shifts left per pixel of
-    /// height, the tangent of the configured skew angle.</summary>
+    /// <summary>Horizontal shift per pixel of bar height, derived from the skew
+    /// angle.</summary>
     private float HorizonSkew()
         => (float)Math.Tan(Math.Clamp(this.Config.DpsHorizSkew, 0.0f, 45.0f) * Math.PI / 180.0);
 
-    /// <summary>The in-bar stat font size as a share of the box's body text.</summary>
     private float HorizonStatScale() => Math.Clamp(this.Config.DpsHorizStatScale, 0.4f, 1.5f);
 
-    /// <summary>The damage share percent figure's size as a share of the
-    /// box's body text.</summary>
     private float HorizonPercentScale() => Math.Clamp(this.Config.DpsHorizPercentScale, 0.4f, 1.5f);
 
-    /// <summary>The in-bar dps figure: the header's compact shape when
-    /// Compact numbers is on, otherwise the configured decimal places.</summary>
     private string FormatRowDps(double dps)
     {
         if (this.Config.DpsHorizCompact)
@@ -1136,9 +998,7 @@ internal sealed class DpsWindow : OverlayWindow
         };
     }
 
-    /// <summary>The Horizon Overlay parallelogram: the top edge runs
-    /// [x, x+w] at y and the bottom edge shifts left by k, the lean of the
-    /// configured skew angle.</summary>
+    /// <summary>Draw a parallelogram whose bottom edge is shifted left by k.</summary>
     private static void AddSkewedQuad(ImDrawListPtr drawList, float x, float y, float w, float h, float k, uint color)
     {
         if (w <= 0.0f || h <= 0.0f)
@@ -1154,11 +1014,6 @@ internal sealed class DpsWindow : OverlayWindow
             color);
     }
 
-    /// <summary>Kagerou: no bars, just the text line — rank, job icon and
-    /// acronym and the name on the left, dps and share on the right — with a
-    /// thin job-coloured underline whose length is the member's share of the
-    /// party's damage. The name goes through the privacy options and carries
-    /// the deaths marker in red.</summary>
     private void DrawKagerouRow(int rank, int index, DpsRow row)
     {
         var drawList = ImGui.GetWindowDrawList();
@@ -1166,11 +1021,9 @@ internal sealed class DpsWindow : OverlayWindow
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
         var lineHeight = ImGui.GetTextLineHeight();
 
-        // Thick enough to read as a bar, thin enough to stay an underline.
         var underline = Math.Clamp(this.Config.DpsBarHeight * 0.15f, 2.0f, 4.0f);
 
-        // The stripe sits under the text line; the underline keeps its own
-        // colour so the share still reads.
+        // Draw stripes behind the text while preserving the underline colour.
         if (this.Config.DpsRowStripes && (index & 1) == 1)
         {
             var stripe = Math.Clamp(this.Config.DpsRowStripeOpacity, 0.0f, 0.5f);
@@ -1192,10 +1045,6 @@ internal sealed class DpsWindow : OverlayWindow
         var leftBudget = origin.X +
             Math.Max(width - numbersWidth - (TextPadding * 2.0f) - deathsWidth, 1.0f);
 
-        // The left side walks a cursor: rank in the box's text colour, the
-        // icon, then the acronym in the job colour like kagerou's own, then
-        // the name, which ends in an ellipsis rather than running into the
-        // pinned numbers.
         var x = origin.X;
         if (this.Config.DpsRowsShowRank)
         {
@@ -1218,8 +1067,7 @@ internal sealed class DpsWindow : OverlayWindow
                     ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
             }
 
-            // The slot stays reserved when the job resolves to no icon, same
-            // as the bars rows, so those rows still line up with the rest.
+            // Reserve missing icon space to keep rows aligned.
             x += lineHeight + 4.0f;
         }
 
@@ -1263,26 +1111,17 @@ internal sealed class DpsWindow : OverlayWindow
             lineHeight + 1.0f + underline + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
     }
 
-    /// <summary>Damage share as a percentage. One decimal matches the dps
-    /// format's precision so the two read as a pair.</summary>
     private static string FormatShare(double share)
         => share.ToString("0.0", CultureInfo.InvariantCulture) + "%";
 
-    /// <summary>A row's dps or hps figure: the compact shape by default, the
-    /// full one-decimal figure when Compact numbers is off.</summary>
     private string FormatRowNumber(double value)
         => this.Config.DpsRowsCompact
             ? FormatDps(value)
             : value.ToString("0.0", CultureInfo.InvariantCulture);
 
-    /// <summary>Compact dps: 81.2k reads faster mid-pull than 81,234, and a
-    /// big enough total rolls to 1.0m. Used by the header and every row so
-    /// the two always read the same way.</summary>
     private static string FormatDps(double dps)
     {
-        // Each step up happens where the smaller unit's figure would round
-        // to 1000: 999.96 prints as 1.0k rather than 1000, and a full
-        // alliance's total reads 1.0m rather than 1045.6k.
+        // Switch units before rounding would produce 1000 in the smaller unit.
         if (dps >= 999950.0)
         {
             return (dps / 1000000.0).ToString("0.0", CultureInfo.InvariantCulture) + "m";

@@ -8,7 +8,6 @@ using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Meter;
 
-/// <summary>How the standalone meter is doing, for the config window.</summary>
 internal enum StandaloneState
 {
     Off,
@@ -18,28 +17,19 @@ internal enum StandaloneState
     Error,
 }
 
-/// <summary>Runs the dps meter off IINACT directly while the program is away.
-///
-/// Owns the engine and the feed client. The socket thread only ever enqueues;
-/// everything is applied in <see cref="Update"/> under the UI state lock, the same
-/// discipline the bridge uses, so the UI never reads a half-updated meter.
-/// The program's feed always wins: while a program session is live the client
-/// stays off and this writes nothing.
-/// </summary>
+/// <summary>Runs the meter from IINACT while the program is disconnected. Socket callbacks
+/// queue messages for <see cref="Update"/> under the UI state lock. A program connection
+/// stops the client and takes priority.</summary>
 internal sealed class StandaloneMeter : IDisposable
 {
-    /// <summary>Messages applied per frame, same bound as the bridge inbox.</summary>
     private const int MaxMessagesPerFrame = 64;
 
-    /// <summary>How long unload waits for background client drains, matching
-    /// the bridge's own drain bound.</summary>
+    /// <summary>Maximum wait in milliseconds for background client disposal during
+    /// unload.</summary>
     private const int DrainWaitMs = 4000;
 
-    /// <summary>What the drain decided the meter state should become. One
-    /// slot, last write wins: a zone change overwrites the end its own
-    /// finalize just queued, so only the clear is applied. That matches the
-    /// net effect of the program's show:false then clear pair on a zone, and
-    /// hold-last never survives zoning on either feed.</summary>
+    /// <summary>Only the latest transition is applied. A zone clear replaces its preceding
+    /// encounter ending so held rows do not survive zone changes.</summary>
     private enum Pending
     {
         None,
@@ -55,12 +45,12 @@ internal sealed class StandaloneMeter : IDisposable
     private long droppedMessages;
     private long nextWarning;
 
-    /// <summary>Guards the client handle and the drain list, so a feed frame
-    /// or a background drain cannot race the live client being swapped.</summary>
+    /// <summary>Makes source checks and inbox writes atomic with client
+    /// replacement.</summary>
     private readonly object gate = new();
 
-    /// <summary>Old clients draining in the background; unload waits on them,
-    /// so receive callbacks finish before plugin teardown.</summary>
+    /// <summary>Unload waits for these client tasks so their callbacks can
+    /// finish.</summary>
     private readonly List<Task> pendingDrains = new();
 
     private double? messageTime;
@@ -73,14 +63,12 @@ internal sealed class StandaloneMeter : IDisposable
     private long retryAt;
     private Pending pending;
 
-    /// <summary>The finalized encounter's last values, carried from the
-    /// engine's end callback to the ended marker Update publishes. Events
-    /// since the last throttled live push ride this or they never publish.</summary>
+    /// <summary>Retains final values received after the last live push for the ending
+    /// published by Update.</summary>
     private OverlaySnapshot? endSnapshot;
 
-    /// <summary>Last zone seen, from the 01 line or the ChangeZone event.
-    /// IINACT replays the current zone on every subscribe, so the clear keys
-    /// on the zone actually moving, not on the event arriving.</summary>
+    /// <summary>Deduplicate zone notifications because IINACT replays the current zone on
+    /// subscribe.</summary>
     private string lastZone = string.Empty;
     private long lastZoneId;
 
@@ -93,8 +81,6 @@ internal sealed class StandaloneMeter : IDisposable
         this.clearLocal = clearLocal;
     }
 
-    /// <summary>Framework heartbeat: run or stop the client per the toggle
-    /// and the program session, apply what the feed queued, push the meter.</summary>
     internal void Update()
     {
         var wanted = this.config.StandaloneMeter && !this.appConnected();
@@ -109,10 +95,8 @@ internal sealed class StandaloneMeter : IDisposable
 
         if (!wanted)
         {
-            // Toggled off, or the program took over. Frames the stopped feed left
-            // queued belong to a source that no longer owns the meter, so
-            // they are discarded, not applied: applying one could resurrect
-            // the rows the transition clear just dropped.
+            // Discard the old feed backlog so it cannot restore rows after the ownership
+            // change.
             this.inbox.Clear();
 
             this.pending = Pending.None;
@@ -122,9 +106,8 @@ internal sealed class StandaloneMeter : IDisposable
                 this.feeding = false;
                 this.wasLive = false;
 
-                // The teardown clear goes around the program-wins guard on
-                // purpose: an idle program sends no dps frames, so deferring to
-                // it would freeze the standalone's last rows on screen.
+                // Clear standalone rows even when the program takes over. An idle program
+                // may send no replacement DPS frame.
                 this.clearLocal();
             }
 
@@ -178,10 +161,8 @@ internal sealed class StandaloneMeter : IDisposable
         }
         else if (this.pending == Pending.Ended)
         {
-            // Encounter over: an ending, not a clear, so hold-last can keep
-            // the final rows up, same frame the program sends. The snapshot
-            // rides the marker, or a hit landing after the last throttled
-            // push would never make it on screen.
+            // Publish the final snapshot with the ending so the hold option includes events
+            // after the last live push.
             this.feeding = true;
             this.applyLocal(ToEndState(this.endSnapshot));
         }
@@ -205,8 +186,7 @@ internal sealed class StandaloneMeter : IDisposable
         this.wasLive = live;
     }
 
-    /// <summary>Re-dial after the endpoint field was applied. The next Update
-    /// starts a fresh client on the new address.</summary>
+    /// <summary>The next Update connects to the newly configured endpoint.</summary>
     internal void Restart()
     {
         this.StopClient();
@@ -248,8 +228,6 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Detail for the state, the client's own status line. Only
-    /// meaningful past Off.</summary>
     internal string Status
     {
         get
@@ -275,9 +253,8 @@ internal sealed class StandaloneMeter : IDisposable
 
         this.endpointBad = false;
 
-        // A fresh engine per session: identity, jobs and zone are all
-        // relearned from the burst IINACT sends on subscribe, and nothing
-        // stale can leak in from the last run.
+        // Start with fresh actor and zone state for each connection. Subscription events
+        // repopulate it.
         this.engine = new MeterEngine(() => this.messageTime ?? Environment.TickCount64 / 1000.0);
         this.engine.OnEncounterEnd = snap =>
         {
@@ -290,8 +267,7 @@ internal sealed class StandaloneMeter : IDisposable
         this.wasLive = false;
         this.nextPush = 0;
 
-        // The callback needs to know which client it came from, so a late
-        // frame from one already stopped can be ignored.
+        // Capture the source to reject callbacks from a replaced client.
         IinactClient? created = null;
         created = new IinactClient(uri, raw => this.Receive(created!, raw),
             () => this.Receive(created!, null));
@@ -313,10 +289,8 @@ internal sealed class StandaloneMeter : IDisposable
             this.droppedMessages = 0;
         }
 
-        // Drain what the detached client queued before the swap. The Receive
-        // guard keeps new frames out from here on, but a backlog already in
-        // the inbox would be applied onto the fresh engine the next Update
-        // builds. Same drain the bridge's Stop does after a server swap.
+        // Clear the old backlog before the next Update creates a new engine. Receive
+        // already rejects further old client messages.
         this.inbox.Clear();
 
         if (old == null)
@@ -324,8 +298,8 @@ internal sealed class StandaloneMeter : IDisposable
             return;
         }
 
-        // Dispose waits on the receive loop, so it drains in the background
-        // like the bridge's server swaps. Unload still waits, in Dispose.
+        // Stop without blocking this thread. Dispose waits for background cleanup during
+        // unload.
         old.Stop();
         var drain = Task.Run(old.Dispose);
         lock (this.gate)
@@ -335,10 +309,8 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Socket thread: queue only, never touch the state the UI reads.
-    /// Guarded on the source under gate so the check and the enqueue are atomic
-    /// with StopClient's detach: a frame from a superseded client lands before
-    /// the swap or not at all, never after it onto the fresh engine.</summary>
+    /// <summary>Queue messages under gate so source checks are atomic with client
+    /// replacement. Stale frames must not reach the next engine.</summary>
     private void Receive(IinactClient source, string? raw)
     {
         lock (this.gate)
@@ -374,7 +346,7 @@ internal sealed class StandaloneMeter : IDisposable
         }
         catch (JsonException)
         {
-            // Not JSON: some feeds ship bare log lines. Fall through.
+            // Some feeds send raw log lines without JSON.
         }
 
         using (doc)
@@ -421,10 +393,7 @@ internal sealed class StandaloneMeter : IDisposable
                     break;
 
                 case "changezone":
-                    // IINACT replays the current zone on every subscribe.
-                    // Only a real change may clear, or a feed reconnect would
-                    // wipe a held meter with no zone change at all. The
-                    // program dedups the same pair for the same reason.
+                    // A replayed zone must not clear held rows after a reconnect.
                     var zoneId = ReadLong(root, "zoneID");
                     if (zoneId == 0)
                     {
@@ -435,8 +404,8 @@ internal sealed class StandaloneMeter : IDisposable
                     if ((zoneId != 0 && zoneId != this.lastZoneId) ||
                         (zoneId == 0 && zoneName.Length > 0 && zoneName != this.lastZone))
                     {
-                        // Cached initial metadata can follow cached identity.
-                        // A later zone change still follows the raw log reset.
+                        // Initial zone metadata may arrive after identity, which must be
+                        // preserved.
                         if (zoneName.Length > 0)
                         {
                             if (!this.engine.HasZone)
@@ -453,11 +422,8 @@ internal sealed class StandaloneMeter : IDisposable
                     }
                     else if (zoneName.Length > 0 && !this.engine.HasZone)
                     {
-                        // A replayed event for the zone we are already in,
-                        // swallowed by the dedup above, on an engine with no
-                        // zone yet: a restarted client still has to learn it,
-                        // or every pull is titled Encounter until the next
-                        // real change.
+                        // Initialize the new engine's zone even when this replay was
+                        // already deduplicated by the feed.
                         this.engine.SetInitialZone(zoneName);
                     }
 
@@ -502,8 +468,8 @@ internal sealed class StandaloneMeter : IDisposable
                     break;
 
                 default:
-                    // The getCombatants reply's type casing varies between
-                    // builds; the list property is the reliable tell.
+                    // Identify combatant replies by their list because the type casing
+                    // varies.
                     if (root.TryGetProperty("combatants", out var list) && list.ValueKind == JsonValueKind.Array)
                     {
                         this.HandleCombatants(root);
@@ -514,9 +480,8 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>A getCombatants snapshot doubles as a job feed: on a
-    /// mid-instance start the 03 burst is long gone, and this still resolves
-    /// the party's jobs from live memory. Players only.</summary>
+    /// <summary>Fill player jobs from the roster when earlier spawn lines are
+    /// unavailable.</summary>
     private void HandleCombatants(JsonElement root)
     {
         if (!root.TryGetProperty("combatants", out var combs) || combs.ValueKind != JsonValueKind.Array)
@@ -550,9 +515,8 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Feed one raw log line. A zone line ends the encounter inside
-    /// the engine first, then queues the clear, so the two land in the same
-    /// order the program sends them.</summary>
+    /// <summary>Process a zone line before queueing its clear so the encounter ending
+    /// precedes the clear.</summary>
     private void TreatLine(string raw)
     {
         if (raw.Length == 0)
@@ -564,10 +528,8 @@ internal sealed class StandaloneMeter : IDisposable
         this.engine.Process(fields);
         if (fields.Length > 3 && fields[0] == "01")
         {
-            // Same length gate the engine and the program's zone handler use:
-            // a short malformed 01 finalizes nothing and clears nothing. Keep
-            // the zone dedup warm so the matching ChangeZone event does not
-            // clear a second time.
+            // Record this valid zone line so the matching ChangeZone event does not clear
+            // twice.
             this.lastZone = fields[3].Trim();
             if (long.TryParse(
                     fields[2], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var zoneId))
@@ -581,9 +543,7 @@ internal sealed class StandaloneMeter : IDisposable
 
     private static DpsState ToState(OverlaySnapshot snap, bool ended = false)
     {
-        // Feed strings get the same hygiene the bridge gives wire frames: the
-        // endpoint is user-configurable, and a multi-hundred-KB actor name
-        // would be measured and drawn every frame.
+        // Bound actor text before it is measured and drawn on every frame.
         const int MaxTextChars = 256;
         var rows = new List<DpsRow>(snap.Rows.Count);
         foreach (var row in snap.Rows)
@@ -610,8 +570,7 @@ internal sealed class StandaloneMeter : IDisposable
         };
     }
 
-    /// <summary>The ended marker, carrying the finalized snapshot's rows when
-    /// the engine had any. Rowless only when the view was already empty.</summary>
+    /// <summary>Attach final display rows to the ending when a snapshot exists.</summary>
     private static DpsState ToEndState(OverlaySnapshot? snap)
         => snap == null ? new DpsState { Ended = true } : ToState(snap, ended: true);
 
@@ -628,8 +587,8 @@ internal sealed class StandaloneMeter : IDisposable
             : null;
     }
 
-    /// <summary>The standard layout is rawLine plus a split line array; fall
-    /// back to whichever exists, joining the array back into a raw line.</summary>
+    /// <summary>Accept rawLine or a split line array, joining the array when
+    /// necessary.</summary>
     private static string ExtractLogLine(JsonElement root)
     {
         var raw = ReadString(root, "rawLine");
@@ -662,8 +621,8 @@ internal sealed class StandaloneMeter : IDisposable
         return joined.ToString();
     }
 
-    /// <summary>An actor id off the wire, a hex string or a number with a
-    /// decimal fallback, mirroring the engine's own id parsing.</summary>
+    /// <summary>Accept numeric or hexadecimal string actor IDs, with a decimal string
+    /// fallback.</summary>
     private static int? ReadActorId(JsonElement root, string name)
     {
         if (!root.TryGetProperty(name, out var value))

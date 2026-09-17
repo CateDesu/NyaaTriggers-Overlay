@@ -2,9 +2,7 @@ using System;
 using System.Collections.Generic;
 using NyaaTriggers.Plugin.Meter;
 
-// Dependency-free harness for the meter engine. Every check drives the
-// public surface with synthetic pipe-split log lines and a controllable
-// clock. Any failure prints and the exit code goes 1.
+// Exercise the meter with synthetic log lines and a controllable clock.
 
 var passes = 0;
 var failures = 0;
@@ -63,18 +61,14 @@ const string Player = "10000001";
 const string PlayerTwo = "10000002";
 const string Enemy = "40000010";
 
-// ------------------------------------------------------------------
-// initial state
-// ------------------------------------------------------------------
+// Initial state
 {
     var eng = new MeterEngine(() => 0.0);
     Check(!eng.HasLiveEncounter, "initial: no live encounter");
     Check(eng.LiveSnapshot() == null, "initial: snapshot is null");
 }
 
-// ------------------------------------------------------------------
-// effect decode, the LogGuide doc examples
-// ------------------------------------------------------------------
+// Effect decoding examples from LogGuide
 foreach (var (dmgHex, expected) in new[]
 {
     ("47280000", 18216.0),
@@ -92,9 +86,7 @@ foreach (var (dmgHex, expected) in new[]
     CheckNear(snap.Rows[0].EncDps, expected, $"decode {dmgHex}");
 }
 
-// Severity bytes 0x20 crit and 0x40 direct hit ride the same decode without
-// changing the credited amount. The counters themselves are dropped in this
-// port, the amount is the observable part.
+// Critical and direct hit flags do not change the decoded damage amount.
 foreach (var flags in new[] { "2003", "4003", "6003" })
 {
     var eng = new MeterEngine(() => 0.0);
@@ -106,7 +98,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap!.Rows[0].EncDps, 18216.0, $"flags {flags}: amount unchanged");
 }
 
-// Hallowed damage, the 0x0100 mask, credits nothing.
+// The invulnerability mask prevents damage credit.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
@@ -117,8 +109,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap!.Rows[0].EncDps, 0.0, "hallowed: zero damage");
 }
 
-// Heals: the shifted literal Plenary case lands as-is, a normally packed
-// heal shifts right 16.
+// Small literal heals remain unshifted. Packed heals use the high word.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
@@ -144,9 +135,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap!.Rows[0].EncDps, 0.0, "9th pair: ignored");
 }
 
-// ------------------------------------------------------------------
-// 03 lines and player classification
-// ------------------------------------------------------------------
+// Spawn lines and player classification
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Player, "Player One", "22", "0"));   // 0x22 = 34
@@ -157,8 +146,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(row.Job == "SAM", "03: hex job maps to acronym");
 }
 
-// A non-'10' id with a real ClassJob id never becomes a player row. Duty
-// support and Trust NPCs carry jobs too.
+// NPCs with combat jobs must not become player rows.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Enemy, "Striking Dummy", "22", "0"));
@@ -178,9 +166,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(row.EncDps, 18216.0, "lowercase id credits damage");
 }
 
-// ------------------------------------------------------------------
-// enemy damage on a player credits damagetaken only
-// ------------------------------------------------------------------
+// Enemy damage credits only the player's damage taken.
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
@@ -196,9 +182,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(ends == 1, "enemy hit: damagetaken makes the pull non-empty");
 }
 
-// ------------------------------------------------------------------
-// pet merging
-// ------------------------------------------------------------------
+// Pet contributions
 {
     var eng = new MeterEngine(() => 0.0);
     eng.SetMe(0x10000001);
@@ -218,8 +202,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(eng.LiveSnapshot()!.Rows[0].EncDps, 18216.0, "pet as target credits no one");
 }
 
-// Pets are also identified by the owner fields trailing a 21 line, id at
-// 47 and name at 48.
+// Ability lines can identify pet owners through fields 47 and 48.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
@@ -234,9 +217,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap.Rows[0].EncDps, 18216.0, "trailing owner: damage lands on the owner");
 }
 
-// ------------------------------------------------------------------
-// encounter lifecycle
-// ------------------------------------------------------------------
+// Encounter lifecycle
 {
     var t = 0.0;
     var ends = 0;
@@ -256,7 +237,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(ends == 1, "lifecycle: no double finalize");
 }
 
-// A pull with no player damage and no player damage taken ends silently.
+// Empty encounters still send an end marker.
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
@@ -266,8 +247,8 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(ends == 1, "empty pull sends an end marker");
 }
 
-// A mixed message, one flag falling while the other rises, finalizes the
-// open pull before beginning the next.
+// A falling combat flag ends the current pull before a simultaneous rising flag starts
+// another.
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
@@ -296,8 +277,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(ends == 1, "33: end fired once");
 }
 
-// A zone line finalizes and wipes actor knowledge, the next pull starts
-// clean with jobs forgotten.
+// Zone lines end the encounter and reset actor identity and jobs.
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
@@ -312,7 +292,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     eng.SetInCombat(true, true);
     eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
     Check(eng.LiveSnapshot()!.Rows.Count == 0, "zone: actor knowledge reset, no rows");
-    // The real feed re-pins the local player with an 02 line after a zone.
+    // A later 02 line restores local identity after zoning.
     eng.Process(new List<string> { "02", "ts", Player, "Player One" });
     eng.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
     var snap = eng.LiveSnapshot();
@@ -321,8 +301,8 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(snap.Rows[0].IsSelf, "zone: 02 re-pins the local player");
 }
 
-// A new begin while the old pull sits past the idle timeout closes the
-// stale one first. Within the timeout the open pull is kept.
+// A new begin closes an idle encounter. An active encounter within the timeout remains
+// open.
 {
     var t = 0.0;
     var ends = 0;
@@ -348,9 +328,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng2.LiveSnapshot()!.Rows.Count == 0, "fresh pull starts empty");
 }
 
-// ------------------------------------------------------------------
-// lazy begin
-// ------------------------------------------------------------------
+// Starting encounters from damage
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
@@ -377,7 +355,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng.HasLiveEncounter, "lazy begin on a miss");
 }
 
-// A lone death never opens a phantom encounter.
+// A death alone must not start an encounter.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(AddCombatant(Player, "Player One", "1F", "0"));
@@ -385,8 +363,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(!eng.HasLiveEncounter, "no lazy begin on a death");
 }
 
-// Tick crediting with an encounter already open: a HoT lands on the
-// applier's healed, an enemy DoT lands on the player's damagetaken only.
+// HoTs credit the applier's healing. Enemy DoTs credit only the player's damage taken.
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
@@ -403,9 +380,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(ends == 1, "enemy DoT: damagetaken makes the pull non-empty");
 }
 
-// ------------------------------------------------------------------
-// the display view pauses idle and resets when damage resumes
-// ------------------------------------------------------------------
+// The display pauses after inactivity and resets when damage resumes.
 {
     var t = 0.0;
     var eng = new MeterEngine(() => t);
@@ -431,7 +406,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap2.EncDps, 3643.2, "idle reset: old damage gone from the view");
 }
 
-// Idle timeout setting clamps to 15..600 and ignores bad input.
+// Idle timeout is bounded to 15 through 600 seconds. Invalid input is ignored.
 {
     var t = 0.0;
     var eng = new MeterEngine(() => t);
@@ -464,9 +439,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(eng3.LiveSnapshot()!.Rows[0].EncDps, 18216.0, "timeout NaN ignored: default still applies");
 }
 
-// ------------------------------------------------------------------
-// row shape: shares, sort, is-self, rounding
-// ------------------------------------------------------------------
+// Row shares, order, local identity and rounding
 {
     var t = 0.0;
     var eng = new MeterEngine(() => t);
@@ -494,7 +467,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(snap.Rows[1].Deaths == 1, "rows: deaths counted");
 }
 
-// SetMe rejects bad ids and keeps any earlier pin.
+// SetMe rejects invalid IDs without replacing known identity.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.SetMe(0);
@@ -507,7 +480,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng.LiveSnapshot()!.Rows[0].IsSelf, "SetMe: valid id pins");
 }
 
-// The 02 line pins the local player the same way.
+// The 02 line also sets local identity.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.Process(new List<string> { "02", "ts", Player, "Player One" });
@@ -517,9 +490,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng.LiveSnapshot()!.Rows[0].IsSelf, "02 line pins the local player");
 }
 
-// ------------------------------------------------------------------
-// roster jobs and late upgrades
-// ------------------------------------------------------------------
+// Roster jobs and late updates
 {
     var eng = new MeterEngine(() => 0.0);
     eng.NoteJob(0x10000001, 31);
@@ -532,8 +503,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     eng2.Process(Ability(Player, "Player One", Enemy, "Striking Dummy", "0003", "47280000"));
     Check(!eng2.HasLiveEncounter, "NoteJob: job 0 ignored");
 
-    // A pet line opens the owner's row at job 0, the roster burst landing
-    // late upgrades it in place.
+    // A late roster updates the owner row created by an earlier pet action.
     var eng3 = new MeterEngine(() => 0.0);
     eng3.SetMe(0x10000001);
     eng3.Process(AddCombatant(Player, "Player One", "00", "0"));
@@ -544,7 +514,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     eng3.NoteJob(0x10000001, 31);
     Check(eng3.LiveSnapshot()!.Rows[0].Job == "MCH", "NoteJob: late upgrade of an open record");
 
-    // An owner never named anywhere falls back to the uppercase hex id.
+    // Unnamed owners use their uppercase hexadecimal ID.
     var eng4 = new MeterEngine(() => 0.0);
     eng4.NoteJob(0x10000001, 31);
     eng4.Process(AddCombatant("40000053", "Eos", "00", Player));
@@ -553,7 +523,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng4.LiveSnapshot()!.Rows[0].Name == "10000001", "nameless row falls back to hex id");
 }
 
-// Rows cap at 24, a full alliance.
+// Limit ordinary rows to a full alliance.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.SetInCombat(true, true);
@@ -567,9 +537,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(eng.LiveSnapshot()!.Rows.Count == 24, "rows cap at 24");
 }
 
-// ------------------------------------------------------------------
-// malformed input never throws and never credits
-// ------------------------------------------------------------------
+// Malformed input neither throws nor credits damage.
 {
     var eng = new MeterEngine(() => 0.0);
     try
@@ -600,10 +568,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap.Rows[0].EncDps, 0.0, "malformed: junk hex credits nothing");
 }
 
-// ------------------------------------------------------------------
-// synthetic zone line, the shape the standalone feed's ChangeZone
-// handler pushes: no timestamp or id fields, only the name
-// ------------------------------------------------------------------
+// Synthetic zone lines can contain only a name, without a timestamp or ID.
 {
     var ends = 0;
     var eng = new MeterEngine(() => 0.0);
@@ -629,9 +594,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(snap.Rows.Count == 1 && snap.Rows[0].Job == "", "synthetic 01: jobs stay forgotten until re-noted");
 }
 
-// ------------------------------------------------------------------
-// the end callback carries the final snapshot
-// ------------------------------------------------------------------
+// Encounter endings carry the final display snapshot.
 {
     var t = 0.0;
     var ends = 0;
@@ -669,9 +632,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(ended != null && ended.Rows.Count == 1, "short pull: rows ride the end callback");
 }
 
-// ------------------------------------------------------------------
-// unrelated damage does not touch the display segment
-// ------------------------------------------------------------------
+// Unrelated damage leaves the display segment unchanged.
 {
     var t = 0.0;
     var eng = new MeterEngine(() => t);
@@ -687,19 +648,19 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     Check(snap!.Duration == "02:00", "unrelated ability: idle pause holds");
     CheckNear(snap.Rows[0].EncDps, 8333.3, "unrelated ability: no activity extension");
 
-    // Past the timeout it must not reset the segment either.
+    // Unrelated damage after the timeout must not reset the segment.
     eng.Process(Ability("40000020", "Kobold", "40000030", "Kobold", "0003", "47280000"));
     snap = eng.LiveSnapshot();
     Check(snap!.Rows.Count == 1, "unrelated ability: player row survives");
     Check(snap.Duration == "02:00", "unrelated ability: view not reset");
     CheckNear(snap.Rows[0].EncDps, 8333.3, "unrelated ability: old numbers intact");
 
-    // Same for a DoT tick between two unknown actors.
+    // A DoT between unknown actors must not reset the segment.
     eng.Process(Tick("DoT", "40000030", "Kobold", "000003E8", "40000020", "Kobold"));
     snap = eng.LiveSnapshot();
     Check(snap!.Rows.Count == 1 && snap.Duration == "02:00", "unrelated DoT: view untouched");
 
-    // A DoT ticking on the player is relevant and does restart the segment.
+    // A DoT on the player restarts the display segment.
     eng.Process(Tick("DoT", Player, "Player One", "000003E8", Enemy, "Striking Dummy"));
     t = 135.0;
     snap = eng.LiveSnapshot();
@@ -707,7 +668,7 @@ foreach (var flags in new[] { "2003", "4003", "6003" })
     CheckNear(snap.Rows[0].EncDps, 0.0, "player DoT: new segment starts empty");
 }
 
-// Enemy damage on a player's pet credits no one and must not move the segment.
+// Damage to pets credits no player and must not advance display activity.
 {
     var t = 0.0;
     var eng = new MeterEngine(() => t);
@@ -802,7 +763,7 @@ foreach (var hot in new[] { false, true })
     Check(ended!.Duration == "00:00", "paused healing does not extend final duration");
 }
 
-// Loss resets combat edges and stale identities before reconnect replay.
+// Feed loss resets combat flags and actor identity before subscription replay.
 {
     var t = 0.0;
     var eng = new MeterEngine(() => t);
@@ -823,7 +784,7 @@ foreach (var hot in new[] { false, true })
     Check(eng.LiveSnapshot()!.Rows.Count == 0, "feed loss retires old jobs");
 }
 
-// Roster members stay known before their first hit despite actor churn.
+// Roster members remain recognized despite other actor cache updates.
 {
     var eng = new MeterEngine(() => 0.0);
     eng.SetRoster(new[] { new KeyValuePair<int, int>(0x10000001, 31) });

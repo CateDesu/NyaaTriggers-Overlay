@@ -10,9 +10,6 @@ using Dalamud.Configuration;
 
 namespace NyaaTriggers.Plugin;
 
-/// <summary>How overlay text is kept readable over the game: nothing, a hard
-/// outline, or a soft glow. The outline stamps the text around concentric
-/// rings; the glow stacks wider, fainter rings for a halo.</summary>
 internal enum TextEffectStyle
 {
     Off,
@@ -20,10 +17,6 @@ internal enum TextEffectStyle
     Glow,
 }
 
-/// <summary>How the dps meter draws its rows: timeline-style share bars, the
-/// Horizon Overlay's side-by-side job-coloured segments, or kagerou's
-/// underlined text. The members serialize as their integer values, so the
-/// rename from Horizoverlay did not disturb stored configs.</summary>
 internal enum DpsMeterStyle
 {
     Bars,
@@ -31,24 +24,19 @@ internal enum DpsMeterStyle
     Kagerou,
 }
 
-/// <summary>The Horizon Overlay bar palette: the ACT original's red/blue/green
-/// by role, or its black &amp; white theme where only the local player's bar is
-/// white and everyone else is dark.</summary>
 internal enum HorizonColorTheme
 {
     ByRole,
     BlackWhite,
 }
 
-/// <summary>Whether a bar shrinks toward empty as the cue arrives or grows
-/// toward full as time elapses.</summary>
+/// <summary>Deplete reaches empty at the cue time. Fill reaches full.</summary>
 internal enum BarFillMode
 {
     Deplete,
     Fill,
 }
 
-/// <summary>How the countdown on a bar is shown.</summary>
 internal enum CountdownStyle
 {
     Hidden,
@@ -56,7 +44,6 @@ internal enum CountdownStyle
     Tenths,
 }
 
-/// <summary>How other players' names show in the dps meter.</summary>
 internal enum NamePrivacyStyle
 {
     Shown,
@@ -64,8 +51,7 @@ internal enum NamePrivacyStyle
     Hidden,
 }
 
-/// <summary>How the dps meter orders its rows. ByDps is the feed's own rank
-/// order; the others re-sort but keep each row's real rank number.</summary>
+/// <summary>Sorting by name or role preserves each row's DPS rank.</summary>
 internal enum DpsSortOrder
 {
     ByDps,
@@ -73,14 +59,12 @@ internal enum DpsSortOrder
     ByRole,
 }
 
-/// <summary>Which end of the stack the newest callout sits at.</summary>
 internal enum AlertOrder
 {
     NewestFirst,
     OldestFirst,
 }
 
-/// <summary>Horizontal text placement inside a box.</summary>
 internal enum TextAlign
 {
     Left,
@@ -214,48 +198,39 @@ internal sealed class Configuration : IPluginConfiguration
     private static float ColorPart(float value, float fallback)
         => float.IsFinite(value) ? Math.Clamp(value, 0.0f, 1.0f) : fallback;
 
-    /// <summary>Bumped only when a stored field changes meaning, so old configs
-    /// can be migrated rather than silently reinterpreted. Note the enums in
-    /// this file serialize as their integer values: never reorder or insert
-    /// members without bumping this and writing the migration.</summary>
+    /// <summary>Increment when stored fields change meaning and provide a migration. Enums
+    /// serialize as integers, so reordering or inserting members also requires
+    /// migration.</summary>
     public int Version { get; set; } = 4;
 
-    // ── link ──────────────────────────────────────────────────────────────
-    /// <summary>Loopback port the desktop program connects to. Not exposed off the
-    /// machine: the listener binds 127.0.0.1 and ::1 only. As a companion
-    /// plugin it always listens; there is no off switch.</summary>
+    // Connection
+    /// <summary>The program connects to this port. The listener binds only to IPv4 and IPv6
+    /// loopback.</summary>
     public int Port { get; set; } = 27080;
 
-    /// <summary>Run the dps meter off IINACT directly while the program is not
-    /// connected, so the meter works for someone who never runs it. The
-    /// program's feed always wins while it is connected.</summary>
+    /// <summary>Read IINACT directly while the program is disconnected. A program
+    /// connection takes priority.</summary>
     public bool StandaloneMeter { get; set; }
 
-    /// <summary>Where IINACT serves the ACT combat feed. Loopback by default,
-    /// same stance as the link port.</summary>
+    /// <summary>IINACT WebSocket endpoint for the standalone meter.</summary>
     public string IinactEndpoint { get; set; } = "ws://127.0.0.1:10501/ws";
 
-    // ── what to draw ──────────────────────────────────────────────────────
+    // Displayed windows
     public bool ShowTimeline { get; set; } = true;
     public bool ShowAlerts { get; set; } = true;
     public bool ShowDps { get; set; } = true;
 
-    /// <summary>How the dps meter draws its rows.</summary>
     public DpsMeterStyle DpsStyle { get; set; } = DpsMeterStyle.Bars;
 
-    /// <summary>The Horizon Overlay palette: by role (red/blue/green) or the
-    /// black &amp; white theme. Only read by the Horizon Overlay style.</summary>
+    /// <summary>Used only by the Horizon Overlay style.</summary>
     public HorizonColorTheme DpsHorizTheme { get; set; } = HorizonColorTheme.ByRole;
 
-    /// <summary>Locked: chromeless and click-through, i.e. the raid-night state.
-    /// Unlocked shows a frame and sample content so the boxes can be placed.</summary>
+    /// <summary>Locked windows have no frame and pass clicks through. Unlocking adds frames
+    /// and sample content for placement.</summary>
     public bool Locked { get; set; }
 
-    // ── visibility, per box ───────────────────────────────────────────────
-    // The duty and combat filters were shared by every box before version 4.
-    // Per box so the meter can ride every pull while the timeline only shows
-    // inside duties, or any other mix. Each pair stacks on its own box: both
-    // ticked means that box shows only for a fight inside a duty.
+    // Visibility filters apply separately to each window. Enabling both requires combat
+    // inside a duty.
     public bool TimelineOnlyInDuty { get; set; }
     public bool TimelineOnlyInCombat { get; set; }
     public bool AlertsOnlyInDuty { get; set; }
@@ -263,8 +238,8 @@ internal sealed class Configuration : IPluginConfiguration
     public bool DpsOnlyInDuty { get; set; }
     public bool DpsOnlyInCombat { get; set; }
 
-    // ── geometry (screen pixels, persisted ourselves: the overlay windows use
-    //     NoSavedSettings so imgui.ini never fights us) ────────────────────
+    // Positions and sizes are stored in screen pixels. NoSavedSettings disables ImGui
+    // persistence.
     public Vector2 TimelinePos { get; set; } = new(80, 200);
     public Vector2 TimelineSize { get; set; } = new(320, 220);
     public Vector2 AlertsPos { get; set; } = new(80, 440);
@@ -272,489 +247,361 @@ internal sealed class Configuration : IPluginConfiguration
     public Vector2 DpsPos { get; set; } = new(80, 620);
     public Vector2 DpsSize { get; set; } = new(320, 240);
 
-    // ── timeline box ──────────────────────────────────────────────────────
-    /// <summary>Text scale inside the timeline box: the bar labels and their
-    /// countdowns. Bar row heights scale with it so the text stays inside.</summary>
+    // Timeline appearance
+    /// <summary>Scales bar labels, countdowns and row heights together.</summary>
     public float TimelineTextScale { get; set; } = 1.0f;
 
-    /// <summary>Backdrop alpha behind the timeline box's content: 0 =
-    /// invisible (the raid-night default; the box floats bare text/bars over
-    /// the game), up to 1 = solid theme background.</summary>
     public float TimelineBgOpacity { get; set; }
 
-    /// <summary>Whole-box opacity multiplier: every colour the timeline box
-    /// draws, backdrop included, is scaled by it.</summary>
+    /// <summary>Scales every timeline colour, including the backdrop.</summary>
     public float TimelineFade { get; set; } = 1.0f;
 
-    /// <summary>What is drawn behind the timeline's text to keep it readable
-    /// over bright arenas.</summary>
     public TextEffectStyle TimelineTextEffect { get; set; } = TextEffectStyle.Outline;
 
-    /// <summary>Effect reach in pixels: outline radius or glow spread.</summary>
+    /// <summary>Outline radius or glow spread in pixels.</summary>
     public int TimelineEffectThickness { get; set; } = 1;
 
-    /// <summary>Effect colour. The alpha is the effect's opacity and is scaled
-    /// by the text's own fade.</summary>
+    /// <summary>Effect opacity also follows the text fade.</summary>
     public Vector4 TimelineEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    /// <summary>Bar label and countdown colour.</summary>
     public Vector4 TimelineTextColor { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
 
-    /// <summary>Bar row height before the text-scale multiplier.</summary>
+    /// <summary>Row height before text scaling.</summary>
     public float TimelineBarHeight { get; set; } = 22.0f;
 
-    /// <summary>Gap between bar rows.</summary>
     public float TimelineBarSpacing { get; set; } = 4.0f;
 
-    /// <summary>Corner rounding on the bar and its track.</summary>
     public float TimelineBarRounding { get; set; } = 3.0f;
 
-    /// <summary>Border drawn around each bar, 0 = no border.</summary>
+    /// <summary>Zero disables the border.</summary>
     public float TimelineBarBorderThickness { get; set; }
 
-    /// <summary>Alpha multiplier for the full-length slot under a bar's fill.</summary>
     public float TimelineBarTrackOpacity { get; set; } = 1.0f;
 
     public Vector4 TimelineBarColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
 
-    /// <summary>The full-length slot under the fill. Dark by default so the
-    /// fill still reads against it at full track opacity.</summary>
     public Vector4 TimelineBarTrackColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.60f);
 
     public Vector4 TimelineBarBorderColor { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
 
-    // ── timeline behaviour ────────────────────────────────────────────────
-    /// <summary>Deplete: the bar empties as the cue arrives. Fill: it grows
-    /// toward full instead.</summary>
+    // Timeline behavior
     public BarFillMode BarFill { get; set; } = BarFillMode.Deplete;
 
-    /// <summary>Anchor the fill to the right edge instead of the left.</summary>
     public bool BarRightToLeft { get; set; }
 
-    /// <summary>Where the label and countdown sit across the bar.</summary>
     public TextAlign BarTextAlign { get; set; } = TextAlign.Left;
 
-    /// <summary>Seconds out at which a bar turns to the imminent colour.</summary>
+    /// <summary>Seconds before a cue when its bar takes the imminent colour.</summary>
     public float ImminentSeconds { get; set; } = 5.0f;
 
-    /// <summary>Pulse imminent bars so they catch the eye.</summary>
     public bool ImminentPulse { get; set; } = true;
 
-    /// <summary>Whether bars carry a countdown and with what precision.</summary>
     public CountdownStyle Countdown { get; set; } = CountdownStyle.Tenths;
 
-    /// <summary>Pin the countdown to the bar's right edge instead of
-    /// appending it to the label.</summary>
+    /// <summary>Place the countdown at the right edge instead of beside the
+    /// label.</summary>
     public bool CountdownSplit { get; set; }
 
-    /// <summary>Seconds ahead of the fight clock a timeline entry becomes a bar.</summary>
+    /// <summary>Seconds ahead of the fight clock to show timeline entries.</summary>
     public float TimelineWindow { get; set; } = 45.0f;
 
-    /// <summary>How many bars at most, so a dense timeline cannot grow the box
-    /// past its configured height.</summary>
     public int TimelineRows { get; set; } = 6;
 
-    /// <summary>The fight clock as a line above the bars, mm:ss. Off by
-    /// default: the meter's encounter line already carries a duration, and
-    /// this is for layouts that hide the meter.</summary>
+    /// <summary>Show the fight clock above the bars as mm:ss.</summary>
     public bool TimelineShowClock { get; set; }
 
-    /// <summary>Bars hug the box's bottom edge and the stack grows upward,
-    /// for boxes parked just above the hotbars.</summary>
+    /// <summary>Stack bars upward from the bottom of the window.</summary>
     public bool TimelineAnchorBottom { get; set; }
 
-    /// <summary>A cue that reaches zero flashes as a full bar for a beat
-    /// instead of vanishing, so the moment it fires reads on screen.</summary>
+    /// <summary>Briefly show a full bar when a cue reaches zero.</summary>
     public bool TimelineFireFlash { get; set; } = true;
 
-    /// <summary>Per-kind filters. A tank who only watches for busters and
-    /// raidwides quiets the mechanic bars, and so on. Untagged and unknown
-    /// kinds count as mechanics, the bucket they draw in. The unlocked box's
-    /// sample bars ignore these, the same way the alerts samples ignore the
-    /// severity filters: placement must never go blank.</summary>
+    /// <summary>Missing and unknown kinds use the mechanic filter. Placement samples ignore
+    /// these filters.</summary>
     public bool TimelineShowTankbuster { get; set; } = true;
     public bool TimelineShowRaidwide { get; set; } = true;
     public bool TimelineShowMechanic { get; set; } = true;
 
-    /// <summary>Fill colour for bars about to fire.</summary>
     public Vector4 ColorImminent { get; set; } = new(0.90f, 0.28f, 0.28f, 0.95f);
 
-    /// <summary>Colour each bar by the kind the program tagged its label with:
-    /// tankbuster, raidwide and mechanic get their own fill, anything untagged
-    /// keeps the shared bar colour. The imminent colour still wins near zero.</summary>
+    /// <summary>Use the tagged kind colour, or the shared colour for missing and unknown
+    /// kinds. The imminent colour takes priority.</summary>
     public bool TimelineKindColors { get; set; }
 
-    /// <summary>Bar fill for cues the program tagged tankbuster.</summary>
     public Vector4 TimelineTankbusterColor { get; set; } = new(0.92f, 0.48f, 0.20f, 0.85f);
 
-    /// <summary>Bar fill for cues the program tagged raidwide.</summary>
     public Vector4 TimelineRaidwideColor { get; set; } = new(0.35f, 0.62f, 0.92f, 0.85f);
 
-    /// <summary>Bar fill for cues the program tagged mechanic. Ships matching the
-    /// shared bar colour, so turning kind colours on only moves the tankbuster
-    /// and raidwide bars until this one is recoloured. Untagged and unknown
-    /// kinds keep the shared bar colour.</summary>
+    /// <summary>Applies only to explicit mechanic tags. Missing and unknown kinds keep the
+    /// shared colour.</summary>
     public Vector4 TimelineMechanicColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
 
-    // ── alerts box ────────────────────────────────────────────────────────
-    /// <summary>Text scale inside the alerts box.</summary>
+    // Alert appearance
     public float AlertsTextScale { get; set; } = 1.0f;
 
-    /// <summary>Backdrop alpha behind the alerts box's content.</summary>
     public float AlertsBgOpacity { get; set; }
 
-    /// <summary>Whole-box opacity multiplier for the alerts box.</summary>
+    /// <summary>Scales every alert colour, including the backdrop.</summary>
     public float AlertsFade { get; set; } = 1.0f;
 
-    /// <summary>What is drawn behind callout text to keep it readable.</summary>
     public TextEffectStyle AlertsTextEffect { get; set; } = TextEffectStyle.Outline;
 
-    /// <summary>Effect reach in pixels: outline radius or glow spread.</summary>
+    /// <summary>Outline radius or glow spread in pixels.</summary>
     public int AlertsEffectThickness { get; set; } = 1;
 
-    /// <summary>Effect colour. The alpha is the effect's opacity and is scaled
-    /// by the callout's own fade.</summary>
+    /// <summary>Effect opacity also follows the callout fade.</summary>
     public Vector4 AlertsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    /// <summary>Seconds an info callout stays up when the program does not specify
-    /// one. The field keeps the pre-v4 name so stored configs still load.</summary>
+    /// <summary>Info duration in seconds when the program supplies no ttl. Keep the
+    /// serialized name for compatibility with older configs.</summary>
     public float AlertSeconds { get; set; } = 4.0f;
 
-    /// <summary>Seconds an alert callout stays up, same fallback rule.</summary>
+    /// <summary>Alert duration in seconds when the program supplies no ttl.</summary>
     public float AlertSecondsAlert { get; set; } = 4.0f;
 
-    /// <summary>Seconds an alarm callout stays up. Longer than the rest by
-    /// default: the loudest callout should linger. Same fallback rule.</summary>
+    /// <summary>Alarm duration in seconds when the program supplies no ttl.</summary>
     public float AlertSecondsAlarm { get; set; } = 6.0f;
 
-    /// <summary>Most callouts shown at once. The bridge keeps a few more than
-    /// this; the cap only limits what is drawn.</summary>
+    /// <summary>Limits visible callouts without removing retained alerts from the
+    /// bridge.</summary>
     public int AlertsMaxVisible { get; set; } = 8;
 
-    /// <summary>Whether the newest callout lands on top of the stack or
-    /// grows it from the bottom.</summary>
     public AlertOrder AlertOrder { get; set; } = AlertOrder.NewestFirst;
 
-    /// <summary>Horizontal placement of callout lines inside the box.</summary>
     public TextAlign AlertsAlign { get; set; } = TextAlign.Left;
 
-    /// <summary>Rise-in and fade-out animation. Off pins callouts at full
-    /// opacity for their whole life.</summary>
+    /// <summary>Disabling animation keeps callouts at full opacity until expiry.</summary>
     public bool AlertsAnimate { get; set; } = true;
 
-    /// <summary>How much bigger an alarm callout draws than the box's body
-    /// text, 1.0 keeping it level. The loudest line earning the most pixels is
-    /// the point of an alarm.</summary>
+    /// <summary>Alarm text size relative to normal callout text.</summary>
     public float AlertsAlarmScale { get; set; } = 1.0f;
 
-    /// <summary>A thin strip under each callout that empties as its time runs
-    /// out, so the eye can tell a stale callout from a fresh one.</summary>
+    /// <summary>Show remaining callout time as a strip below the text.</summary>
     public bool AlertsLifeline { get; set; }
 
-    /// <summary>Per-severity filters. Hiding info callouts is the common one:
-    /// they are spoken anyway, and the box stays quiet for everything but
-    /// what must be seen.</summary>
     public bool AlertsShowInfo { get; set; } = true;
     public bool AlertsShowAlert { get; set; } = true;
     public bool AlertsShowAlarm { get; set; } = true;
 
-    /// <summary>Callouts hug the box's bottom edge and the stack grows
-    /// upward, for boxes parked low on the screen.</summary>
+    /// <summary>Stack callouts upward from the bottom of the window.</summary>
     public bool AlertsAnchorBottom { get; set; }
 
-    /// <summary>Wrap long callouts inside the box. Off draws each callout as
-    /// one line ending in an ellipsis, so the box stays one row per callout.</summary>
+    /// <summary>When disabled, truncate each callout to one line with an
+    /// ellipsis.</summary>
     public bool AlertsWrap { get; set; } = true;
 
-    /// <summary>A repeat of the callout already on top folds into it as a
-    /// times counter instead of stacking another row. Chatty triggers that
-    /// refire the same text stay one line.</summary>
+    /// <summary>Merge repeats of the top callout and display a repeat count.</summary>
     public bool AlertsCollapseDupes { get; set; } = true;
 
-    /// <summary>A faint plate in the callout's severity colour behind each
-    /// callout, so the colour reads in peripheral vision.</summary>
+    /// <summary>Draw a background in each callout's severity colour.</summary>
     public bool AlertsSeverityTint { get; set; }
 
-    /// <summary>Opacity of the severity plate, scaled by the callout's own
-    /// fade.</summary>
+    /// <summary>Also scaled by the callout fade.</summary>
     public float AlertsSeverityTintOpacity { get; set; } = 0.30f;
 
-    /// <summary>Pulse a border around the alerts box while an alarm callout
-    /// is up.</summary>
     public bool AlertsAlarmFlash { get; set; } = true;
 
-    /// <summary>Glow the screen edges in the alarm colour while an alarm
-    /// callout is up. Loud and locked to the raid-night state, so it never
-    /// fires over the settings boxes.</summary>
+    /// <summary>Flash screen edges during alarms only while the overlay is
+    /// locked.</summary>
     public bool AlarmScreenFlash { get; set; }
 
-    /// <summary>How far the screen flash reaches in from each edge, as a share
-    /// of the screen's shorter side.</summary>
+    /// <summary>Flash depth as a fraction of the shorter screen dimension.</summary>
     public float AlarmScreenFlashSize { get; set; } = 0.15f;
 
     public Vector4 ColorInfo { get; set; } = new(0.89f, 0.74f, 0.42f, 1.00f);
     public Vector4 ColorAlert { get; set; } = new(0.98f, 0.62f, 0.35f, 1.00f);
     public Vector4 ColorAlarm { get; set; } = new(0.95f, 0.30f, 0.30f, 1.00f);
 
-    // ── dps box ───────────────────────────────────────────────────────────
-    /// <summary>Text scale inside the dps meter box.</summary>
+    // DPS appearance
     public float DpsTextScale { get; set; } = 1.0f;
 
-    /// <summary>Backdrop alpha behind the dps meter box's content.</summary>
     public float DpsBgOpacity { get; set; }
 
-    /// <summary>Whole-box opacity multiplier for the dps meter box.</summary>
+    /// <summary>Scales every meter colour, including the backdrop.</summary>
     public float DpsFade { get; set; } = 1.0f;
 
-    /// <summary>What is drawn behind the meter's text to keep it readable.</summary>
     public TextEffectStyle DpsTextEffect { get; set; } = TextEffectStyle.Outline;
 
-    /// <summary>Effect reach in pixels: outline radius or glow spread.</summary>
+    /// <summary>Outline radius or glow spread in pixels.</summary>
     public int DpsEffectThickness { get; set; } = 1;
 
-    /// <summary>Effect colour. The alpha is the effect's opacity.</summary>
     public Vector4 DpsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    /// <summary>Name and number colour.</summary>
     public Vector4 DpsTextColor { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
 
-    /// <summary>Show only the local player's row, the original's solo mode.
-    /// Applies to every dps style.</summary>
     public bool DpsSoloOnly { get; set; }
 
-    /// <summary>Pin the local player's row ahead of everyone else's whatever
-    /// their rank, keeping its real rank number. Top of the Bars and Kagerou
-    /// lists, left end of the Horizon Overlay strip. Applies to every dps
-    /// style.</summary>
+    /// <summary>Place the local player first while preserving their DPS rank.</summary>
     public bool DpsSelfFirst { get; set; }
 
-    /// <summary>Row order in the meter. Alphabetical and by role keep each
-    /// row's real rank number, so the list can read by name or role without
-    /// lying about who parsed where. Applies to every dps style.</summary>
     public DpsSortOrder DpsSortOrder { get; set; } = DpsSortOrder.ByDps;
 
-    /// <summary>Other players' names: shown whole, reduced to initials, or
-    /// hidden outright. The streamer knobs. Applies to every dps style.</summary>
     public NamePrivacyStyle DpsNamePrivacy { get; set; } = NamePrivacyStyle.Shown;
 
-    /// <summary>Show the local player as YOU instead of their name, the way
-    /// ACT's own overlays do. Applies to every dps style.</summary>
     public bool DpsSelfNameYou { get; set; }
 
-    /// <summary>Bars and Kagerou styles: rank numbers on the rows. The Horizon
-    /// Overlay has its own rank knob.</summary>
+    /// <summary>Applies to Bars and Kagerou. Horizon Overlay has a separate rank
+    /// setting.</summary>
     public bool DpsRowsShowRank { get; set; } = true;
 
-    /// <summary>Bars and Kagerou styles: the job icon before the name.</summary>
+    /// <summary>Applies to Bars and Kagerou.</summary>
     public bool DpsRowsShowIcons { get; set; }
 
-    /// <summary>Bars and Kagerou styles: lighten every other row so lines are
-    /// easier to track across a wide box.</summary>
+    /// <summary>Applies to Bars and Kagerou.</summary>
     public bool DpsRowStripes { get; set; }
 
-    /// <summary>How strongly the striped rows lighten, 0 to 0.5.</summary>
+    /// <summary>Stripe opacity from 0 to 0.5.</summary>
     public float DpsRowStripeOpacity { get; set; } = 0.08f;
 
-    /// <summary>Bars style only: fill the rank 1 bar with its own colour so
-    /// the top of the parse reads at a glance. Self highlight still wins.</summary>
+    /// <summary>Bars style only. The local player highlight takes priority.</summary>
     public bool DpsBarTopHighlight { get; set; }
 
-    /// <summary>The rank 1 bar fill when DpsBarTopHighlight is on.</summary>
     public Vector4 DpsBarTopColor { get; set; } = new(0.98f, 0.80f, 0.25f, 0.85f);
 
-    /// <summary>Show each member's death count beside the name, red, when the
-    /// feed carries it. Needs names shown in the Horizon Overlay strip.</summary>
+    /// <summary>Horizon Overlay requires names to be visible to show death
+    /// counts.</summary>
     public bool DpsShowDeaths { get; set; }
 
-    /// <summary>Keep the final meter on screen after the encounter ends,
-    /// until the next pull starts or the zone changes. Off hides the box the
-    /// moment the fight does.</summary>
+    /// <summary>Keep final rows until the next pull or zone change.</summary>
     public bool DpsHoldLast { get; set; }
 
-    /// <summary>Encounter line layout. Empty joins title, duration and party
-    /// dps with a dot, the long standing look. The tokens {title} {duration}
-    /// {dps} place those parts freely, so the line can be reordered or
-    /// reworded.</summary>
+    /// <summary>Supports {title}, {duration} and {dps}. Empty uses the default layout with
+    /// dot separators.</summary>
     public string DpsHeaderFormat { get; set; } = string.Empty;
 
-    /// <summary>How many members at most the meter shows, the original's
-    /// # combatants. The feed carries up to a 24-man alliance; eight covers
-    /// a full party. Applies to every dps style.</summary>
+    /// <summary>Limits display rows in every style. The feed can supply a full
+    /// alliance.</summary>
     public int DpsMaxRows { get; set; } = 8;
 
-    /// <summary>Bar row height before the text-scale multiplier.</summary>
+    /// <summary>Row height before text scaling.</summary>
     public float DpsBarHeight { get; set; } = 22.0f;
 
-    /// <summary>Gap between bar rows.</summary>
     public float DpsBarSpacing { get; set; } = 4.0f;
 
-    /// <summary>Corner rounding on the bar and its track.</summary>
     public float DpsBarRounding { get; set; } = 3.0f;
 
-    /// <summary>Border drawn around each bar, 0 = no border.</summary>
+    /// <summary>Zero disables the border.</summary>
     public float DpsBarBorderThickness { get; set; }
 
-    /// <summary>Alpha multiplier for the full-length slot under a bar's fill.</summary>
     public float DpsBarTrackOpacity { get; set; } = 1.0f;
 
     public Vector4 DpsBarColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
 
-    /// <summary>The full-length slot under the fill. Dark by default so the
-    /// fill still reads against it at full track opacity.</summary>
     public Vector4 DpsBarTrackColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.60f);
 
     public Vector4 DpsBarBorderColor { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
 
-    /// <summary>Anchor the share bars' fill to the right edge instead of the
-    /// left.</summary>
     public bool DpsBarRightToLeft { get; set; }
 
-    /// <summary>Bars style only: fill each bar in the member's job colour at
-    /// the configured bar colour's alpha, like kagerou's underlines, instead
-    /// of the single shared tint.</summary>
+    /// <summary>Bars style only. Uses each job colour with the configured bar
+    /// alpha.</summary>
     public bool DpsBarJobColors { get; set; }
 
-    /// <summary>Bars style only: put the damage share beside the dps figure
-    /// pinned to the right edge.</summary>
+    /// <summary>Bars style only. Show damage share beside DPS at the right edge.</summary>
     public bool DpsBarsShowShare { get; set; }
 
-    /// <summary>Bars and Kagerou styles: append the member's hps to the row
-    /// numbers. Rows with no healing recorded skip it.</summary>
+    /// <summary>Bars and Kagerou only. Omit HPS for rows with no healing.</summary>
     public bool DpsRowsShowHps { get; set; }
 
-    /// <summary>Bars and Kagerou styles: shorten the row numbers to the
-    /// header's compact shape, 10234.5 becoming 10.2k. Off shows the full
-    /// figure with one decimal. The Horizon Overlay has its own compact knob.
-    /// </summary>
+    /// <summary>Bars and Kagerou only. Show 10234.5 as 10.2k when enabled, or one decimal
+    /// place when disabled. Horizon Overlay has a separate compact setting.</summary>
     public bool DpsRowsCompact { get; set; } = true;
 
-    /// <summary>Bars style only: fill the local player's bar with its own
-    /// colour so it reads at a glance. Wins over job coloured bars.</summary>
+    /// <summary>Bars style only. Overrides job colours and the top rank
+    /// highlight.</summary>
     public bool DpsBarSelfHighlight { get; set; }
 
-    /// <summary>The local player's bar fill when DpsBarSelfHighlight is on.</summary>
     public Vector4 DpsBarSelfColor { get; set; } = new(1.00f, 1.00f, 1.00f, 0.85f);
 
-    // ── dps box: the Horizon Overlay style's own knobs ────────────────────
-    // The serialized names keep the Horiz stem from before the rename so
-    // configs written by older builds still load.
+    // Horizon Overlay settings retain their serialized Horiz names for compatibility.
 
-    /// <summary>The member name centred above each bar. Off reclaims the line
-    /// and lifts the bars to the top of the box.</summary>
+    /// <summary>Hiding names also removes their reserved space above the bars.</summary>
     public bool DpsHorizShowNames { get; set; } = true;
 
-    /// <summary>Rank numbers before the names.</summary>
     public bool DpsHorizShowRank { get; set; } = true;
 
-    /// <summary>The job icon straddling each bar's top edge.</summary>
     public bool DpsHorizShowIcons { get; set; } = true;
 
-    /// <summary>HPS inside the bar. Off puts the job acronym in its slot,
-    /// which is what the ACT original does.</summary>
+    /// <summary>When disabled, show the job acronym in place of HPS.</summary>
     public bool DpsHorizShowHps { get; set; } = true;
 
-    /// <summary>The two-tone bar: faint overall, solid on the side of the
-    /// member's relevant stat. Off is one flat tint.</summary>
+    /// <summary>Emphasize the half containing the role's main stat. Disable for a uniform
+    /// tint.</summary>
     public bool DpsHorizHighlight { get; set; } = true;
 
-    /// <summary>The thin damage-share strip under each bar, plus its percent
-    /// figure.</summary>
+    /// <summary>Show a damage share strip and percentage below each bar.</summary>
     public bool DpsHorizShowPercent { get; set; } = true;
 
-    /// <summary>Widest a single member's bar may grow, before the text-scale
-    /// multiplier. A narrower window still shrinks every cell equally. The ACT
-    /// original caps at 140px.</summary>
+    /// <summary>Maximum cell width before text scaling. Narrow windows shrink all cells
+    /// equally.</summary>
     public float DpsHorizMaxBarWidth { get; set; } = 140.0f;
 
-    /// <summary>Bar thickness before the text-scale multiplier. Tall enough by
-    /// default that the bottom-anchored stats sit clear of the job icon
-    /// straddling the top edge.</summary>
+    /// <summary>Bar height before text scaling.</summary>
     public float DpsHorizBarHeight { get; set; } = 32.0f;
 
-    /// <summary>The parallelogram lean in degrees, 0 being a plain rectangle.
-    /// The ACT original leans 30.</summary>
+    /// <summary>Skew angle in degrees. Zero produces a rectangle.</summary>
     public float DpsHorizSkew { get; set; } = 30.0f;
 
-    /// <summary>Edge length of the job icon before the text-scale multiplier.</summary>
+    /// <summary>Icon edge length before text scaling.</summary>
     public float DpsHorizIconSize { get; set; } = 20.0f;
 
-    /// <summary>Empty space on either side of a cell. The ACT original's
-    /// margin is 6px around a 140px bar.</summary>
+    /// <summary>Space on each side of a cell.</summary>
     public float DpsHorizCellPadding { get; set; } = 6.0f;
 
-    /// <summary>Size of the in-bar hps and dps figures relative to the box's
-    /// body text, 0.4 to 1.5. The names share it.</summary>
+    /// <summary>Scale names and in-bar stats relative to body text, from 0.4 to
+    /// 1.5.</summary>
     public float DpsHorizStatScale { get; set; } = 0.80f;
 
-    /// <summary>Size of the damage share percent figure under the strip,
-    /// relative to the box's body text, 0.4 to 1.5.</summary>
+    /// <summary>Scale percentage text relative to body text, from 0.4 to 1.5.</summary>
     public float DpsHorizPercentScale { get; set; } = 0.45f;
 
-    /// <summary>Decimal places on the in-bar dps figure, 0 to 2.</summary>
+    /// <summary>DPS decimal places from 0 to 2.</summary>
     public int DpsHorizDecimals { get; set; } = 2;
 
-    /// <summary>Shorten the in-bar dps figure to the header's compact shape,
-    /// 10234.50 becoming 10.2k.</summary>
+    /// <summary>Show 10234.50 as 10.2k.</summary>
     public bool DpsHorizCompact { get; set; }
 
-    /// <summary>Alpha of a bar's solid side. The faint side of the two-tone
-    /// follows at a third of it.</summary>
+    /// <summary>Opacity of the emphasized half. The other half uses one third of this
+    /// value.</summary>
     public float DpsHorizBarOpacity { get; set; } = 0.30f;
 
-    // The default bar tints are the ACT original's own rgb() values at full
-    // alpha; the configured bar opacity scales the role tints at draw time.
-    /// <summary>The local player's bar, white in both themes.</summary>
     public Vector4 DpsHorizSelfColor { get; set; } = new(1.000f, 1.000f, 1.000f, 0.80f);
 
-    /// <summary>Stat text on the local player's bar, plain black against the
-    /// white bar, drawn without the text effect.</summary>
+    /// <summary>Local player stat text is drawn without a text effect.</summary>
     public Vector4 DpsHorizSelfTextColor { get; set; } = new(0.000f, 0.000f, 0.000f, 1.00f);
 
-    /// <summary>Bar tint for dps jobs in the by-role theme.</summary>
     public Vector4 DpsHorizDpsColor { get; set; } = new(0.957f, 0.263f, 0.212f, 1.00f);
 
-    /// <summary>Bar tint for tanks in the by-role theme.</summary>
     public Vector4 DpsHorizTankColor { get; set; } = new(0.129f, 0.588f, 0.953f, 1.00f);
 
-    /// <summary>Bar tint for healers in the by-role theme.</summary>
     public Vector4 DpsHorizHealerColor { get; set; } = new(0.545f, 0.765f, 0.290f, 1.00f);
 
-    /// <summary>Bar for jobs we do not know, and for everyone but the local
-    /// player in the black &amp; white theme.</summary>
+    /// <summary>Used for unknown jobs and other players in the black &amp; white
+    /// theme.</summary>
     public Vector4 DpsHorizDimColor { get; set; } = new(0.000f, 0.000f, 0.000f, 0.30f);
 
-    // ── dps box: the encounter line, shared by every style ────────────────
-    /// <summary>The encounter line at all: title, duration and party dps.</summary>
+    // Encounter header
     public bool DpsShowHeader { get; set; } = true;
 
-    /// <summary>The fight clock in the encounter line.</summary>
     public bool DpsHeaderDuration { get; set; } = true;
 
-    /// <summary>The party's dps in the encounter line.</summary>
     public bool DpsHeaderTotalDps { get; set; } = true;
 
-    // ── profiles ────────────────────────────────────────────────────────────
-    /// <summary>Named appearance snapshots: profile name to a serialized
-    /// Configuration blob from SnapshotAppearance. Only the appearance knobs
-    /// come back on apply; the link, placement and visibility stay as they
-    /// are. A hand edited config can carry a JSON null for the dictionary
-    /// itself, which the setter coalesces back to empty.</summary>
+    // Appearance profiles
+    /// <summary>Named JSON snapshots containing only appearance settings.</summary>
     public Dictionary<string, string> AppearanceProfiles
     {
         get;
         set => field = value ?? new();
     } = new();
 
-    /// <summary>Profile blob options. The colour knobs are Vector4, whose X Y
-    /// Z W are public fields, and default options skip fields: a blob would
-    /// carry every colour as an empty object and applying it would wipe them
-    /// to transparent black. One shared instance, both directions.</summary>
+    /// <summary>Include Vector4 fields so profile colours survive serialization.</summary>
     private static readonly JsonSerializerOptions ProfileOptions = new()
     {
         IncludeFields = true,
     };
 
-    /// <summary>Only the fields that applying an appearance profile can change.</summary>
+    /// <summary>Serialize only fields that an appearance profile can apply.</summary>
     public string SnapshotAppearance()
     {
         this.Sanitize();
@@ -766,11 +613,8 @@ internal sealed class Configuration : IPluginConfiguration
         return node.ToJsonString();
     }
 
-    /// <summary>Bring a SnapshotAppearance blob's appearance knobs in. False
-    /// on a blob that does not parse, so a mangled stored profile leaves the
-    /// current look alone. A hand edited config can put a JSON null in the
-    /// dictionary, which materializes as a null blob, so that is refused up
-    /// front rather than trusted to the parser.</summary>
+    /// <summary>Return false for invalid profile JSON without changing the current
+    /// appearance.</summary>
     public bool ApplyAppearanceProfile(string json)
     {
         if (string.IsNullOrEmpty(json))
@@ -797,11 +641,8 @@ internal sealed class Configuration : IPluginConfiguration
         return true;
     }
 
-    /// <summary>Clipboard text to a clean profile blob, or null when it is not
-    /// one. The parse is validated then re-serialized, so an imported profile
-    /// carries only what SnapshotAppearance would have written and never a
-    /// hand edited oddity like a nested profiles dictionary. The size cap
-    /// keeps a clipboard stuffed with something huge out of the parser.</summary>
+    /// <summary>Validate imported JSON and serialize only supported appearance fields.
+    /// Reject oversized input before parsing.</summary>
     public static string? ValidateProfileBlob(string? json)
     {
         const int MaxBlobChars = 64 * 1024;
@@ -823,8 +664,7 @@ internal sealed class Configuration : IPluginConfiguration
         return snapshot?.SnapshotAppearance();
     }
 
-    // ── legacy: the shared pre-v3 look, kept only so MigrateFromV2 can read
-    //     the old values, the same pattern as BgOpacity from v1 ────────────
+    // Legacy appearance fields retained for MigrateFromV2.
     public TextEffectStyle TextEffect { get; set; } = TextEffectStyle.Outline;
     public int OutlineThickness { get; set; } = 1;
     public Vector4 ColorOutline { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
@@ -836,18 +676,15 @@ internal sealed class Configuration : IPluginConfiguration
     public float BarRounding { get; set; } = 3.0f;
     public float BarBorderThickness { get; set; }
 
-    /// <summary>Version 1's single backdrop opacity, split per box in version
-    /// 2. Kept only so the migration can read the old value.</summary>
+    /// <summary>Legacy opacity retained for MigrateFromV1.</summary>
     public float BgOpacity { get; set; }
 
-    /// <summary>Version 3's shared visibility filters, per box in version 4.
-    /// Kept only so MigrateFromV3 can read the old values.</summary>
+    /// <summary>Legacy visibility filters retained for MigrateFromV3.</summary>
     public bool OnlyInDuty { get; set; }
     public bool OnlyInCombat { get; set; }
 
-    /// <summary>Saves reach here from the render thread (settings widgets), the
-    /// framework thread (/nyaa lock) and the plugin-manager thread (unload).
-    /// Concurrent writes to one file throw and lose the write, so they queue.</summary>
+    /// <summary>Serialize writes from settings, commands and unload to avoid concurrent
+    /// file writes.</summary>
     public void Save()
     {
         lock (SaveLock)
@@ -863,8 +700,6 @@ internal sealed class Configuration : IPluginConfiguration
 
     private static readonly object SaveLock = new();
 
-    /// <summary>Carry a version 1 config forward: the single backdrop opacity
-    /// becomes both per-box opacities.</summary>
     public void MigrateFromV1()
     {
         TimelineBgOpacity = BgOpacity;
@@ -872,13 +707,10 @@ internal sealed class Configuration : IPluginConfiguration
         Version = 2;
     }
 
-    /// <summary>Carry a version 2 config forward: the shared bar look and text
-    /// effect become each box's own, and the retired shadow effect folds into
-    /// the outline. The old shared track opacity is deliberately not carried:
-    /// the track is a colour of its own now and starts fully visible.</summary>
+    /// <summary>Split shared appearance settings by window and map the retired shadow
+    /// effect to outline. Track opacity starts at its new default.</summary>
     public void MigrateFromV2()
     {
-        // v2's Off stays Off; its Shadow and Outline both land on the outline.
         var effect = TextEffect == TextEffectStyle.Off ? TextEffectStyle.Off : TextEffectStyle.Outline;
         TimelineTextEffect = effect;
         AlertsTextEffect = effect;
@@ -912,9 +744,8 @@ internal sealed class Configuration : IPluginConfiguration
         Version = 3;
     }
 
-    /// <summary>Carry a version 3 config forward: the shared visibility filters
-    /// become each box's own, and the single alert time seeds the per severity
-    /// times so the on screen rhythm does not change for an upgrader.</summary>
+    /// <summary>Copy shared visibility and alert duration into the settings for each window
+    /// and severity.</summary>
     public void MigrateFromV3()
     {
         TimelineOnlyInDuty = OnlyInDuty;
@@ -930,13 +761,12 @@ internal sealed class Configuration : IPluginConfiguration
         Version = 4;
     }
 
-    /// <summary>Restore the shipped palette and sizing, leaving the link
-    /// settings and window placement alone.</summary>
+    /// <summary>Reset appearance while preserving connection settings, placement,
+    /// visibility and profiles.</summary>
     public void ResetAppearance() => this.CopyAppearanceFrom(new Configuration());
 
-    /// <summary>Copy every appearance knob over from another configuration,
-    /// leaving the link, placement, visibility and profiles alone. Applying a
-    /// saved profile and resetting to defaults differ only in the source.</summary>
+    /// <summary>Copy appearance while preserving connection settings, placement, visibility
+    /// and profiles.</summary>
     public void CopyAppearanceFrom(Configuration fresh)
     {
         fresh.Sanitize();

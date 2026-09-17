@@ -68,7 +68,7 @@ const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameComba
     Check(queue.TryEnqueue("fresh"), "clear restores the byte budget");
 }
 
-// Recovery keeps the exact damaged bytes and finite settings survive sanitation.
+// Recovery preserves damaged file bytes and sanitizes settings to finite values.
 {
     var folder = Path.Combine(Path.GetTempPath(), "nyaa-config-test-" + Guid.NewGuid());
     Directory.CreateDirectory(folder);
@@ -157,7 +157,7 @@ foreach (var port in new[] { 0, -1, 65536 })
     client.Abort();
 }
 
-// A real feed disconnect closes the engine on Update. Replayed edges start fresh.
+// Feed loss closes the engine on Update. Replayed combat edges start a fresh encounter.
 {
     var port = FreePort();
     using var server = new WebSocketServer(port, (_, _) => { }, (_, _) => { }, () => null);
@@ -187,7 +187,8 @@ foreach (var port in new[] { 0, -1, 65536 })
     Check(Field(meter, "client") == null, "overflow retry waits instead of reconnecting every frame");
 }
 
-// Valid nonobjects, ordered disconnect bursts and miss-only endings all close cleanly.
+// Reject JSON values that are not objects and preserve endings across disconnects and
+// missed attacks.
 {
     var port = FreePort();
     using var server = new WebSocketServer(port, (_, _) => { }, (_, _) => { }, () => null);

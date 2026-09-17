@@ -5,46 +5,15 @@ using System.Linq;
 
 namespace NyaaTriggers.Plugin.Meter;
 
-// ACT-style DPS meter, parsed straight from the combat log feed. Ported
-// behavior-faithful from NyaaTriggers dps_meter.py, same wire decode, same
-// encounter lifecycle, same ACT aggregation rules. Pure System.* so tests
-// can run it headless.
-//
-// Effect pair decode follows cactbot's LogGuide, cross-checked against real
-// captures. Flags byte 0 is the effect type, 0x03/0x05/0x06/0x33 damage,
-// 0x04 heal, 0x01/0x02 miss or dodge. Byte 1 is the severity, 0x20 crit,
-// 0x40 direct hit. Damage value: the 0x0100 mask means hallowed, amount 0.
-// The 0x4000 mask means "a lot" of damage, bytes ABCD become DAB as a
-// 3-byte integer, the low byte shifted left 16 or the high word. Otherwise
-// the amount is the high word. A shifted literal heal under 0x10000, the
-// Plenary family, is taken as-is since shifting it right 16 reads 0.
-//
-// Encounter lifecycle mirrors ACT. Begins on a combat flag rising, either
-// InCombat bool, or lazily on the first hostile effect involving a player,
-// so attaching mid-fight still meters the pull. Finalizes on a combat flag
-// dropping, on a wipe, or on any 01 zone line. Empty pulls still send an end
-// marker so the last live row can close.
-//
-// Every event lands twice, on the encounter and on the display view. Only
-// the view resets when damage resumes past the idle timeout, so the overlay
-// draws a fresh segment while the encounter itself is never split.
-//
-// Pets merge into their owner like ACT's combine pets with owner. Owner ids
-// arrive on 03 lines and on the trailing owner fields of 21/22 lines.
-//
-// Deliberate simplifications vs the Python original. The overlay only draws
-// name, job, encdps, share, hps, is-self and deaths, so dropped: the swings,
-// hits, crits, dhits, cdhits and maxhit counters, the own-activity first and
-// last stamps with touch, wall_start, the _last_final between-pulls
-// retention and the ACT-style snapshot dict. Crit and dh are still decoded
-// per pair, nothing counts them anymore. damagetaken stays since the
-// empty-pull check needs it, enc.last and enc.last_damage stay for the
-// duration math and the idle logic.
+// Combat log meter ported from NyaaTriggers dps_meter.py. Effect decoding follows cactbot's
+// LogGuide. Encounter totals follow ACT, with pet contributions assigned to their owners. A
+// separate display view resets after damage resumes beyond the idle timeout. The engine has
+// no game or UI dependencies so it can be tested without either.
 
 internal readonly record struct MeterRow(string Name, string Job, double EncDps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0);
 
-/// <summary>The live display frame. Rebuilt on every read rather than
-/// mutated, so the UI never reads a half-updated meter.</summary>
+/// <summary>A new snapshot is created for each read so consumers never see partial
+/// updates.</summary>
 internal sealed class OverlaySnapshot
 {
     internal required string Title { get; init; }
@@ -56,19 +25,19 @@ internal sealed class OverlaySnapshot
     internal required IReadOnlyList<MeterRow> Rows { get; init; }
 }
 
-/// <summary>Feed combat log lines in, read overlay snapshots out. Never
-/// raises on malformed input, a bad line is skipped not fatal.</summary>
+/// <summary>Parses combat log lines into meter snapshots, skipping malformed
+/// lines.</summary>
 internal sealed class MeterEngine
 {
     /// <summary>ActorControl, line 33, command for a wipe or reset.</summary>
     private const string WipeCommand = "4000000F";
 
-    /// <summary>Default damage-idle timeout for the on-screen meter. After
-    /// this long with no damage the live view pauses, the next hit starts a
-    /// fresh segment. Display only, the recorded pull is never split.</summary>
+    /// <summary>Seconds without damage before the display pauses. The next hit starts a new
+    /// display segment without splitting encounter totals.</summary>
     private const double DefaultIdleTimeout = 120.0;
 
-    /// <summary>Top damage rows plus the local player when ranked below them.</summary>
+    /// <summary>Top damage rows. Include the local player as an additional row if ranked
+    /// lower.</summary>
     private const int MaxOverlayRows = 24;
 
     // Keep local and party records under pressure. Retired damage remains
@@ -81,9 +50,8 @@ internal sealed class MeterEngine
     private static string BoundName(string name)
         => name.Length <= MaxNameChars ? name : name[..MaxNameChars];
 
-    // ClassJob id to acronym. Ids 8 to 18 are crafting and gathering classes
-    // and map to "", no combat row worth labelling. 0 is NPC or none.
-    // Unknown future jobs degrade to "" rather than a wrong guess.
+    // Map ClassJob IDs to acronyms. NPCs, crafting, gathering and unknown jobs use an empty
+    // label.
     private static readonly IReadOnlyDictionary<int, string> JobAcronyms = new Dictionary<int, string>
     {
         { 1, "GLA" }, { 2, "PGL" }, { 3, "MRD" }, { 4, "LNC" }, { 5, "ARC" }, { 6, "CNJ" }, { 7, "THM" },
@@ -94,17 +62,17 @@ internal sealed class MeterEngine
     };
 
     private readonly Func<double> clock;
-    private readonly BoundedMap<int> jobs = new();      // actor id to ClassJob id, nonzero means a player
+    private readonly BoundedMap<int> jobs = new();      // Actor ID to ClassJob ID.
     private readonly Dictionary<int, int> rosterJobs = new();
-    private readonly BoundedMap<int> owners = new();    // pet or summon id to owner id
-    private readonly BoundedMap<string> names = new();  // actor id to last seen name
+    private readonly BoundedMap<int> owners = new();    // Pet or summon ID to owner ID.
+    private readonly BoundedMap<string> names = new();
 
     private string zone = string.Empty;
     private int? meId;
     private bool inAct;
     private bool inGame;
     private Encounter? current;
-    private Encounter? view;   // display segment, resets on idle
+    private Encounter? view;   // Display segment that resets when damage resumes after idle.
     private double idleTimeout = DefaultIdleTimeout;
 
     internal MeterEngine(Func<double>? clock = null)
@@ -114,17 +82,15 @@ internal sealed class MeterEngine
 
     private static double DefaultClock() => Environment.TickCount64 / 1000.0;
 
-    /// <summary>Fired synchronously whenever an encounter finalizes.
-    /// Carries the final snapshot of the display view: the encounter objects
-    /// are already gone by then, and the last throttled live push can be up
-    /// to a second stale. Null when the view holds nothing worth showing.</summary>
+    /// <summary>Called synchronously on encounter end with the final display snapshot,
+    /// including events after the last live push. Null when the display has no
+    /// rows.</summary>
     internal Action<OverlaySnapshot?>? OnEncounterEnd { get; set; }
 
     internal bool HasLiveEncounter => this.current != null;
 
-    /// <summary>Whether any zone line has landed. The standalone feed dedups
-    /// zone events against its own memory, which a fresh engine does not
-    /// share, so the feed checks this before passing a replayed zone in.</summary>
+    /// <summary>Lets the feed initialize a new engine from cached zone metadata without
+    /// treating a replay as a zone change.</summary>
     internal bool HasZone => this.zone.Length > 0;
 
     /// <summary>Install cached zone metadata without erasing cached identity.</summary>
@@ -133,9 +99,8 @@ internal sealed class MeterEngine
         if (!this.HasZone) this.zone = BoundName(name);
     }
 
-    /// <summary>How long the meter keeps ticking after the last damage before
-    /// it pauses, resetting on the next hit. Display only, the recorded pull
-    /// is never split or shortened by this. Bad input is ignored.</summary>
+    /// <summary>Set the display idle timeout in seconds. Invalid values are ignored and
+    /// encounter totals are unaffected.</summary>
     internal void SetIdleTimeout(double secs)
     {
         if (double.IsNaN(secs) || double.IsInfinity(secs))
@@ -146,13 +111,9 @@ internal sealed class MeterEngine
         this.idleTimeout = Math.Clamp(secs, 15.0, 600.0);
     }
 
-    // ------------------------------------------------------------------
-    // actor bookkeeping
-    // ------------------------------------------------------------------
 
-    /// <summary>Actor id as an int, hex string with a decimal fallback, so
-    /// padded or case variants of the same id resolve to one key. Null for
-    /// blank or invalid ids and the no-target sentinels 0 and E0000000.</summary>
+    /// <summary>Normalize hexadecimal IDs with a decimal fallback. Reject invalid IDs and
+    /// the no-target values 0 and E0000000.</summary>
     private static int? ActorInt(string? raw)
     {
         var s = raw?.Trim();
@@ -168,8 +129,8 @@ internal sealed class MeterEngine
             return null;
         }
 
-        // Ids wider than the 32-bit wire value are a bad line, and the bit
-        // pattern survives the int cast so high-bit ids stay one key.
+        // Reject values outside the wire's 32 bits. The cast preserves IDs with the high
+        // bit set.
         if (v <= 0 || v == 0xE0000000L || v > 0xFFFFFFFFL)
         {
             return null;
@@ -178,9 +139,7 @@ internal sealed class MeterEngine
         return unchecked((int)v);
     }
 
-    /// <summary>A roster job from outside the log stream, the PartyChanged
-    /// burst. Same map the 03 lines fill, so a mid-instance connect stops
-    /// reading the party as enemies once the roster lands.</summary>
+    /// <summary>Update the job cache from roster events as well as spawn lines.</summary>
     internal void NoteJob(int aid, int job)
     {
         if (job <= 0 || (uint)aid >> 24 != 0x10)
@@ -189,9 +148,8 @@ internal sealed class MeterEngine
         }
 
         this.jobs.Set(aid, job);
-        // The burst can land after a pet line already opened the owner's row
-        // at job 0. Run the same late upgrade the 03 handler runs, or the job
-        // cell stays blank until the owner personally acts.
+        // Update existing rows too. A pet may have created the owner's row before the
+        // roster arrived.
         foreach (var enc in new[] { this.current, this.view })
         {
             if (enc != null && enc.Combatants.ContainsKey(aid))
@@ -201,8 +159,8 @@ internal sealed class MeterEngine
         }
     }
 
-    /// <summary>The local player, pinned before any 02 line arrives. A blank
-    /// or malformed id changes nothing.</summary>
+    /// <summary>Set local identity before the first 02 line. Invalid IDs leave it
+    /// unchanged.</summary>
     internal void SetMe(int aid)
     {
         if (aid <= 0)
@@ -246,17 +204,13 @@ internal sealed class MeterEngine
         => aid is int id && (id == this.meId || this.JobFor(id) != 0 ||
             (this.current?.ActorsLimited == true && (uint)id >> 24 == 0x10));
 
-    /// <summary>Does the event credit the player meter: damage a player or a
-    /// player's pet dealt, or damage a player directly took. A pet target
-    /// resolves to its owner and credits no one, so a non-null target key
-    /// alone is not enough. Unrelated damage nearby must not move the display
-    /// segment's activity stamp.</summary>
+    /// <summary>Credit player and pet damage dealt, and damage taken directly by players.
+    /// Damage to pets or unrelated actors must not advance display activity.</summary>
     private static bool CreditsPlayer(int? srcKey, int? tgtKey, int? tid)
         => srcKey != null || (tgtKey != null && tgtKey == tid);
 
-    /// <summary>The combatant record key for an actor. The owner id for
-    /// player pets, the id itself for players, null for enemies and their
-    /// minions.</summary>
+    /// <summary>Resolve players to their own ID and player pets to their owner. Return null
+    /// for other actors.</summary>
     private int? PlayerKey(int? aid)
     {
         if (aid is not int id)
@@ -307,9 +261,8 @@ internal sealed class MeterEngine
             enc.ActorOrder.Remove(c.OrderNode!);
             enc.ActorOrder.AddLast(c.OrderNode!);
 
-            // Records created by a pet's line start nameless, the line only
-            // names the pet. The owner's name lands once an 03 or an owner
-            // line supplies it.
+            // A pet may create an unnamed owner row before a later line supplies the owner
+            // name.
             if (c.Name.Length == 0)
             {
                 c.Name = name.Length > 0 ? name : this.names.Get(key) ?? string.Empty;
@@ -324,17 +277,13 @@ internal sealed class MeterEngine
         return c;
     }
 
-    // ------------------------------------------------------------------
-    // encounter lifecycle
-    // ------------------------------------------------------------------
 
     private void Begin()
     {
         if (this.current != null)
         {
-            // A stray late tick can reopen an encounter nobody finalizes.
-            // Past the idle timeout it is dead weight. Close it out before
-            // the fresh pull starts, or the two merge into one phantom.
+            // Finalize an idle encounter before starting a new pull. A late tick may have
+            // reopened it without a matching combat end.
             var enc = this.current;
             var last = enc.Last ?? enc.Start;
             if (this.clock() - last <= this.idleTimeout)
@@ -348,15 +297,11 @@ internal sealed class MeterEngine
         var now = this.clock();
         var title = this.zone.Length > 0 ? this.zone : "Encounter";
         this.current = new Encounter(title, now);
-        // The on-screen view runs alongside the encounter. Only the view
-        // resets on damage idle. The encounter always logs the whole pull.
         this.view = new Encounter(title, now);
     }
 
-    /// <summary>End the current encounter, if any, and fire OnEncounterEnd
-    /// even for empty ones. Safe to call with nothing in progress. The final
-    /// snapshot is taken before the encounter objects go away, so the
-    /// callback can still publish the values the last live push missed.</summary>
+    /// <summary>Capture final display values before clearing the encounter. Notify
+    /// listeners even for an empty encounter. Safe when no encounter is open.</summary>
     private void FinalizeEncounter(bool incomplete = false)
     {
         var enc = this.current;
@@ -374,14 +319,12 @@ internal sealed class MeterEngine
         }
         catch (Exception)
         {
-            // A consumer bug must not kill the feed.
+            // Contain consumer errors so the feed can continue.
         }
     }
 
-    /// <summary>Stamp damage activity on the display view. Damage landing
-    /// more than the idle timeout after the previous hit resets the view
-    /// first, the frozen numbers give way to a fresh segment starting with
-    /// this hit. The encounter is never touched.</summary>
+    /// <summary>Reset the display segment if damage resumes after the idle timeout.
+    /// Encounter totals remain intact.</summary>
     private void NoteDamage(double now)
     {
         var view = this.view;
@@ -398,9 +341,6 @@ internal sealed class MeterEngine
         view.LastDamage = now;
     }
 
-    // ------------------------------------------------------------------
-    // feed
-    // ------------------------------------------------------------------
 
     /// <summary>Close the feed session before replay can supply fresh identities.</summary>
     internal void FeedLost(bool incomplete = false)
@@ -415,13 +355,9 @@ internal sealed class MeterEngine
         this.meId = null;
     }
 
-    /// <summary>InCombat event, inACTCombat and inGameCombat. A rising edge
-    /// on either flag begins the encounter, a falling edge on either ends it.
-    /// ACT can hold inACTCombat high across back-to-back pulls of one
-    /// instance, so keying only on it would merge pulls, and keying only on
-    /// inGameCombat would miss ACT-only combat. A mixed message, one flag
-    /// falling while the other rises, finalizes the open encounter before the
-    /// new begin so the two pulls never merge.</summary>
+    /// <summary>Either combat flag can begin or end an encounter. ACT may keep its flag set
+    /// between pulls. Process a falling edge before a rising edge in the same message to
+    /// keep those pulls separate.</summary>
     internal void SetInCombat(bool inAct, bool inGame)
     {
         if (this.current != null &&
@@ -439,8 +375,7 @@ internal sealed class MeterEngine
         this.inGame = inGame;
     }
 
-    /// <summary>One log line pre-split on '|'. Anything outside the meter
-    /// types returns right away.</summary>
+    /// <summary>Process a log line split on |. Ignore unrelated line types.</summary>
     internal void Process(IReadOnlyList<string> fields)
     {
         if (fields.Count == 0)
@@ -482,13 +417,10 @@ internal sealed class MeterEngine
         }
         catch (Exception)
         {
-            // Defensive, the caller wraps this too. A bad line is skipped.
+            // Skip malformed lines without stopping the feed.
         }
     }
 
-    // ------------------------------------------------------------------
-    // line handlers
-    // ------------------------------------------------------------------
 
     private void OnZone(IReadOnlyList<string> fields)
     {
@@ -497,10 +429,8 @@ internal sealed class MeterEngine
             return;
         }
 
-        // A zone change hard-ends any pull in progress, like ACT, including
-        // re-entering the same instance for the next pull. Entity ids are
-        // reassigned per entry, so actor knowledge must reset anyway, the
-        // local player id too. The next 02 line pins it again.
+        // Every zone line ends the encounter and clears actor identity because IDs can be
+        // reassigned, including on entry to the same instance.
         this.FinalizeEncounter();
         this.zone = BoundName(fields[3].Trim());
         this.inAct = false;
@@ -522,8 +452,7 @@ internal sealed class MeterEngine
         var aid = ActorInt(fields[2]);
         if (aid == null)
         {
-            // A blank or garbage id must not wipe a known good one. The next
-            // valid 02 line can still correct the pin.
+            // Keep the known identity until a valid replacement arrives.
             return;
         }
 
@@ -559,22 +488,20 @@ internal sealed class MeterEngine
             job = 0;
         }
 
-        // Players only, the '10'-prefixed ids. Duty support and Trust NPCs
-        // carry real ClassJob ids and would otherwise land as rows.
+        // Require a player ID because Trust and duty support NPCs also have combat jobs.
         if (job != 0 && fields[2].StartsWith("10", StringComparison.Ordinal))
         {
             this.jobs.Set(aid.Value, job);
         }
 
-        var owner = ActorInt(fields[6]);   // "0000" or "00" parse to 0, unowned
+        var owner = ActorInt(fields[6]);
         if (owner is int ownerId && ownerId != aid.Value)
         {
             this.owners.Set(aid.Value, ownerId);
         }
 
-        // Late 03 lines can upgrade a record created by an earlier 21 line.
-        // Both records, the encounter log and the on-screen view, or the
-        // overlay keeps the stale nameless label until the owner acts again.
+        // Update both encounter and display rows when a late spawn line supplies actor
+        // details.
         foreach (var enc in new[] { this.current, this.view })
         {
             if (enc != null && enc.Combatants.ContainsKey(aid.Value))
@@ -628,10 +555,8 @@ internal sealed class MeterEngine
             effects.Add(UnpackEffect(fields[i], fields[i + 1]));
         }
 
-        // Only hostile action opens an encounter lazily. A pre-pull regen or
-        // buff, status effects and heals, minutes before the engage must not
-        // start the clock, or every pull's duration would include the
-        // preamble. Damage and misses count. Heals alone do not.
+        // Damage and misses can start an encounter. Healing and buffs before a pull must
+        // not start its clock.
         if (this.current == null)
         {
             if ((srcKey == null && tgtKey == null) ||
@@ -650,8 +575,6 @@ internal sealed class MeterEngine
             this.NoteDamage(now);
         }
 
-        // Everything lands twice. On the encounter, the log, and on the
-        // display view, what the meter shows right now.
         foreach (var enc in new[] { this.current, this.view })
         {
             if (enc != null && (enc != this.view || !this.ViewPaused(now)))
@@ -680,8 +603,7 @@ internal sealed class MeterEngine
         Combatant? src = null;
         if (srcKey is int sk)
         {
-            // A pet's line names the pet, not the owner it merges into. The
-            // ownerName trailing the line, or a later 03, supplies the owner.
+            // Use the owner name from the trailing fields, not the pet name.
             src = this.CombatantFor(enc, sk, srcKey == sid ? fields[3] : ownerName);
         }
 
@@ -697,11 +619,8 @@ internal sealed class MeterEngine
 
                 if (tgtKey is int tk && tk != srcKey && tk == tid)
                 {
-                    // Enemy damage on players is only tracked as taken. The
-                    // enemy itself never becomes a meter row. Self-damage
-                    // credits damage only, ACT excludes it from taken. A pet
-                    // target resolves to its owner and credits no one, like
-                    // ACT credits pet deaths to no one.
+                    // Match ACT by excluding self damage and pet targets from damage taken.
+                    // Enemies do not get meter rows.
                     tgt ??= this.CombatantFor(enc, tk, fields[7]);
                     tgt.DamageTaken += e.Amount;
                 }
@@ -734,8 +653,7 @@ internal sealed class MeterEngine
 
         if (amount < 0 || amount > 0xFFFFFFFFL)
         {
-            // Same guard as the 21 path. Negative hex parses fine and 9+
-            // digit fields overflow the wire value. A bad tick is skipped.
+            // Reject negative amounts and values wider than the wire's 32 bits.
             amount = 0;
         }
 
@@ -744,9 +662,7 @@ internal sealed class MeterEngine
         var tgtKey = this.PlayerKey(tid);
         if (this.current == null)
         {
-            // DoT ticks are hostile and can open an encounter. A pre-pull
-            // regen, a HoT, cannot. A zero-amount tick carries no damage, so
-            // it must not open a phantom one either.
+            // Only a positive DoT involving a player can start an encounter here.
             if (which != "DoT" || amount <= 0 || (appKey == null && tgtKey == null))
             {
                 return;
@@ -783,8 +699,7 @@ internal sealed class MeterEngine
     {
         if (which is not ("DoT" or "HoT") || amount <= 0)
         {
-            // A tick with an unknown which field or no amount credits
-            // nothing, so it must not bump the encounter clock either.
+            // Unsupported or empty ticks must not advance the encounter clock.
             return;
         }
 
@@ -802,9 +717,8 @@ internal sealed class MeterEngine
 
             if (tgtKey is int tk && tk != appKey && tk == tid)
             {
-                // A pet tick resolves to its owner and credits no one, same
-                // as the ability path. A tick the applier lands on itself
-                // credits damage only, ACT excludes self damage from taken.
+                // Exclude self damage and pet targets from damage taken, as in the ability
+                // path.
                 this.CombatantFor(enc, tk, fields[3]).DamageTaken += amount;
             }
         }
@@ -828,17 +742,13 @@ internal sealed class MeterEngine
         var key = this.PlayerKey(tid);
         if (key == null || key != tid)
         {
-            // Not a player, or a pet resolving to its owner. ACT credits pet
-            // deaths to no one, so the owner's count stays untouched.
+            // Only player deaths count. Pet deaths do not count toward their owners.
             return;
         }
 
         if (this.current == null)
         {
-            // No lazy begin here, unlike the hostile-line paths. A real in
-            // combat death always follows the damage that opened the pull,
-            // so an open encounter already exists. An out-of-combat death
-            // would otherwise start a phantom one with a running clock.
+            // Deaths outside an encounter must not start a new one.
             return;
         }
 
@@ -855,15 +765,10 @@ internal sealed class MeterEngine
         }
     }
 
-    // ------------------------------------------------------------------
-    // reporting
-    // ------------------------------------------------------------------
 
-    /// <summary>What the overlay should draw right now. Null when no
-    /// encounter is open. The live display view, paused at the idle timeout
-    /// after the last damage and reset when damage resumes. A whiffed pull
-    /// opens on a miss and never stamps last_damage, so the clamp falls back
-    /// to the encounter start or the live clock would run unbounded.</summary>
+    /// <summary>Return the current display snapshot or null when no encounter is open.
+    /// Pause after damage inactivity, using encounter start as the fallback if only misses
+    /// occurred.</summary>
     internal OverlaySnapshot? LiveSnapshot() => this.Snapshot(final: false);
 
     private bool ViewPaused(double now)
@@ -923,10 +828,9 @@ internal sealed class MeterEngine
         return $"{s / 60:D2}:{s % 60:D2}";
     }
 
-    /// <summary>Decode one [flags, damage] effect pair from a 21/22 line.
-    /// "none" covers status applications and padding pairs. The two middle
-    /// flag bytes are ability-specific combo and positional data, ignored.
-    /// Heals never direct hit, so dh is always false for them.</summary>
+    /// <summary>Decode a [flags, damage] pair from a 21 or 22 line. Ignore combo and
+    /// positional bytes. Status effects and padding return none. Healing never counts as a
+    /// direct hit.</summary>
     private static Effect UnpackEffect(string? flagsHex, string? dmgHex)
     {
         if (!long.TryParse(flagsHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var f))
@@ -949,26 +853,24 @@ internal sealed class MeterEngine
         if (!long.TryParse(dmgHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v) ||
             v < 0 || v > 0xFFFFFFFFL)
         {
-            // Negative hex parses fine and 9+ digit fields overflow the
-            // 32-bit wire value. Both are a bad line, credit nothing.
+            // Reject values outside the wire's 32 bits.
             v = 0;
         }
 
         long amount;
         if (kind == EffectKind.Heal && v > 0 && v < 0x10000)
         {
-            // Shifted literal-value lines, the Plenary family, carry the
-            // heal unshifted. A value this small shifted right by 16 reads 0.
+            // Small literal heals such as Plenary are already unshifted.
             amount = v;
         }
         else if (kind == EffectKind.Damage && (v & 0x0100) != 0)
         {
-            // Hallowed or invulnerable, the number is not damage.
+            // The invulnerability flag means no damage was dealt.
             amount = 0;
         }
         else if ((v & 0x4000) != 0)
         {
-            // "A lot" of damage, the low byte is the real top byte.
+            // For extended damage, the low byte becomes the high byte of the amount.
             amount = ((v & 0xFF) << 16) | (v >> 16);
         }
         else
@@ -989,12 +891,9 @@ internal sealed class MeterEngine
 
     private readonly record struct Effect(EffectKind Kind, int Amount, bool Crit, bool Dh);
 
-    /// <summary>One pull, ACT-style. Titled by the zone, holding every player
-    /// who did or took anything. Last is the last recorded combat activity, a
-    /// finalized encounter's duration ends there rather than at the finalize
-    /// event. ACT trims the out-of-combat tail the same way. LastDamage only
-    /// lives on the live display view, where it drives the idle pause and
-    /// the segment reset.</summary>
+    /// <summary>Encounter duration ends at the last combat activity, excluding time until
+    /// finalization. LastDamage is used only by the display view for idle
+    /// handling.</summary>
     private sealed class Encounter
     {
         internal Encounter(string title, double start)
@@ -1017,9 +916,7 @@ internal sealed class MeterEngine
         internal bool ActorsLimited { get; set; }
     }
 
-    /// <summary>One player's running totals for the current encounter. Pets
-    /// never get a record of their own, their contribution lands on the
-    /// owner's record.</summary>
+    /// <summary>Player totals include contributions from owned pets.</summary>
     private sealed class Combatant
     {
         internal Combatant(int aid, string name, int job)
@@ -1046,12 +943,8 @@ internal sealed class MeterEngine
         internal int Deaths { get; set; }
     }
 
-    /// <summary>Bounded insert into an actor map. 03 lines stream for every
-    /// passer-by, so a city session would grow these maps without a cap. A
-    /// re-note moves the id to the back, the trim drops who was seen longest
-    /// ago instead of who arrived first, which can be the current party under
-    /// a city worth of passers-by. Insert first, then trim back to the cap,
-    /// or the map would rest at 1025.</summary>
+    /// <summary>Updating an actor moves it to the most recently seen position. Trim after
+    /// insertion so the map stays within its limit.</summary>
     private sealed class BoundedMap<T>
     {
         private const int Cap = 1024;

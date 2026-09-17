@@ -28,21 +28,16 @@ internal sealed class ConfigWindow : Window
     private readonly BridgeHost bridge;
     private readonly PluginUi ui;
 
-    /// <summary>Edited separately from the live setting: rebinding the listener
-    /// on every keystroke would thrash the socket while a port is typed.</summary>
+    /// <summary>Keep edits separate so typing a port does not rebind the
+    /// listener.</summary>
     private int pendingPort;
 
-    /// <summary>Edited separately from the live setting, same reason as the
-    /// port: re-dialling IINACT on every keystroke would thrash the feed
-    /// while an address is typed.</summary>
+    /// <summary>Keep edits separate so typing an endpoint does not reconnect the
+    /// feed.</summary>
     private string pendingEndpoint;
 
-    /// <summary>The profile name being typed. Kept out of the config itself:
-    /// it is the editor's scratch, not a setting.</summary>
     private string profileName = string.Empty;
 
-    /// <summary>Result of the last import attempt, so a clipboard that did
-    /// not hold a profile says so instead of failing silently.</summary>
     private string? importNote;
 
     internal ConfigWindow(Configuration config, BridgeHost bridge, PluginUi ui)
@@ -52,7 +47,6 @@ internal sealed class ConfigWindow : Window
         this.bridge = bridge;
         this.ui = ui;
         this.pendingPort = config.Port;
-        // A hand-edited config could carry a null; fall back to the default.
         this.pendingEndpoint = config.IinactEndpoint ?? "ws://127.0.0.1:10501/ws";
 
         this.Size = new Vector2(460, 640);
@@ -63,19 +57,14 @@ internal sealed class ConfigWindow : Window
             MaximumSize = new Vector2(900, 1400),
         };
 
-        // Explicit so it cannot drift with a Dalamud default: this window is
-        // opened and closed by the user, unlike the overlay boxes (which hide
-        // theirs because IsOpen is rewritten every frame).
         this.ShowCloseButton = true;
         this.DisableWindowSounds = true;
     }
 
     public override void Draw()
     {
-        // The sections scroll in their own region, the reset button pinned
-        // below it. Scrolling at the window level instead let a collapsed
-        // header land on the window's bottom resize border, where most of
-        // the bar dragged a resize and only the arrow toggled the section.
+        // Scroll sections above a fixed footer so collapsed headers do not overlap the
+        // resize border.
         if (ImGui.BeginChild("##sections", new Vector2(0.0f, -ImGui.GetFrameHeightWithSpacing())))
         {
             if (ImGui.CollapsingHeader("Link", ImGuiTreeNodeFlags.DefaultOpen))
@@ -163,14 +152,10 @@ internal sealed class ConfigWindow : Window
         ImGui.SetNextItemWidth(120);
         ImGui.InputInt("Port", ref this.pendingPort);
 
-        // Clamping here every frame would fight the field's own text buffer: a
-        // half-typed "80" or "99999" would be silently rewritten to 1024/65535
-        // while the box still showed what was typed, and Apply would bind a
-        // port the user never chose. Clamp on Apply instead.
+        // Clamp on Apply so the bound port matches the field after editing finishes.
         ImGui.SameLine();
         var outOfRange = this.pendingPort is < 1024 or > 65535;
-        // Out of range counts as changed too, so a hand edited config with a
-        // port outside the range can still be clamped back in from here.
+        // Allow Apply to repair invalid stored ports or retry a failed bind.
         var canApply = this.pendingPort != this.config.Port || outOfRange || this.bridge.LastError != null;
         if (!canApply)
         {
@@ -225,15 +210,11 @@ internal sealed class ConfigWindow : Window
             ImGui.InputText("IINACT feed", ref this.pendingEndpoint, 256);
 
             var endpoint = this.pendingEndpoint.Trim();
-            // Same test the meter dials with: an absolute uri on the ws or
-            // wss scheme with a real host. A bare ws:// used to pass here
-            // and then be rejected by the meter on dial anyway.
+            // Use the same endpoint validation as the IINACT client.
             var valid = Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri) &&
                         (endpointUri.Scheme == Uri.UriSchemeWs || endpointUri.Scheme == Uri.UriSchemeWss) &&
                         endpointUri.Host.Length > 0;
 
-            // Same shape as the port row: no silent rewrites while typing, a
-            // bad address blocks Apply instead of being re-dialled.
             ImGui.SameLine();
             var endpointChanged = valid && endpoint != this.config.IinactEndpoint;
             if (!endpointChanged)
@@ -277,9 +258,7 @@ internal sealed class ConfigWindow : Window
     {
         this.Check("Timeline bars", () => this.config.ShowTimeline, v => this.config.ShowTimeline = v);
         this.Check("Alert pop-ups", () => this.config.ShowAlerts, v => this.config.ShowAlerts = v);
-        // Same label as the DPS meter section header. Without an id suffix
-        // both share one ImGui id, and a click on the header's bar never
-        // reaches it while this section is open, only the arrow worked.
+        // Use a distinct ID from the DPS meter section header.
         this.Check("DPS meter##showDps", () => this.config.ShowDps, v => this.config.ShowDps = v);
 
         ImGui.Spacing();
@@ -315,8 +294,7 @@ internal sealed class ConfigWindow : Window
             this.bridge.PushTestAlert(Severity.Alarm);
         }
 
-        // The test only queues an alert. Saying so beats a button that looks
-        // broken because the box it would draw into is currently suppressed.
+        // Explain when visibility settings hide the queued test alert.
         if (!this.config.ShowAlerts)
         {
             ImGui.SameLine();
@@ -337,8 +315,7 @@ internal sealed class ConfigWindow : Window
 
     private void DrawTimeline()
     {
-        // The same widget labels recur in every box's section; the pushed id
-        // keeps ImGui from folding them into one widget.
+        // Scope repeated widget labels to this window section.
         ImGui.PushID("timeline");
 
         this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
@@ -506,9 +483,7 @@ internal sealed class ConfigWindow : Window
 
         ImGui.Spacing();
 
-        // Same labels as the severity checkboxes above. Without an id suffix
-        // both widgets share one ImGui id in this scope, and hover and
-        // presses cross between the checkbox and the colour well.
+        // Keep colour picker IDs separate from the severity checkboxes.
         this.ColorRow("Info##sevColor", () => this.config.ColorInfo, v => this.config.ColorInfo = v);
         this.ColorRow("Alert##sevColor", () => this.config.ColorAlert, v => this.config.ColorAlert = v);
         this.ColorRow("Alarm##sevColor", () => this.config.ColorAlarm, v => this.config.ColorAlarm = v);
@@ -637,9 +612,6 @@ internal sealed class ConfigWindow : Window
         ImGui.PopID();
     }
 
-    /// <summary>The Horizon Overlay's own section: the toggles, the geometry
-    /// and text sizing, and the bar palette. Everything applies live to the
-    /// sample strip an unlocked meter box draws.</summary>
     private void DrawHorizon()
     {
         ImGui.PushID("horizon");
@@ -710,9 +682,6 @@ internal sealed class ConfigWindow : Window
         ImGui.PopID();
     }
 
-    /// <summary>Named snapshots of the whole appearance: save the current look
-    /// under a name, apply or delete saved ones. Only the appearance knobs
-    /// travel; the link, the placement and the visibility filters stay.</summary>
     private void DrawProfiles()
     {
         ImGui.TextDisabled("Snapshots of every appearance setting. Placement and the link stay as they are.");
@@ -727,7 +696,6 @@ internal sealed class ConfigWindow : Window
             ImGui.BeginDisabled();
         }
 
-        // Saving over an existing name replaces it, the usual preset rule.
         if (ImGui.Button("Save current"))
         {
             this.config.AppearanceProfiles[name] = this.config.SnapshotAppearance();
@@ -736,8 +704,6 @@ internal sealed class ConfigWindow : Window
 
         ImGui.SameLine();
 
-        // The clipboard route shares a look between machines or with static
-        // members: Copy on one end, a name and Import on the other.
         if (ImGui.Button("Import"))
         {
             var blob = Configuration.ValidateProfileBlob(ImGui.GetClipboardText());
@@ -763,8 +729,7 @@ internal sealed class ConfigWindow : Window
             ImGui.TextDisabled(this.importNote);
         }
 
-        // A copy of the entries: Apply and Delete mutate the dictionary mid
-        // enumeration otherwise.
+        // Copy entries before iteration because profile actions may change the dictionary.
         ImGui.PushID("AppearanceProfiles");
         var rowId = 0;
         foreach (var (savedName, blob) in this.config.AppearanceProfiles.ToList())
@@ -800,8 +765,6 @@ internal sealed class ConfigWindow : Window
         ImGui.PopID();
     }
 
-    /// <summary>One box's duty and combat filters on a single row. The fixed
-    /// column keeps the pairs lined up across the boxes.</summary>
     private void VisibilityRow(
         string label,
         Func<bool> getDuty, Action<bool> setDuty,
@@ -816,8 +779,6 @@ internal sealed class ConfigWindow : Window
         ImGui.PopID();
     }
 
-    /// <summary>The text readability knobs every box carries: which effect,
-    /// how far it reaches, and its colour.</summary>
     private void EffectGroup(
         Func<TextEffectStyle> getEffect, Action<TextEffectStyle> setEffect,
         Func<int> getThickness, Action<int> setThickness,
@@ -850,9 +811,8 @@ internal sealed class ConfigWindow : Window
         this.SaveIfDragEnded();
     }
 
-    /// <summary>Stored 0..1 but shown as a percent (SliderFloat formats the
-    /// raw value). Some knobs legitimately pass 100%, like a stat text
-    /// larger than the body, so the range is a parameter.</summary>
+    /// <summary>Convert stored fractions to displayed percentages. Accept custom ranges for
+    /// scales above 100 percent.</summary>
     private void PercentSlider(
         string label, Func<float> get, Action<float> set, float min = 0.0f, float max = 100.0f)
     {
@@ -875,8 +835,7 @@ internal sealed class ConfigWindow : Window
         }
     }
 
-    /// <summary>A free-text setting. Applies live but saves on deactivate, so
-    /// a half-typed value never hits the config file.</summary>
+    /// <summary>Apply text edits live but save only when editing ends.</summary>
     private void TextInput(string label, string hint, Func<string> get, Action<string> set)
     {
         var value = get();
@@ -891,8 +850,7 @@ internal sealed class ConfigWindow : Window
     private void Combo<T>(string label, string[] names, Func<T> get, Action<T> set)
         where T : struct, Enum
     {
-        // Clamped rather than trusted: a hand-edited or downgraded config can
-        // carry an enum value past the end of the names list.
+        // Clamp enum values from edited or newer configs before indexing labels.
         var index = Math.Clamp(Convert.ToInt32(get()), 0, names.Length - 1);
         if (ImGui.Combo(label, ref index, names, names.Length))
         {
@@ -912,7 +870,6 @@ internal sealed class ConfigWindow : Window
         this.SaveIfDragEnded();
     }
 
-    /// <summary>Persist once the widget just above stopped being edited.</summary>
     private void SaveIfDragEnded()
     {
         if (ImGui.IsItemDeactivatedAfterEdit())

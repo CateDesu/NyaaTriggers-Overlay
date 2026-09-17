@@ -14,25 +14,14 @@ using System.Threading.Tasks;
 
 namespace NyaaTriggers.Plugin.Bridge;
 
-/// <summary>
-/// Minimal RFC 6455 server for exactly one trusted local client.
-///
-/// Why hand-rolled rather than <see cref="HttpListener"/>: HttpListener's
-/// WebSocket support sits on http.sys, which is not something to rely on with
-/// the game running under Wine. A raw <see cref="TcpListener"/> plus the
-/// handshake and framing works anywhere a socket does.
-///
-/// Deliberately narrow: no extensions, no subprotocols, no fragmentation on
-/// send, text frames only. Anything outside that ends the session rather than
-/// being interpreted.
-/// </summary>
+/// <summary>RFC 6455 server for one active local client. Uses TCP directly to avoid
+/// HttpListener dependencies under Wine. Supports text messages without extensions or
+/// subprotocols and sends each message as one frame.</summary>
 internal sealed class WebSocketServer : IDisposable
 {
     private const string HandshakeGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-    /// <summary>Refuse anything larger. The program sends short JSON lines; a
-    /// multi-megabyte "message" is a bug or a stranger, and either way is not
-    /// worth allocating for.</summary>
+    /// <summary>Bounds allocation for incoming messages.</summary>
     private const int MaxMessageBytes = 1 << 20;
 
     private const int MaxHandshakeBytes = 8 << 10;
@@ -40,49 +29,43 @@ internal sealed class WebSocketServer : IDisposable
     /// <summary>RFC 6455 caps control frame payloads at 125 bytes.</summary>
     private const int MaxControlPayload = 125;
 
-    /// <summary>Only one client is ever wanted. A couple of slots absorb a
-    /// reconnect racing the old session's teardown; past that, something is
-    /// wrong and unbounded sessions are not worth the memory.</summary>
+    /// <summary>Allows reconnects to overlap older sessions while bounding open
+    /// sockets.</summary>
     private const int MaxSessions = 4;
 
-    /// <summary>A peer that opens a socket and says nothing must not hold a
-    /// session slot forever.</summary>
+    /// <summary>Reclaim sockets that do not complete a handshake.</summary>
     private const int HandshakeTimeoutMs = 5000;
 
-    /// <summary>How long a close frame gets to reach the wire before the socket
-    /// is dropped anyway.</summary>
+    /// <summary>Maximum wait in milliseconds for the close frame to be sent.</summary>
     private const int CloseFlushMs = 500;
 
-    /// <summary>How long to keep discarding the peer's in-flight data after a
-    /// close, so the socket does not go down with unread bytes and RST away the
-    /// close frame.</summary>
+    /// <summary>Drain incoming data after close to avoid a TCP reset discarding the close
+    /// frame.</summary>
     private const int CloseDrainMs = 300;
 
-    /// <summary>How long <see cref="Dispose"/> waits for session tasks to
-    /// unwind. Bounded: a wedged socket must not hang the game's plugin
-    /// teardown, but returning while plugin code still runs is worse.</summary>
+    /// <summary>Maximum wait in milliseconds for session tasks during plugin
+    /// unload.</summary>
     private const int DisposeDrainMs = 2000;
 
-    /// <summary>Outbound backlog before messages start dropping. Sends must
-    /// never block the draw thread, so a wedged peer is dropped, not waited on.</summary>
+    /// <summary>Bounds queued sends. Overflow drops the oldest frame without blocking the
+    /// draw thread.</summary>
     private const int OutboxCapacity = 256;
 
     private static readonly byte[] HeaderTerminator = "\r\n\r\n"u8.ToArray();
 
-    /// <summary>Throws rather than substituting U+FFFD, so a malformed text
-    /// frame is refused instead of silently corrupting a callout.</summary>
+    /// <summary>Reject invalid UTF-8 instead of substituting replacement
+    /// characters.</summary>
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private readonly int port;
 
-    /// <summary>Both carry the session's Sequence, so the host can tell a
-    /// superseded session's late frames and callbacks apart from the live
-    /// one's. The server object alone cannot: every session shares it.</summary>
+    /// <summary>Callbacks include a session sequence so the host can reject late events
+    /// from replaced sessions.</summary>
     private readonly Action<long, string> onMessage;
     private readonly Action<long, bool> onConnectionChanged;
 
-    /// <summary>Produces the first frame of a session, queued before the
-    /// session is published so nothing can overtake it.</summary>
+    /// <summary>Queued before the session is published so other messages cannot precede the
+    /// greeting.</summary>
     private readonly Func<string?> onGreeting;
 
     private readonly List<TcpListener> listeners = new();
@@ -92,16 +75,14 @@ internal sealed class WebSocketServer : IDisposable
     /// receive loop and the send pump have finished.</summary>
     private readonly ConcurrentDictionary<Session, Task> sessions = new();
 
-    /// <summary>Guards the disposed flag against session registration, so a
-    /// session accepted during Dispose cannot be registered after the drain.</summary>
+    /// <summary>Makes session registration atomic with disposal so new tasks cannot miss
+    /// the shutdown wait.</summary>
     private readonly object gate = new();
 
     private bool disposed;
     private CancellationTokenSource? cts;
 
-    /// <summary>The session that owns the link. Not marked volatile: it is
-    /// passed by ref to Interlocked, which rejects volatile fields, so reads go
-    /// through Volatile.Read instead.</summary>
+    /// <summary>Read through Volatile.Read and updated through Interlocked.</summary>
     private Session? peer;
     private long newestEstablished;
 
@@ -119,8 +100,6 @@ internal sealed class WebSocketServer : IDisposable
 
     internal bool IsConnected => Volatile.Read(ref this.peer) != null;
 
-    /// <summary>Set when the loopback listener could not bind, for the config
-    /// window to show instead of leaving the user staring at a dead toggle.</summary>
     internal string? LastError { get; private set; }
 
     internal void Start()
@@ -135,9 +114,7 @@ internal sealed class WebSocketServer : IDisposable
         this.cts = new CancellationTokenSource();
         var token = this.cts.Token;
 
-        // Both loopback families. Binding only 127.0.0.1 leaves a client that
-        // resolved "localhost" to ::1 connecting to nothing, which presents as
-        // "the program says connected but nothing ever draws".
+        // Support localhost resolving to either IPv4 or IPv6.
         string? ipv4Error = null;
         var bound = 0;
         foreach (var address in new[] { IPAddress.Loopback, IPAddress.IPv6Loopback })
@@ -150,9 +127,8 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // No IPv6 stack is normal. A failure on 127.0.0.1 is the one the
-                // user needs to see, and it must survive ::1 binding fine: the
-                // program connects over IPv4 and would otherwise get no explanation.
+                // IPv6 may be unavailable. Preserve IPv4 errors because the program
+                // connects to 127.0.0.1.
                 if (address.Equals(IPAddress.Loopback))
                 {
                     ipv4Error = ex.Message;
@@ -167,10 +143,7 @@ internal sealed class WebSocketServer : IDisposable
             this.acceptTasks.Add(Task.Run(() => this.AcceptLoopAsync(listener, token), token));
         }
 
-        // A v4 failure is fatal in practice even when ::1 bound fine: the program
-        // dials 127.0.0.1 explicitly, so a v6-only listener serves no one.
-        // Tear it down rather than leave a link up that the config window
-        // then reports as dead.
+        // The program requires IPv4. Close any IPv6 listener if IPv4 binding failed.
         if (ipv4Error != null)
         {
             this.cts.Cancel();
@@ -210,14 +183,12 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (ObjectDisposedException)
             {
-                return;   // listener stopped under us: we are shutting down
+                return;
             }
             catch (SocketException ex)
             {
-                // A peer that resets between SYN and accept, or a momentary
-                // descriptor shortage, must not permanently stop us listening.
-                // Take the same breath the generic path does, so a persistent
-                // accept fault like descriptor exhaustion cannot spin either.
+                // Retry transient accept failures with a delay to avoid spinning on
+                // persistent faults.
                 Services.Log.Debug($"accept failed, still listening: {ex.SocketErrorCode}");
                 try
                 {
@@ -232,9 +203,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // Anything unexpected must not kill the listener silently
-                // either: log it and keep accepting, with a breath so a
-                // persistent fault cannot spin the thread.
+                // Keep listening after unexpected errors, with a delay between retries.
                 Services.Log.Warning($"accept trouble, still listening: {ex.Message}");
                 try
                 {
@@ -269,17 +238,9 @@ internal sealed class WebSocketServer : IDisposable
         }
     }
 
-    /// <summary>Make room for an incoming connection by dropping sessions that
-    /// have not finished the handshake. Returns false when every slot holds an
-    /// established session, leaving the accept loop to refuse the newcomer.
-    ///
-    /// Only handshake-pending sessions are evictable. A peer that opens a
-    /// socket and says nothing is what a connection flood looks like, and it
-    /// is also what a dead session that has not unwound yet looks like, so
-    /// dropping those for a newcomer costs nothing real. An established
-    /// session is only ever replaced by a peer that completes the handshake,
-    /// so a bare connect-and-hold flood cannot push the program off the overlay
-    /// mid-fight.</summary>
+    /// <summary>Evict only sessions with incomplete handshakes. Refuse the newcomer if
+    /// every slot is established so idle connection floods cannot disconnect the
+    /// program.</summary>
     private bool TryMakeRoomForNewcomer()
     {
         while (true)
@@ -305,30 +266,25 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // The disposed flag was set before anything that can throw,
-                // so the next pass still sees the room this made.
+                // Disposal is marked before any operation that can throw, so the slot is
+                // available.
                 Services.Log.Debug($"eviction failed: {ex.Message}");
             }
 
-            // Its own finally removes it from the dictionary; the IsDisposed
-            // flag is set synchronously above, so the next pass sees the room.
+            // The session removes itself from the dictionary when its task finishes.
         }
     }
 
-    /// <summary>Take ownership of an accepted socket. Registration and the
-    /// disposed check share a lock, so a session accepted while Dispose is
-    /// draining is torn down here instead of outliving the server.</summary>
+    /// <summary>Register under the disposal lock so accepted sockets cannot outlive server
+    /// shutdown.</summary>
     private void Register(TcpClient client)
     {
         Session session;
         try
         {
-            client.NoDelay = true;   // callouts are latency-critical and tiny
-            // Enable TCP keepalive so a half-open peer (program killed on sleep or a
-            // network change) is detected in about a minute (30s idle, then 3
-            // probes 10s apart), not the OS default (~2h on Linux). Without this
-            // the session slot stays pinned and the overlay shows stale state
-            // until the next outbound send fails.
+            client.NoDelay = true;
+            // Detect dead connections after 30 seconds idle and three probes 10 seconds
+            // apart, instead of waiting for the OS default timeout.
             try
             {
                 client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
@@ -338,14 +294,13 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (SocketException)
             {
-                // TcpKeepAlive* are platform-dependent in edge cases; if they are
-                // unsupported the plain Keepalive option above still applies.
+                // Keep the default keepalive settings if the platform rejects custom probe
+                // timing.
             }
             session = new Session(client, this.gate);
         }
         catch (Exception ex)
         {
-            // A peer that reset between accept and here.
             Services.Log.Debug($"could not adopt connection: {ex.Message}");
             client.Dispose();
             return;
@@ -359,10 +314,8 @@ internal sealed class WebSocketServer : IDisposable
                 return;
             }
 
-            // Registered before the task starts so Dispose can never observe a
-            // session without something to wait on. No token on Task.Run: an
-            // already-cancelled token would skip the body entirely and leak the
-            // socket, since the body's finally is the only thing that closes it.
+            // Register the task under the disposal lock. Do not pass a cancellation token
+            // to Task.Run because skipping the body would skip socket cleanup.
             this.sessions[session] = Task.Run(() => this.ServeAsync(session));
         }
     }
@@ -371,12 +324,10 @@ internal sealed class WebSocketServer : IDisposable
     {
         try
         {
-            // Read inside the try: an eviction or teardown can dispose the
-            // session before this task starts, and Token throws on a
-            // disposed source — escaping here would skip the cleanup below.
+            // Read Token inside the try because earlier eviction may have disposed its
+            // source. Cleanup must still run.
             var token = session.Token;
 
-            // A peer that connects and then says nothing must not hold its slot.
             using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             handshakeCts.CancelAfter(HandshakeTimeoutMs);
             if (!await PerformHandshakeAsync(session.Stream, handshakeCts.Token).ConfigureAwait(false))
@@ -393,7 +344,6 @@ internal sealed class WebSocketServer : IDisposable
                     return;
                 }
 
-                // Eviction, disposal and publication share this gate.
                 this.newestEstablished = session.Sequence;
                 session.MarkEstablished();
                 var greeting = this.onGreeting();
@@ -408,8 +358,7 @@ internal sealed class WebSocketServer : IDisposable
 
             if (previous != null)
             {
-                // 1001 "going away", not a bare socket drop: every other exit
-                // tells the peer why, and this one should too.
+                // Notify the replaced peer with close code 1001.
                 await CloseAsync(previous, 1001).ConfigureAwait(false);
                 previous.Dispose();
             }
@@ -420,7 +369,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // Must not escape: the finally below is what releases the slot.
+                // Contain callback errors so session cleanup still runs.
                 Services.Log.Warning($"connect handler threw: {ex.Message}");
             }
 
@@ -429,7 +378,7 @@ internal sealed class WebSocketServer : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Shutting down, or the handshake timed out. Not worth a log line.
+            // Expected during shutdown or handshake timeout.
         }
         catch (Exception ex)
         {
@@ -437,8 +386,7 @@ internal sealed class WebSocketServer : IDisposable
         }
         finally
         {
-            // Only clear the shared slot if we are still the current session:
-            // a newer client may have replaced us already.
+            // Clear ownership only if this session has not been replaced.
             if (Interlocked.CompareExchange(ref this.peer, null, session) == session)
             {
                 try
@@ -459,14 +407,13 @@ internal sealed class WebSocketServer : IDisposable
         }
     }
 
-    // ── handshake ─────────────────────────────────────────────────────────
     private static async Task<bool> PerformHandshakeAsync(Stream stream, CancellationToken token)
     {
         var (request, worthAnswering) = await ReadRequestHeadAsync(stream, token).ConfigureAwait(false);
         if (request == null)
         {
-            // Say why when the peer said enough to deserve an answer; a silent
-            // or hung-up socket gets nothing.
+            // Send an HTTP error only if the peer supplied a request and is still
+            // connected.
             if (worthAnswering)
             {
                 await WriteAsciiAsync(
@@ -482,10 +429,8 @@ internal sealed class WebSocketServer : IDisposable
         var upgrade = FindHeader(request, "Upgrade");
         var version = FindHeader(request, "Sec-WebSocket-Version");
 
-        // WebSocket is exempt from the same-origin policy, so any page the user
-        // happens to be browsing could otherwise open this socket and inject or
-        // clear callouts. Browsers always send Origin; the program never does, so
-        // refusing any request that carries one costs nothing and closes it.
+        // Reject Origin headers to prevent browser pages from injecting callouts. The
+        // program does not send this header.
         var origin = FindHeader(request, "Origin");
 
         var ok = !string.IsNullOrEmpty(key)
@@ -508,8 +453,7 @@ internal sealed class WebSocketServer : IDisposable
             return false;
         }
 
-        // No extension is negotiated, so Sec-WebSocket-Extensions is simply not
-        // echoed back; per spec the client must then not use one.
+        // Omitting Sec-WebSocket-Extensions leaves all extensions disabled.
         var accept = Convert.ToBase64String(Sha1OfHandshakeKey(key! + HandshakeGuid));
 
         await WriteAsciiAsync(
@@ -522,17 +466,15 @@ internal sealed class WebSocketServer : IDisposable
         return true;
     }
 
-    // SHA-1 is what RFC 6455 specifies for the handshake. It is not being used
-    // as a security primitive here, so the weak-hash analysers are suppressed
-    // rather than "fixed" into a handshake no client would accept.
+    // RFC 6455 requires SHA-1 for the handshake. This computes the protocol response, not a
+    // security check.
 #pragma warning disable CA5350, CA5351
     private static byte[] Sha1OfHandshakeKey(string value)
         => SHA1.HashData(Encoding.ASCII.GetBytes(value));
 #pragma warning restore CA5350, CA5351
 
-    /// <summary>Reads the request head. The flag says whether the peer sent
-    /// enough for a 400 to be a useful answer rather than noise at a socket
-    /// that already went away.</summary>
+    /// <summary>Read the request headers and report whether the peer can receive an HTTP
+    /// error response.</summary>
     private static async Task<(string? Head, bool WorthAnswering)> ReadRequestHeadAsync(
         Stream stream, CancellationToken token)
     {
@@ -544,7 +486,7 @@ internal sealed class WebSocketServer : IDisposable
                 .ConfigureAwait(false);
             if (read <= 0)
             {
-                return (null, false);   // peer hung up mid-handshake
+                return (null, false);
             }
 
             used += read;
@@ -555,9 +497,8 @@ internal sealed class WebSocketServer : IDisposable
                 continue;
             }
 
-            // Anything after the blank line would be frame bytes read into this
-            // buffer and then dropped, desyncing the read loop. The program does not
-            // pipeline, so refuse rather than carry a pushback buffer around.
+            // Reject pipelined frame bytes rather than discard them and desynchronize the
+            // stream. The program does not pipeline.
             if (used > end + HeaderTerminator.Length)
             {
                 Services.Log.Debug("refusing a handshake with pipelined data");
@@ -567,7 +508,7 @@ internal sealed class WebSocketServer : IDisposable
             return (Encoding.ASCII.GetString(buffer, 0, end), true);
         }
 
-        return (null, true);   // no blank line within the cap: not a handshake
+        return (null, true);   // Request headers exceeded the size limit.
     }
 
     private static string? FindHeader(string request, string name)
@@ -589,7 +530,6 @@ internal sealed class WebSocketServer : IDisposable
         return null;
     }
 
-    // ── frames ────────────────────────────────────────────────────────────
     private async Task ReadLoopAsync(Session session)
     {
         var stream = session.Stream;
@@ -597,7 +537,7 @@ internal sealed class WebSocketServer : IDisposable
         var header = new byte[8];
         var mask = new byte[4];
 
-        // Continuation frames accumulate here until the FIN frame arrives.
+        // Accumulate fragments until the final frame.
         using var assembled = new MemoryStream();
         var assembling = false;
 
@@ -635,12 +575,8 @@ internal sealed class WebSocketServer : IDisposable
 
             var control = (opcode & 0x8) != 0;
 
-            // Reserved bits set means an extension we never negotiated, an
-            // unmasked client frame is a protocol violation, and control
-            // frames may not be fragmented or exceed 125 bytes. The assembly
-            // cap counts message payload only: control frames may interleave
-            // inside a fragmented message and are not part of it. Each of
-            // these ends the session rather than being guessed at.
+            // Reject reserved bits, unmasked frames and invalid control frames. Interleaved
+            // control frames do not count toward the assembled message limit.
             if (reserved != 0 || !masked || length < 0 || length > MaxMessageBytes ||
                 (control && (!fin || length > MaxControlPayload)) ||
                 (!control && assembled.Length + length > MaxMessageBytes))
@@ -678,8 +614,7 @@ internal sealed class WebSocketServer : IDisposable
                     break;
 
                 case 0x1:   // text
-                    // A new text frame while a fragmented one is still open
-                    // would splice two JSON documents into one "message".
+                    // A new text message cannot start before the fragmented message ends.
                     if (assembling)
                     {
                         await CloseAsync(session, 1002).ConfigureAwait(false);
@@ -718,9 +653,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (DecoderFallbackException)
             {
-                // RFC 6455 says a text frame that is not valid UTF-8 closes with
-                // 1007. Substituting U+FFFD instead would hand the program silently
-                // corrupted callout text.
+                // RFC 6455 requires close code 1007 for invalid UTF-8.
                 await CloseAsync(session, 1007).ConfigureAwait(false);
                 return;
             }
@@ -731,8 +664,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // A bad message must not kill the session, or one typo in a
-                // callout takes the whole link down mid-pull.
+                // A message handler error must not disconnect the session.
                 Services.Log.Warning($"message handler threw: {ex.Message}");
             }
 
@@ -769,14 +701,13 @@ internal sealed class WebSocketServer : IDisposable
         session?.Dispose();
     }
 
-    /// <summary>Queue a text message to the program. Safe from the draw thread:
-    /// returns immediately, preserves order, and never throws.</summary>
+    /// <summary>Queue text without blocking the draw thread. Preserves order among retained
+    /// frames and never throws.</summary>
     internal void Send(string text)
         => Volatile.Read(ref this.peer)?.Enqueue(BuildFrame(0x1, Encoding.UTF8.GetBytes(text)));
 
-    /// <summary>Queue a close frame and give the pump a moment to actually put
-    /// it on the wire. Without the wait the caller's finally disposes the
-    /// session first and the peer sees a bare reset instead of a reason.</summary>
+    /// <summary>Wait briefly for the close frame to be sent before the caller disposes the
+    /// socket.</summary>
     private static async Task CloseAsync(Session session, ushort status)
     {
         var payload = new byte[2];
@@ -791,7 +722,7 @@ internal sealed class WebSocketServer : IDisposable
         }
         catch (TimeoutException)
         {
-            // Peer is not reading. Drop it; the socket close says the rest.
+            // Close the socket if the peer does not read the close frame in time.
         }
         catch (Exception ex)
         {
@@ -801,13 +732,8 @@ internal sealed class WebSocketServer : IDisposable
         await DrainInboundAsync(session).ConfigureAwait(false);
     }
 
-    /// <summary>Swallow whatever the peer already had in flight before the
-    /// socket is closed.
-    ///
-    /// Closing on unread data makes the OS send an RST, which discards the
-    /// close frame we just wrote: the peer reports an abnormal 1006 and never
-    /// learns why it was dropped. Bounded on both bytes and time so a peer that
-    /// keeps talking cannot hold the session open.</summary>
+    /// <summary>Drain incoming data so closing the socket does not reset TCP and discard
+    /// the close frame. Limit both time and bytes to ensure shutdown completes.</summary>
     private static async Task DrainInboundAsync(Session session)
     {
         var scratch = new byte[4096];
@@ -830,7 +756,7 @@ internal sealed class WebSocketServer : IDisposable
                     .ConfigureAwait(false);
                 if (read <= 0)
                 {
-                    return;   // peer closed its half: nothing left to discard
+                    return;
                 }
 
                 budget -= read;
@@ -838,7 +764,7 @@ internal sealed class WebSocketServer : IDisposable
         }
         catch (Exception)
         {
-            // Timeout, reset, or a disposed stream. Nothing left worth doing.
+            // The drain ends on timeout, reset or disposal.
         }
     }
 
@@ -880,8 +806,7 @@ internal sealed class WebSocketServer : IDisposable
         return frame;
     }
 
-    /// <summary>Single writer per session: the channel is what guarantees the
-    /// greeting reaches the program before anything queued after it.</summary>
+    /// <summary>One writer preserves the order of queued frames.</summary>
     private static async Task PumpAsync(Session session)
     {
         try
@@ -895,16 +820,14 @@ internal sealed class WebSocketServer : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Session is going away.
+            // Expected during session shutdown.
         }
         catch (Exception ex)
         {
             Services.Log.Debug($"send failed: {ex.Message}");
 
-            // A failed send leaves the session half-alive: reads still work
-            // and the outbox keeps filling for a peer that receives nothing.
-            // End it here rather than wait for TCP keepalive to notice.
-            // Dispose is idempotent, so the read loop's own unwind is fine.
+            // Close the session on send failure so it cannot keep receiving and queueing
+            // undeliverable replies.
             session.Dispose();
         }
         finally
@@ -930,8 +853,7 @@ internal sealed class WebSocketServer : IDisposable
             this.disposed = true;
             Interlocked.Exchange(ref this.peer, null);
             open = this.sessions.Keys.ToArray();
-            // The send pumps as well as the read loops: both run plugin code
-            // and neither may outlive the teardown below.
+            // Wait for send, receive and accept tasks before unloading.
             running = this.sessions.Values.Concat(open.Select(s => s.Pump)).Concat(this.acceptTasks).ToArray();
         }
 
@@ -957,10 +879,8 @@ internal sealed class WebSocketServer : IDisposable
         }
 
         this.listeners.Clear();
-        // Every session, not just the current one: a socket read in flight does
-        // not honour a token, so closing the socket under it is the only way to
-        // end these tasks. One throwing session must not abort the teardown of
-        // the rest — anything skipped here keeps running past the load context.
+        // Close every socket to unblock pending reads. Continue if one close fails so the
+        // remaining sessions still stop.
         foreach (var session in open)
         {
             try
@@ -973,8 +893,7 @@ internal sealed class WebSocketServer : IDisposable
             }
         }
 
-        // Wait for callbacks to finish, with a deadline so a wedged socket
-        // cannot hang plugin unload.
+        // Bound the wait for callbacks so plugin unload cannot hang.
         try
         {
             if (!Task.WhenAll(running).Wait(DisposeDrainMs))
@@ -992,8 +911,6 @@ internal sealed class WebSocketServer : IDisposable
         this.cts = null;
     }
 
-    /// <summary>One accepted connection: its socket, its outbound queue, and the
-    /// token that ends both.</summary>
     private sealed class Session : IDisposable
     {
         private static long counter;
@@ -1020,7 +937,7 @@ internal sealed class WebSocketServer : IDisposable
             });
         }
 
-        /// <summary>Accept order, so the oldest can be identified for eviction.</summary>
+        /// <summary>Connection accept order, used for ownership and eviction.</summary>
         internal long Sequence { get; }
 
         internal Stream Stream { get; }
@@ -1029,31 +946,29 @@ internal sealed class WebSocketServer : IDisposable
 
         internal CancellationToken Token => this.cts.Token;
 
-        /// <summary>Completes when the pump has stopped, whether it drained the
-        /// queue or gave up.</summary>
+        /// <summary>Completes when the send pump exits or the session is
+        /// disposed.</summary>
         internal Task Drained => this.drained.Task;
 
-        /// <summary>The outbound pump, once started; completed before that.
-        /// Tracked so Dispose waits for the send side too, not just reads.</summary>
+        /// <summary>Track the send task so disposal can wait for it alongside the receive
+        /// task.</summary>
         internal Task Pump { get; set; } = Task.CompletedTask;
 
         internal bool IsDisposed => Volatile.Read(ref this.disposedFlag) != 0;
 
-        /// <summary>Set once the handshake succeeds. Only sessions without it
-        /// may be evicted to make room for a newcomer.</summary>
+        /// <summary>Established sessions cannot be evicted to make room for an incomplete
+        /// handshake.</summary>
         internal bool Established => Volatile.Read(ref this.establishedFlag) != 0;
 
         internal void MarkEstablished() => Volatile.Write(ref this.establishedFlag, 1);
 
         internal void Enqueue(byte[] frame)
         {
-            // Bounded and drop-oldest, so a wedged peer costs a stale callout
-            // rather than unbounded memory or a blocked caller.
             this.Outbox.Writer.TryWrite(frame);
         }
 
-        /// <summary>Stop accepting new frames so the pump finishes once what is
-        /// already queued has gone out.</summary>
+        /// <summary>Complete the queue so the pump exits after sending retained
+        /// frames.</summary>
         internal void StopAcceptingSends() => this.Outbox.Writer.TryComplete();
 
         internal void MarkDrained() => this.drained.TrySetResult();
@@ -1098,7 +1013,7 @@ internal sealed class WebSocketServer : IDisposable
                 Services.Log.Debug($"session dispose failed: {ex.Message}");
             }
 
-            // Nothing is left to flush; anyone waiting on the close is released.
+            // Release close waiters when the socket is disposed.
             this.drained.TrySetResult();
             this.cts.Dispose();
         }
