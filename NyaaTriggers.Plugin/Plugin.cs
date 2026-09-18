@@ -22,7 +22,7 @@ public sealed class Plugin : IDalamudPlugin
         Services.Initialize(pluginInterface);
 
         this.config = Configuration.Load(pluginInterface.GetPluginConfig, pluginInterface.ConfigFile.FullName);
-        if (this.config.Version < 4)
+        if (this.config.Version < 5)
         {
             if (this.config.Version < 2)
             {
@@ -34,7 +34,12 @@ public sealed class Plugin : IDalamudPlugin
                 this.config.MigrateFromV2();
             }
 
-            this.config.MigrateFromV3();
+            if (this.config.Version < 4)
+            {
+                this.config.MigrateFromV3();
+            }
+
+            this.config.MigrateFromV4();
             this.config.Save();
         }
 

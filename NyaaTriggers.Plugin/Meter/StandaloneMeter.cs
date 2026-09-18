@@ -28,15 +28,6 @@ internal sealed class StandaloneMeter : IDisposable
     /// unload.</summary>
     private const int DrainWaitMs = 4000;
 
-    /// <summary>Only the latest transition is applied. A zone clear replaces its preceding
-    /// encounter ending so held rows do not survive zone changes.</summary>
-    private enum Pending
-    {
-        None,
-        Ended,
-        Cleared,
-    }
-
     private readonly Configuration config;
     private readonly Func<bool> appConnected;
     private readonly Action<DpsState> applyLocal;
@@ -61,11 +52,6 @@ internal sealed class StandaloneMeter : IDisposable
     private bool wasLive;
     private long nextPush;
     private long retryAt;
-    private Pending pending;
-
-    /// <summary>Retains final values received after the last live push for the ending
-    /// published by Update.</summary>
-    private OverlaySnapshot? endSnapshot;
 
     /// <summary>Deduplicate zone notifications because IINACT replays the current zone on
     /// subscribe.</summary>
@@ -99,8 +85,6 @@ internal sealed class StandaloneMeter : IDisposable
             // change.
             this.inbox.Clear();
 
-            this.pending = Pending.None;
-            this.endSnapshot = null;
             if (this.feeding)
             {
                 this.feeding = false;
@@ -154,23 +138,7 @@ internal sealed class StandaloneMeter : IDisposable
             }
         }
 
-        if (this.pending == Pending.Cleared)
-        {
-            this.feeding = true;
-            this.applyLocal(new DpsState());
-        }
-        else if (this.pending == Pending.Ended)
-        {
-            // Publish the final snapshot with the ending so the hold option includes events
-            // after the last live push.
-            this.feeding = true;
-            this.applyLocal(ToEndState(this.endSnapshot));
-        }
-
-        this.pending = Pending.None;
-        this.endSnapshot = null;
-
-        var live = this.engine.HasLiveEncounter;
+        var live = this.engine.HasLiveEncounter && this.engine.HasLiveDamage;
         var now = Environment.TickCount64;
         if (live && (!this.wasLive || now >= this.nextPush))
         {
@@ -193,8 +161,6 @@ internal sealed class StandaloneMeter : IDisposable
         this.clearLocal();
         this.feeding = false;
         this.wasLive = false;
-        this.pending = Pending.None;
-        this.endSnapshot = null;
         this.engine = new MeterEngine();
         this.retryAt = 0;
     }
@@ -258,12 +224,12 @@ internal sealed class StandaloneMeter : IDisposable
         this.engine = new MeterEngine(() => this.messageTime ?? Environment.TickCount64 / 1000.0);
         this.engine.OnEncounterEnd = snap =>
         {
-            this.endSnapshot = snap;
+            // Apply each ending in order so a later empty pull cannot erase it.
+            this.feeding = true;
             this.wasLive = false;
-            this.pending = Pending.Ended;
+            this.applyLocal(ToEndState(snap));
         };
 
-        this.endSnapshot = null;
         this.wasLive = false;
         this.nextPush = 0;
 
@@ -418,7 +384,7 @@ internal sealed class StandaloneMeter : IDisposable
                             }
                         }
 
-                        this.pending = Pending.Cleared;
+                        this.ClearDisplay();
                     }
                     else if (zoneName.Length > 0 && !this.engine.HasZone)
                     {
@@ -515,7 +481,7 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Process a zone line before queueing its clear so the encounter ending
+    /// <summary>Process a zone line before clearing the display so the encounter ending
     /// precedes the clear.</summary>
     private void TreatLine(string raw)
     {
@@ -537,8 +503,15 @@ internal sealed class StandaloneMeter : IDisposable
                 this.lastZoneId = zoneId;
             }
 
-            this.pending = Pending.Cleared;
+            this.ClearDisplay();
         }
+    }
+
+    private void ClearDisplay()
+    {
+        this.feeding = true;
+        this.wasLive = false;
+        this.applyLocal(new DpsState());
     }
 
     private static DpsState ToState(OverlaySnapshot snap, bool ended = false)
@@ -566,6 +539,7 @@ internal sealed class StandaloneMeter : IDisposable
             Title = BridgeHost.SanitizeText(snap.Title, MaxTextChars),
             Duration = snap.Duration,
             EncDps = snap.EncDps,
+            HasDamage = snap.HasDamage,
             Rows = rows,
         };
     }

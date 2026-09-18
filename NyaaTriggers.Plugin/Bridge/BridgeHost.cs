@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using NyaaTriggers.Plugin.Meter;
@@ -24,8 +25,8 @@ internal sealed class DpsState
     internal bool Show { get; init; }
 
     /// <summary>Keeps the final rows available to the hold option, even if the last live
-    /// frame and ending arrive in one update. A later clear hides them. Wipes send clear
-    /// before the ending so the final rows remain visible.</summary>
+    /// frame and ending arrive in one update. Wipe cleanup preserves them. A zone reset
+    /// clears them.</summary>
     internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;
@@ -33,6 +34,8 @@ internal sealed class DpsState
     internal string Duration { get; init; } = string.Empty;
 
     internal double EncDps { get; init; }
+
+    internal bool HasDamage { get; init; }
 
     internal IReadOnlyList<DpsRow> Rows { get; init; } = Array.Empty<DpsRow>();
 }
@@ -137,8 +140,8 @@ internal sealed class BridgeHost : IDisposable
 
     private DpsState? lastLocal;
 
-    /// <summary>Retains the latest rows even if no draw occurs before the ending. Survives
-    /// clear so a wipe followed by show:false can preserve the final rows.</summary>
+    /// <summary>Retains the latest program snapshot for endings from older programs.
+    /// Legacy clears preserve it for wipe sequences. Explicit zone clears discard it.</summary>
     private DpsState? lastLive;
 
     internal double Clock => this.clockRunning
@@ -238,12 +241,16 @@ internal sealed class BridgeHost : IDisposable
     /// <summary>Apply standalone frames only while the program is disconnected.</summary>
     private void ApplyLocalDps(DpsState state)
     {
-        if (!this.IsConnected)
+        if (!this.IsConnected && !this.KeepFinalDps(state))
         {
             this.Dps = state;
             this.lastLocal = state;
         }
     }
+
+    private bool KeepFinalDps(DpsState next)
+        => this.config.DpsHoldLast && this.Dps.Ended && this.Dps.Rows.Count > 0
+            && (next.Show || next.Ended) && !next.HasDamage;
 
     /// <summary>Clear only the state the standalone feed still owns.
     /// A program frame applied earlier in this update must survive.</summary>
@@ -301,7 +308,7 @@ internal sealed class BridgeHost : IDisposable
     private string? Greeting(WebSocketServer source)
         => ReferenceEquals(source, this.server)
             ? $"{{\"ev\":\"hello\",\"protocol\":{ProtocolVersion}," +
-              $"\"plugin\":{JsonSerializer.Serialize(PluginVersion.Value)}}}"
+              $"\"plugin\":{JsonSerializer.Serialize(PluginVersion.Value)},\"dpsRetention\":true}}"
             : null;
 
     /// <summary>Drain the inbox and expire stale alerts. Serialized with drawing and settings.</summary>
@@ -403,8 +410,11 @@ internal sealed class BridgeHost : IDisposable
                 break;
 
             case "clear":
-                // The program owns the meter for this session, so clear its DPS rows too.
-                this.ClearState(resetDps: true);
+                var hasKeepDps = root.TryGetProperty("keepDps", out var keep);
+                if (hasKeepDps && keep.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) break;
+                var keepDps = hasKeepDps && keep.ValueKind == JsonValueKind.True;
+                if (hasKeepDps && !keepDps) this.lastLive = null;
+                this.ClearState(resetDps: !keepDps);
                 break;
 
             case "ping":
@@ -528,9 +538,9 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Attach final rows to the ending so the hold option works even if no draw saw the
-        // last live frame.
-        if (show.ValueKind == JsonValueKind.False)
+        var ended = show.ValueKind == JsonValueKind.False;
+        // Older programs send an ending without its own snapshot.
+        if (ended && !root.TryGetProperty("enc", out _) && !root.TryGetProperty("rows", out _))
         {
             var last = this.lastLive;
             this.Dps = last == null
@@ -541,20 +551,33 @@ internal sealed class BridgeHost : IDisposable
                     Title = last.Title,
                     Duration = last.Duration,
                     EncDps = last.EncDps,
+                    HasDamage = last.HasDamage,
                     Rows = last.Rows,
                 };
 
             return;
         }
 
+        if (ended && (!root.TryGetProperty("enc", out var finalEnc) || finalEnc.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("rows", out var finalRows) || finalRows.ValueKind != JsonValueKind.Array))
+        {
+            return;
+        }
+
         var title = string.Empty;
         var duration = string.Empty;
         var encDps = 0.0;
+        bool? hasDamage = null;
         if (root.TryGetProperty("enc", out var enc) && enc.ValueKind == JsonValueKind.Object)
         {
             title = SanitizeText(ReadString(enc, "t"), MaxTextChars);
             duration = SanitizeText(ReadString(enc, "d"), MaxTextChars);
             if (enc.TryGetProperty("dps", out var total) && !TryFinite(total, out encDps)) return;
+            if (enc.TryGetProperty("hasDamage", out var damage))
+            {
+                if (damage.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return;
+                hasDamage = damage.GetBoolean();
+            }
         }
 
         var rows = new List<DpsRow>();
@@ -620,12 +643,17 @@ internal sealed class BridgeHost : IDisposable
 
         var state = new DpsState
         {
-            Show = true,
+            Show = !ended,
+            Ended = ended,
             Title = title,
             Duration = duration,
             EncDps = Math.Max(0, encDps),
+            HasDamage = hasDamage ?? (encDps > 0 || rows.Any(row => row.Dps > 0 || row.Share > 0)),
             Rows = rows,
         };
+
+        // Combat flags, healing and misses must not replace the previous pull.
+        if (this.KeepFinalDps(state)) return;
 
         this.lastLive = state;
         this.Dps = state;

@@ -126,8 +126,8 @@ receipt time. Delayed ticks advance from that time and expired callouts are disc
 | `{"c":"tick","t":12.5}` | Fight clock, in timeline seconds. The plugin interpolates from here, so this only has to beat drift, not the frame rate. |
 | `{"c":"timeline","v":[[18.0,"Wing","mechanic"],[24.5,"Dive","tankbuster"]]}` | Replace the schedule. `[time, label, kind]` entries in timeline seconds; the time and label are the program's `TimelineEngine.upcoming()` shape and `kind` is the tag the program derives from the label text: `tankbuster`, `raidwide` or `mechanic`. The kind is optional and free-form; an absent or unknown kind draws with the shared bar colour. |
 | `{"c":"alert","text":"Stack","sev":"alarm","ttl":4.0}` | Show a callout. `sev` is `info`, `alert` or `alarm`; `ttl` is optional and falls back to the configured time for that severity. |
-| `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true,0]]}` | DPS meter snapshot; see below. |
-| `{"c":"clear"}` | Drop the schedule, any live alerts and the meter. Send on zone change and on wipes, not on a normal fight end; see below. |
+| `{"c":"dps","show":true,"enc":{"t":"Everkeep","d":"03:12","dps":81234.5,"hasDamage":true},"rows":[["Alphinaud L","SGE",10234.5,21.4,300.1,true,0]]}` | DPS meter snapshot; see below. |
+| `{"c":"clear","keepDps":false}` | Drop the schedule, live alerts and meter history on zone changes. Send `keepDps:true` on wipes to retain DPS while clearing the other state. |
 | `{"c":"ping"}` | Liveness check; answered with `{"ev":"pong"}`. |
 
 `dps` goes out about once a second while an encounter runs. `enc` carries the encounter title, the
@@ -138,15 +138,35 @@ healing per second, `is_self` is true on the local player's row and `deaths` cou
 deaths this encounter. 24 covers a full alliance;
 the plugin's Max combatants setting only narrows what it draws. The trailing fields are
 optional, so a shorter row from an older program still parses with the defaults.
-`{"c":"dps","show":false}` hides the meter, so the program sends it when the encounter ends. The
-plugin records that frame as the encounter having ended rather than wiped, and the hold-last
-option keys on the distinction: it keeps the final rows up after an ended fight but not after
-a clear. The last frame of a fight wins, so a clear landing after `show:false` still wipes the
-state. Send `show:false` for a fight that ran its course and `clear` for a zone change. A wipe
-wants both: `clear` drops the schedule and live alerts, then a fresh `show:false` re-marks the
-ending so hold-last survives the wipe. A sender that ends fights with `clear` alone never
-produces the ended marker and hold-last has nothing to hold. The plugin keeps only the latest
+`enc.hasDamage` is an optional boolean reporting whether damage was dealt or taken in the
+displayed encounter. It stays true even when the displayed DPS rounds to zero. New programs
+send it on every live and final frame. Older programs fall back to positive DPS or damage share.
+Their frames cannot distinguish an opening hit taken from healing or an empty encounter.
+Older plugins ignore the added field, and the protocol version remains 1.
+
+When an encounter ends, the program sends `show:false` with its complete final `enc` and
+`rows`. This includes damage since the last live update and covers pulls that finish between
+updates. The plugin marks those values as ended so the hold-last option can keep them visible.
+A wipe then sends `{"c":"clear","keepDps":true}` to clear the schedule, clock and alerts while
+preserving the meter. Repeated wipes can send this frame without another encounter ending.
+Zone changes send `keepDps:false`, which also discards cached rows used by older end markers.
+If the program loses its feed, it finalizes the encounter before sending a full clear so
+the ending cannot restore rows after the disconnect.
+
+For older programs, a bare `{"c":"dps","show":false}` still ends the latest received snapshot.
+A clear without `keepDps` hides the meter but retains that snapshot for an older sender's
+clear followed by end sequence. The greeting advertises `dpsRetention:true` when final payloads
+and preserving clears are supported. Without that boolean, the program publishes final values
+as a live snapshot followed by a bare ending, and restores the current DPS state after each
+preserving clear. A full clear first replaces the older plugin's cached rows with an empty
+snapshot so a later end marker cannot restore the old zone. The fallback keeps completed rows
+through empty pulls and discards its cache on reconnect. The plugin keeps only the latest
 snapshot; there is nothing to acknowledge.
+
+Holding the final meter is enabled by default and enabled once when upgrading older settings.
+It can still be disabled in the DPS settings. While a final result is held, frames with
+no damage leave it in place, including frames containing only healing. The first frame with
+damage replaces it. A clear still removes the held result on zone changes.
 
 A new program session clears the previous session's final DPS history. Same-session wipe
 sequences still retain their final rows. Wire numbers must be finite. Timeline values must also
@@ -159,7 +179,7 @@ plugin.
 
 | Message | Meaning |
 |---|---|
-| `{"ev":"hello","protocol":1,"plugin":"0.1.0"}` | Sent on connect, always the first frame. Check `protocol` before driving it. |
+| `{"ev":"hello","protocol":1,"plugin":"0.2.0","dpsRetention":true}` | Sent on connect, always the first frame. Check `protocol` before driving it. The optional boolean selects native retained DPS messages. |
 | `{"ev":"pong"}` | Reply to `ping`. |
 
 `protocol` is bumped only on an incompatible change to the tables above.
@@ -175,13 +195,18 @@ stay program-side; the encounter lifecycle, the effect-pair decode and the pet m
 line for line.
 
 The same frame semantics the program sends are produced locally: a live snapshot about once a
-second, the ended marker when the encounter finalizes, and a clear on zone change, so hold-last
-engages after a fight but never across a zone on either feed. A wipe finalizes the encounter and
-nothing clears after it here; the program clears on a wipe but re-sends the end frame right after,
-so both feeds hold the final rows after a wipe. The program's feed always wins: while a session is
+second, a complete final snapshot when the encounter ends, and a clear on zone change, so hold-last
+engages after a fight but never across a zone on either feed. A wipe finalizes the encounter.
+The program then clears callouts and the timeline while preserving DPS, so both feeds hold the
+final rows after a wipe. The program's feed always wins: while a session is
 live the IINACT client stays off, and when the program goes away mid-fight the engine starts cold,
 classifying the party from the subscribe burst and a one-shot `getCombatants`, the same way the
 program handles a mid-instance start.
+
+Standalone publication waits for damage dealt or taken before showing a new pull, then sends
+that first snapshot immediately. Empty encounters cannot replace a held result.
+Encounter endings and zone clears are applied in arrival order within each update. A later
+empty encounter cannot cancel a zone clear or discard the newest completed pull.
 
 Applying a different feed endpoint clears the old standalone result. Cached initial zone data
 preserves the local identity delivered by the subscription. Combatant snapshots use the same

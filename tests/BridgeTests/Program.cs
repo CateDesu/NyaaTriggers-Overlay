@@ -199,10 +199,11 @@ foreach (var port in new[] { 0, -1, 65536 })
     await Until(() => server.IsConnected && meter.State == StandaloneState.Connected, meter.Update);
     foreach (var raw in new[] { "[]", "null", "42", Party, Combat, Damage("0001") }) Receive(meter, raw);
     meter.Update();
-    Check(states.Last().Show, "miss-only pull is initially live");
+    Check(states.Count == 0, "miss-only pull waits for damage before live publication");
     Receive(meter, "33|ts|10000001|4000000F");
     meter.Update();
-    Check(states.Last().Ended && !states.Last().Show, "miss-only wipe retires the live row");
+    Check(states.Last().Ended && !states.Last().Show && !states.Last().HasDamage,
+        "miss-only wipe ends the encounter without reporting damage");
     Receive(meter, Combat);
     Receive(meter, null);
     Receive(meter, Party);

@@ -537,7 +537,7 @@ internal sealed class ConfigWindow : Window
         ImGui.TextDisabled("A red count beside the name. The Horizon strip needs names shown.");
         this.Check("Keep the last encounter on screen",
             () => this.config.DpsHoldLast, v => this.config.DpsHoldLast = v);
-        ImGui.TextDisabled("The final meter stays up after the fight, until the next pull or a zone change.\nThis beats an only-in-combat filter on the meter.");
+        ImGui.TextDisabled("The final meter stays up after a wipe until damage starts on the next pull or the zone changes.\nThis also keeps it visible outside combat.");
 
         ImGui.Spacing();
 

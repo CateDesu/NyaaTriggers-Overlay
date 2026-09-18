@@ -7,6 +7,9 @@ program, so for those you need both. If all you want is the DPS meter, the plugi
 the combat feed straight from [IINACT](https://github.com/marzent/IINACT) with no program running:
 tick **Standalone meter** in its settings.
 
+After a wipe, the DPS meter keeps the last pull visible until damage starts on the next pull.
+Healing and entering combat leave the final numbers in place. Changing zones clears them.
+
 ## Installing
 
 1. Install [FFXIVQuickLauncher](https://github.com/goatcorp/FFXIVQuickLauncher) and enable Dalamud in

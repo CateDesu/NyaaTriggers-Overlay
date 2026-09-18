@@ -22,6 +22,8 @@ internal sealed class OverlaySnapshot
 
     internal required double EncDps { get; init; }
 
+    internal bool HasDamage { get; init; }
+
     internal required IReadOnlyList<MeterRow> Rows { get; init; }
 }
 
@@ -88,6 +90,8 @@ internal sealed class MeterEngine
     internal Action<OverlaySnapshot?>? OnEncounterEnd { get; set; }
 
     internal bool HasLiveEncounter => this.current != null;
+
+    internal bool HasLiveDamage => this.view?.LastDamage != null;
 
     /// <summary>Lets the feed initialize a new engine from cached zone metadata without
     /// treating a replay as a zone change.</summary>
@@ -818,6 +822,7 @@ internal sealed class MeterEngine
                 + (incomplete ? " [incomplete feed]" : string.Empty),
             Duration = MmSs(duration),
             EncDps = Math.Round(totalDamage / Math.Max(1.0, duration), 1),
+            HasDamage = enc.LastDamage != null,
             Rows = sorted,
         };
     }

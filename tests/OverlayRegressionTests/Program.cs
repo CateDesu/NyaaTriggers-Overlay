@@ -579,6 +579,54 @@ internal static class Program
         Check(host.Alerts.Count == 1 && host.Alerts[0].Count == 2, "A still live repeat continues to merge");
     }
 
+    private static async Task RetainedMeterBoundaries()
+    {
+        using var f = await Fixture.Open();
+        await f.Burst(Zone);
+        foreach (var zone in new[]
+        {
+            "{\"type\":\"ChangeZone\",\"zoneID\":200,\"zoneName\":\"Other Arena\"}",
+            "01|ts|C9|Another Arena",
+        })
+        {
+            await f.Burst(Me, Party, Combat, Damage(), End);
+            Check(f.Host.Dps.Ended && f.Host.Dps.EncDps == 10000, "Zone boundary test starts with a held pull");
+            await f.Burst(zone, Combat, End);
+            Check(f.Host.Dps.Rows.Count == 0 && ImGui.Commands.Count == 0,
+                "A zone change followed by an empty encounter in one update clears the held pull", zone);
+            f.Draw();
+            Check(ImGui.Commands.Count == 0, "Another draw cannot restore the old zone result");
+        }
+
+        await f.Burst(Me, Party, Combat, Damage(), End);
+        await f.Burst(Combat, Damage(amount: "13880000"), End, Combat, End);
+        Check(f.Host.Dps.Ended && f.Host.Dps.EncDps == 5000,
+            "An empty encounter in the same update retains the newest completed pull");
+        await f.Burst("01|ts|CA|Final Arena", Me, Party, Combat, Damage(), End, Combat, End);
+        Check(f.Host.Dps.Ended && f.Host.Dps.Title == "Final Arena" && f.Host.Dps.EncDps == 10000,
+            "An encounter after a zone change survives a later empty encounter in the same update");
+        await f.Burst(Combat, Damage(), End, "01|ts|CB|Empty Arena");
+        Check(f.Host.Dps.Rows.Count == 0 && ImGui.Commands.Count == 0,
+            "A zone change after a completed encounter in the same update clears its result");
+    }
+
+    private static void RetainedMeterMigration()
+    {
+        Check(new Configuration().DpsHoldLast, "New settings retain the last pull by default");
+        var config = new Configuration { Port = Port(), Version = 4, DpsHoldLast = false };
+        var store = new TestConfigStore { Config = config };
+        using (var plugin = new Plugin(store))
+        {
+            Check(config.Version == 5 && config.DpsHoldLast, "Existing settings enable the retained meter on upgrade");
+            config.DpsHoldLast = false;
+        }
+
+        using (var plugin = new Plugin(store))
+        {
+            Check(!config.DpsHoldLast, "Disabling the retained meter after upgrading survives reload");
+        }
+    }
+
     private static async Task<int> Main(string[] args)
     {
         Check(Environment.GetEnvironmentVariable("DISPLAY") == null && Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") == null,
@@ -587,6 +635,8 @@ internal static class Program
         {
             ("subscription", SubscriptionOrder), ("npc", NpcRoster), ("hidden-ui", HiddenUi),
             ("delayed-fight", DelayedFight), ("endpoint", EndpointRestart),
+            ("retained-meter", () => { RetainedMeterMigration(); return Task.CompletedTask; }),
+            ("retained-boundaries", RetainedMeterBoundaries),
             ("profile", () => { ProfileAndGeometry(); return Task.CompletedTask; }),
             ("bounds", () => { UnboundedAndSelf(); return Task.CompletedTask; }),
             ("late-handshake", LateHandshake), ("bridge-inputs", BridgeInputs),

@@ -201,7 +201,7 @@ internal sealed class Configuration : IPluginConfiguration
     /// <summary>Increment when stored fields change meaning and provide a migration. Enums
     /// serialize as integers, so reordering or inserting members also requires
     /// migration.</summary>
-    public int Version { get; set; } = 4;
+    public int Version { get; set; } = 5;
 
     // Connection
     /// <summary>The program connects to this port. The listener binds only to IPv4 and IPv6
@@ -462,8 +462,8 @@ internal sealed class Configuration : IPluginConfiguration
     /// counts.</summary>
     public bool DpsShowDeaths { get; set; }
 
-    /// <summary>Keep final rows until the next pull or zone change.</summary>
-    public bool DpsHoldLast { get; set; }
+    /// <summary>Keep final rows until damage starts on the next pull or the zone changes.</summary>
+    public bool DpsHoldLast { get; set; } = true;
 
     /// <summary>Supports {title}, {duration} and {dps}. Empty uses the default layout with
     /// dot separators.</summary>
@@ -759,6 +759,13 @@ internal sealed class Configuration : IPluginConfiguration
         AlertSecondsAlarm = AlertSeconds;
 
         Version = 4;
+    }
+
+    /// <summary>Enable the retained meter for existing installations.</summary>
+    public void MigrateFromV4()
+    {
+        DpsHoldLast = true;
+        Version = 5;
     }
 
     /// <summary>Reset appearance while preserving connection settings, placement,

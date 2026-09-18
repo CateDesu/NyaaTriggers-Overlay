@@ -104,16 +104,23 @@ internal static class Program
         Draw(ui);
     }
 
-    private static string BridgeDps(string title, double dps = 1234)
+    private static string BridgeDps(string title, double dps = 1234, bool show = true)
         => JsonSerializer.Serialize(new
         {
-            c = "dps", show = true, enc = new { t = title, d = "00:10", dps },
+            c = "dps", show, enc = new { t = title, d = "00:10", dps },
             rows = new object[][] { new object[] { "Program Player", "MCH", dps, 100, 0, true, 0 } }
         });
 
     private static async Task SendProgram(ClientWebSocket client, string message)
     {
         await client.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private static async Task ProgramBurst(ClientWebSocket client, BridgeHost host, PluginUi ui, params string[] messages)
+    {
+        foreach (var message in messages) await SendProgram(client, message);
+        await Until(() => Queued(host) >= messages.Length);
+        Draw(ui);
     }
 
     private static async Task MainScenario()
@@ -123,7 +130,7 @@ internal static class Program
         {
             Port = FreePort(), StandaloneMeter = true, IinactEndpoint = feed.Endpoint,
             Locked = true, ShowTimeline = false, ShowAlerts = false,
-            DpsHoldLast = true, DpsTextEffect = TextEffectStyle.Off,
+            DpsTextEffect = TextEffectStyle.Off,
             DpsShowDeaths = true, DpsRowsShowHps = true,
             DpsHorizCompact = true, DpsHorizShowIcons = false, DpsHorizMaxBarWidth = 400
         };
@@ -224,6 +231,27 @@ internal static class Program
         await Burst(feed, host, ui, Combat, Log(Hit("10000001", "Player One", "13880000")), "33|ts|10000001|4000000F");
         Check(host.Dps.Ended && host.Dps.EncDps == 5000 && window.IsOpen, "Wipe preserves the current fight final values without old damage");
 
+        var wiped = host.Dps;
+        await Burst(feed, host, ui, End, Combat);
+        Check(ReferenceEquals(wiped, host.Dps) && window.IsOpen, "Entering combat retains the last pull until damage");
+        await Burst(feed, host, ui,
+            Log(Hit("10000001", "Player One", "01F40000", "0004", "10000001")),
+            Log(Hit("10000001", "Player One", "0", "0001")),
+            Log(Hit("10000001", "Player One", "27100100")));
+        Check(ReferenceEquals(wiped, host.Dps) && window.IsOpen,
+            "Healing, misses and invulnerable hits retain the exact final meter");
+        await Burst(feed, host, ui, End);
+        Check(ReferenceEquals(wiped, host.Dps) && window.IsOpen, "Ending a pull without damage preserves the previous result");
+        await Burst(feed, host, ui, Combat);
+        await Burst(feed, host, ui, Log(Dot()));
+        Check(host.Dps.Show && host.Dps.EncDps == 1000 && window.IsOpen,
+            "The first DoT immediately replaces the held result with only new pull damage");
+        await Burst(feed, host, ui, "33|ts|10000001|4000000F");
+        await Burst(feed, host, ui, Log(Hit("40000010", "Enemy", "27100000", target: "10000001")));
+        Check(host.Dps.Show && host.Dps.EncDps == 0 && window.IsOpen,
+            "Incoming damage also starts the next pull display");
+        await Burst(feed, host, ui, "33|ts|10000001|4000000F");
+
         await Burst(feed, host, ui, Combat, Log(Hit("10000001", "Player One", "27100000")));
         await feed.Socket!.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "test disconnect", CancellationToken.None);
         await Until(() => host.Dps.Ended, () => Draw(ui));
@@ -246,6 +274,11 @@ internal static class Program
 
         using var program = new ClientWebSocket();
         await program.ConnectAsync(new Uri($"ws://127.0.0.1:{config.Port}"), CancellationToken.None);
+        var greetingBytes = new byte[4096];
+        var greetingRead = await program.ReceiveAsync(greetingBytes, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+        using var greeting = JsonDocument.Parse(greetingBytes.AsMemory(0, greetingRead.Count));
+        Check(greeting.RootElement.GetProperty("dpsRetention").GetBoolean(),
+            "The greeting advertises native DPS retention to the program");
         await SendProgram(program, BridgeDps("Program Arena"));
         await Until(() => host.Dps.Title == "Program Arena", () => Draw(ui));
         Capture("program bridge", host);
@@ -259,8 +292,74 @@ internal static class Program
         await SendProgram(program, "{\"c\":\"dps\",\"show\":false}");
         await Until(() => host.Dps.Ended, () => Draw(ui));
         Check(window.IsOpen && host.Dps.EncDps == 1234, "Program wipe end after clear retains the final fight");
-        await SendProgram(program, "{\"c\":\"clear\"}");
+        var programWipe = host.Dps;
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"t\":\"Next Pull\",\"d\":\"00:00\",\"dps\":0},\"rows\":[]}");
+        Check(ReferenceEquals(programWipe, host.Dps) && window.IsOpen, "Empty program frames retain the last pull");
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"t\":\"Next Pull\",\"d\":\"00:01\",\"dps\":0},\"rows\":[[\"Healer\",\"WHM\",0,0,500,true,0]]}");
+        Check(ReferenceEquals(programWipe, host.Dps) && window.IsOpen, "Program healing without damage retains the final meter");
+        await ProgramBurst(program, host, ui, "{\"c\":\"dps\",\"show\":false}");
+        Check(host.Dps.Ended && host.Dps.Title == programWipe.Title && host.Dps.EncDps == 1234 && window.IsOpen,
+            "An empty program pull cannot replace the previous result");
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"hasDamage\":\"true\"}}");
+        Check(host.Dps.Ended && host.Dps.EncDps == 1234 && window.IsOpen,
+            "A malformed damage flag cannot replace the held result");
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"t\":\"Incoming Damage\",\"d\":\"00:00\",\"dps\":0,\"hasDamage\":true},\"rows\":[[\"Player\",\"MCH\",0,0,0,true,0]]}");
+        Check(host.Dps.Show && host.Dps.Title == "Incoming Damage" && host.Dps.EncDps == 0 && window.IsOpen,
+            "Incoming program damage replaces the held pull even with zero outgoing DPS");
+        await ProgramBurst(program, host, ui, "{\"c\":\"dps\",\"show\":false}");
+        var incomingEnd = host.Dps;
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"dps\":0,\"hasDamage\":false},\"rows\":[[\"Healer\",\"WHM\",0,0,500,true,0]]}");
+        Check(ReferenceEquals(incomingEnd, host.Dps) && window.IsOpen,
+            "Healing on the following pull preserves a final result with only incoming damage");
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"t\":\"Small Hit\",\"d\":\"00:30\",\"dps\":0,\"hasDamage\":true},\"rows\":[[\"Player\",\"MCH\",0,100,0,true,0]]}");
+        Check(host.Dps.Show && host.Dps.Title == "Small Hit" && host.Dps.EncDps == 0 && window.IsOpen,
+            "A program hit that rounds to zero DPS still starts the new display");
+        await ProgramBurst(program, host, ui, "{\"c\":\"dps\",\"show\":false}");
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":true,\"enc\":{\"t\":\"Legacy Small Hit\",\"dps\":0},\"rows\":[[\"Player\",\"MCH\",0,100,0,true,0]]}");
+        Check(host.Dps.Show && host.Dps.Title == "Legacy Small Hit" && window.IsOpen,
+            "Damage share recognizes rounded hits from older program versions");
+        await ProgramBurst(program, host, ui, BridgeDps("Next Program Arena", 4321));
+        Check(host.Dps.Show && host.Dps.Title == "Next Program Arena" && host.Dps.EncDps == 4321 && window.IsOpen,
+            "First program damage replaces the held result with the new pull");
+        await ProgramBurst(program, host, ui, BridgeDps("Final Values", 15000, show: false));
+        Check(host.Dps.Ended && !host.Dps.Show && host.Dps.EncDps == 15000 && window.IsOpen,
+            "A complete ending replaces the last live sample with final damage");
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"timeline\",\"v\":[[10,\"Next mechanic\"]]}",
+            "{\"c\":\"tick\",\"t\":5}", "{\"c\":\"alert\",\"text\":\"Old callout\"}");
+        var finalValues = host.Dps;
+        await ProgramBurst(program, host, ui, "{\"c\":\"clear\",\"keepDps\":true}");
+        Check(ReferenceEquals(finalValues, host.Dps) && window.IsOpen
+            && host.Timeline.Count == 0 && host.Alerts.Count == 0 && !host.ClockRunning,
+            "Wipe cleanup removes callouts and the timeline without hiding final DPS");
+        await ProgramBurst(program, host, ui, "{\"c\":\"clear\",\"keepDps\":true}");
+        Check(ReferenceEquals(finalValues, host.Dps) && window.IsOpen,
+            "Repeated wipes preserve the same result without requiring another DPS frame");
+        await ProgramBurst(program, host, ui, BridgeDps("Short Pull", 5000, show: false),
+            "{\"c\":\"clear\",\"keepDps\":true}");
+        Check(host.Dps.Ended && !host.Dps.Show && host.Dps.Title == "Short Pull"
+            && host.Dps.EncDps == 5000 && window.IsOpen,
+            "A pull completed between live updates replaces the previous held pull");
+        var shortPull = host.Dps;
+        await ProgramBurst(program, host, ui,
+            "{\"c\":\"dps\",\"show\":false,\"enc\":{\"dps\":0,\"hasDamage\":false},\"rows\":[]}",
+            "{\"c\":\"dps\",\"show\":false,\"enc\":{\"dps\":100}}",
+            "{\"c\":\"dps\",\"show\":false,\"enc\":{\"dps\":1e999},\"rows\":[]}");
+        Check(ReferenceEquals(shortPull, host.Dps) && window.IsOpen,
+            "Empty and invalid final snapshots cannot replace the completed pull");
+        await SendProgram(program, "{\"c\":\"clear\",\"keepDps\":false}");
         await Until(() => host.Dps.Rows.Count == 0, () => Draw(ui));
+        await ProgramBurst(program, host, ui, "{\"c\":\"clear\",\"keepDps\":true}",
+            "{\"c\":\"dps\",\"show\":false}");
+        Check(host.Dps.Rows.Count == 0 && !window.IsOpen,
+            "A wipe or late end marker after a zone reset cannot restore old DPS");
         await SendProgram(program, "{\"c\":\"dps\",\"show\":true,\"enc\":{\"t\":\"Empty Arena\",\"d\":\"00:01\",\"dps\":0},\"rows\":[]}");
         await SendProgram(program, "{\"c\":\"dps\",\"show\":false}");
         await Until(() => host.Dps.Ended, () => Draw(ui));
