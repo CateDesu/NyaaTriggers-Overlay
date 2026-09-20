@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.ManagedFontAtlas;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 
@@ -105,35 +106,13 @@ internal abstract class OverlayWindow : Window
     {
         var scale = ClampTextScale(this.TextScale);
 
-        // The default font size already includes the Dalamud UI scale.
-        var targetPx = ImGui.GetFont().FontSize * scale;
+        var targetPx = FontBasePixels() * scale;
         this.TextPx = targetPx;
 
-        // Use a font rasterized near the target size. Scale the default font only while the
-        // requested font is unavailable.
-        var handle = this.Fonts.Get(targetPx);
-        if (handle is { Available: true })
+        using (this.UseFont(targetPx))
         {
-            using (handle.Push())
-            {
-                var actualPx = ImGui.GetFont().FontSize;
-                ImGui.SetWindowFontScale(actualPx > 0.0f ? targetPx / actualPx : 1.0f);
-                try
-                {
-                    this.DrawBackdrop();
-                    this.DrawContent();
-                }
-                finally
-                {
-                    // Window font scale persists outside the font stack, so reset it
-                    // explicitly.
-                    ImGui.SetWindowFontScale(1.0f);
-                }
-            }
-        }
-        else
-        {
-            ImGui.SetWindowFontScale(scale);
+            // Each window reserves its own spacing.
+            ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, Vector2.Zero);
             try
             {
                 this.DrawBackdrop();
@@ -141,7 +120,7 @@ internal abstract class OverlayWindow : Window
             }
             finally
             {
-                ImGui.SetWindowFontScale(1.0f);
+                ImGui.PopStyleVar();
             }
         }
 
@@ -152,6 +131,41 @@ internal abstract class OverlayWindow : Window
     }
 
     protected abstract void DrawContent();
+
+    /// <summary>Keep pixel sizes stable as fonts load and restore the surrounding scale
+    /// after drawing nested text.</summary>
+    protected FontScope UseFont(float pixels) => new(this.Fonts.Get(pixels), pixels);
+
+    private static float FontBasePixels()
+    {
+        var font = ImGui.GetFont();
+        return Math.Max(1.0f, font.FontSize * font.Scale * ImGuiHelpers.GlobalScale);
+    }
+
+    protected readonly struct FontScope : IDisposable
+    {
+        private readonly IDisposable? pushed;
+        private readonly float restore;
+
+        internal FontScope(IFontHandle? handle, float pixels)
+        {
+            this.restore = ImGui.GetFontSize() / FontBasePixels();
+            this.pushed = handle is { Available: true } ? handle.Push() : null;
+            ImGui.SetWindowFontScale(pixels / FontBasePixels());
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                this.pushed?.Dispose();
+            }
+            finally
+            {
+                ImGui.SetWindowFontScale(this.restore);
+            }
+        }
+    }
 
     /// <summary>Draw the configured backdrop because locked windows disable the ImGui
     /// background.</summary>

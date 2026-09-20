@@ -5,7 +5,6 @@ using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface.ManagedFontAtlas;
 using Dalamud.Interface.Utility;
 using NyaaTriggers.Plugin.Bridge;
 
@@ -64,20 +63,17 @@ internal sealed class DpsWindow : OverlayWindow
     {
         base.PreDraw();
 
-        if (this.Config.DpsStyle == DpsMeterStyle.HorizonOverlay)
+        if (this.Config.Locked && this.Config.DpsStyle == DpsMeterStyle.HorizonOverlay
+            && this.contentHeight > 1.0f)
         {
-            if (this.Config.Locked && this.contentHeight > 1.0f)
-            {
-                this.Size = new Vector2(
-                    this.StoredSize.X / ImGuiHelpers.GlobalScale,
-                    this.contentHeight / ImGuiHelpers.GlobalScale);
-            }
-            else if (!this.Config.Locked && this.wasLocked)
-            {
-                // Force the stored height once because FirstUseEver would preserve the
-                // fitted height.
-                this.SizeCondition = ImGuiCond.Always;
-            }
+            this.Size = new Vector2(
+                this.StoredSize.X / ImGuiHelpers.GlobalScale,
+                this.contentHeight / ImGuiHelpers.GlobalScale);
+        }
+        else if (!this.Config.Locked && this.wasLocked)
+        {
+            // Restore placement before capturing geometry even if the style changed.
+            this.SizeCondition = ImGuiCond.Always;
         }
 
         this.wasLocked = this.Config.Locked;
@@ -381,6 +377,11 @@ internal sealed class DpsWindow : OverlayWindow
     /// <summary>Collapse spaces left by omitted header tokens.</summary>
     private static readonly Regex HeaderSpaces = new(@"\s+", RegexOptions.Compiled);
 
+    /// <summary>Expand each template token once without treating its value as another
+    /// template.</summary>
+    private static readonly Regex HeaderTokens = new(
+        @"\{(?:title|duration|dps)\}", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     /// <summary>Collapse adjacent separators left by omitted header tokens.</summary>
     private static readonly Regex HeaderSepRuns = new(
         @"\s*[·•|/\-–—]\s*(\s*[·•|/\-–—]\s*)+", RegexOptions.Compiled);
@@ -417,10 +418,12 @@ internal sealed class DpsWindow : OverlayWindow
             return string.Join(" · ", parts);
         }
 
-        var text = format
-            .Replace("{title}", titleText, StringComparison.OrdinalIgnoreCase)
-            .Replace("{duration}", durationText, StringComparison.OrdinalIgnoreCase)
-            .Replace("{dps}", dpsText, StringComparison.OrdinalIgnoreCase);
+        var text = HeaderTokens.Replace(format, match => match.Value.ToLowerInvariant() switch
+        {
+            "{title}" => titleText,
+            "{duration}" => durationText,
+            _ => dpsText,
+        });
         text = HeaderSepRuns.Replace(HeaderSpaces.Replace(text, " "), FirstSeparator);
         return text.Trim(' ', '·', '•', '|', '/', '-', '–', '—');
     }
@@ -443,7 +446,7 @@ internal sealed class DpsWindow : OverlayWindow
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = this.Config.DpsBarHeight * ClampTextScale(this.TextScale);
+        var height = Math.Max(this.Config.DpsBarHeight * ClampTextScale(this.TextScale), MathF.Ceiling(ImGui.GetTextLineHeight()));
         var rounding = Math.Min(Math.Max(this.Config.DpsBarRounding, 0.0f), height * 0.5f);
 
         drawList.AddRectFilled(
@@ -545,14 +548,14 @@ internal sealed class DpsWindow : OverlayWindow
         var textY = origin.Y + ((height - ImGui.CalcTextSize(label).Y) * 0.5f);
 
         this.DrawStyledText(
-            drawList, origin + new Vector2(textLeft, textY), this.Config.DpsTextColor, label);
+            drawList, new Vector2(origin.X + textLeft, textY), this.Config.DpsTextColor, label);
 
         if (deaths != null)
         {
             var labelWidth = ImGui.CalcTextSize(label).X;
             this.DrawStyledText(
                 drawList,
-                origin + new Vector2(textLeft + labelWidth, textY),
+                new Vector2(origin.X + textLeft + labelWidth, textY),
                 DeathsColor,
                 deaths);
         }
@@ -579,34 +582,9 @@ internal sealed class DpsWindow : OverlayWindow
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
         var scale = ClampTextScale(this.TextScale);
 
-        var statFont = this.Fonts.Get(this.TextPx * this.HorizonStatScale());
-        if (statFont is { Available: true })
-        {
-            using (statFont.Push())
-            {
-                this.DrawHorizonCells(drawList, rows, origin, width, scale);
-            }
-
-            return;
-        }
-
-        // Match the target font size while it loads to keep layout stable.
-        var fontSize = ImGui.GetFont().FontSize;
-        if (fontSize <= 0.0f)
+        using (this.UseFont(this.TextPx * this.HorizonStatScale()))
         {
             this.DrawHorizonCells(drawList, rows, origin, width, scale);
-            return;
-        }
-
-        ImGui.SetWindowFontScale((this.TextPx * this.HorizonStatScale()) / fontSize);
-        try
-        {
-            this.DrawHorizonCells(drawList, rows, origin, width, scale);
-        }
-        finally
-        {
-            // Restore body size for the header drawn after the strip.
-            ImGui.SetWindowFontScale(this.TextPx / fontSize);
         }
     }
 
@@ -629,7 +607,7 @@ internal sealed class DpsWindow : OverlayWindow
         var twoTone = this.Config.DpsHorizHighlight
             && this.Config.DpsHorizTheme != HorizonColorTheme.BlackWhite;
 
-        var barHeight = Math.Clamp(this.Config.DpsHorizBarHeight, 10.0f, 60.0f) * scale;
+        var barHeight = Math.Max(Math.Clamp(this.Config.DpsHorizBarHeight, 10.0f, 60.0f) * scale, lineHeight + scale);
         var barSkew = this.HorizonSkew() * barHeight;
         var iconSize = Math.Clamp(this.Config.DpsHorizIconSize, 8.0f, 64.0f) * scale;
 
@@ -637,13 +615,13 @@ internal sealed class DpsWindow : OverlayWindow
         var iconOverhang = showIcons ? iconSize * 0.25f : 0.0f;
         var nameBand = showNames ? lineHeight + (3.0f * scale) : 0.0f;
         var barTop = origin.Y + Math.Max(nameBand, iconOverhang + scale);
-        var stripTop = barTop + barHeight + scale;
         var stripHeight = Math.Max(2.0f * scale, 1.5f);
 
         // Include the icon bottom in cell height so large icons cannot overlap the share
         // strip or be clipped.
         var iconBottom = showIcons ? barTop - iconOverhang + iconSize : barTop;
         var cellBottom = Math.Max(barTop + barHeight, iconBottom);
+        var stripTop = cellBottom + scale;
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -829,28 +807,20 @@ internal sealed class DpsWindow : OverlayWindow
                 continue;
             }
 
-            using (handle?.Push())
+            using (this.UseFont(statPx * ratio))
             {
                 var numberWidth = ImGui.CalcTextSize(number).X;
-                IFontHandle? labelFont = null;
+                var labelPx = statPx * ratio * HorizonLabelRatio;
                 var labelWidth = 0.0f;
-                if (withLabel)
+                if (withLabel && this.Fonts.Get(labelPx) is { Available: true })
                 {
-                    labelFont = this.Fonts.Get(statPx * ratio * HorizonLabelRatio);
-                    if (labelFont is { Available: true })
+                    using (this.UseFont(labelPx))
                     {
-                        using (labelFont.Push())
-                        {
-                            labelWidth = ImGui.CalcTextSize(label).X;
-                        }
-                    }
-                    else
-                    {
-                        labelFont = null;
+                        labelWidth = ImGui.CalcTextSize(label).X;
                     }
                 }
 
-                var fitsLabel = labelFont != null
+                var fitsLabel = labelWidth > 0
                     && numberWidth + gap + labelWidth <= maxWidth;
                 if (!fitsLabel && numberWidth > maxWidth)
                 {
@@ -859,7 +829,7 @@ internal sealed class DpsWindow : OverlayWindow
 
                 this.PaintHorizonStat(
                     drawList, zoneLeft, zoneRight, bottom, rightAligned,
-                    number, label, fitsLabel ? labelFont : null,
+                    number, label, fitsLabel ? labelPx : 0.0f,
                     fitsLabel ? labelWidth : 0.0f, numberWidth, gap, color, self);
                 return;
             }
@@ -869,7 +839,7 @@ internal sealed class DpsWindow : OverlayWindow
         var trimmed = Elide(number, maxWidth);
         this.PaintHorizonStat(
             drawList, zoneLeft, zoneRight, bottom, rightAligned,
-            trimmed, string.Empty, null, 0.0f, ImGui.CalcTextSize(trimmed).X,
+            trimmed, string.Empty, 0.0f, 0.0f, ImGui.CalcTextSize(trimmed).X,
             gap, color, self);
     }
 
@@ -877,7 +847,7 @@ internal sealed class DpsWindow : OverlayWindow
     /// edge.</summary>
     private void PaintHorizonStat(
         ImDrawListPtr drawList, float zoneLeft, float zoneRight, float bottom,
-        bool rightAligned, string number, string label, IFontHandle? labelFont,
+        bool rightAligned, string number, string label, float labelPx,
         float labelWidth, float numberWidth, float gap, Vector4 color, bool self)
     {
         var lineHeight = ImGui.GetTextLineHeight();
@@ -895,12 +865,12 @@ internal sealed class DpsWindow : OverlayWindow
             this.DrawStyledText(drawList, new Vector2(startX, top), color, number);
         }
 
-        if (labelFont is not { Available: true } || string.IsNullOrEmpty(label))
+        if (labelPx <= 0.0f || string.IsNullOrEmpty(label))
         {
             return;
         }
 
-        using (labelFont.Push())
+        using (this.UseFont(labelPx))
         {
             var labelTop = top + lineHeight - ImGui.GetTextLineHeight();
             var labelLeft = startX + numberWidth + gap;
@@ -919,28 +889,15 @@ internal sealed class DpsWindow : OverlayWindow
     /// layout.</summary>
     private float DrawSmallText(ImDrawListPtr drawList, string text, float right, float top, Vector4 color)
     {
-        var small = this.Fonts.Get(this.TextPx * this.HorizonPercentScale());
-        if (small is { Available: true })
+        using (this.UseFont(this.TextPx * this.HorizonPercentScale()))
         {
-            using (small.Push())
-            {
-                this.DrawStyledText(
-                    drawList,
-                    new Vector2(right - ImGui.CalcTextSize(text).X, top),
-                    color,
-                    text);
-                return top + ImGui.GetTextLineHeight();
-            }
+            this.DrawStyledText(
+                drawList,
+                new Vector2(right - ImGui.CalcTextSize(text).X, top),
+                color,
+                text);
+            return top + ImGui.GetTextLineHeight();
         }
-
-        this.DrawStyledText(
-            drawList,
-            new Vector2(right - ImGui.CalcTextSize(text).X, top),
-            color,
-            text);
-
-        // Reserve the target font height while it loads to keep cell height stable.
-        return top + (this.TextPx * this.HorizonPercentScale());
     }
 
     /// <summary>Local colour takes priority in both themes. Apply configured opacity to

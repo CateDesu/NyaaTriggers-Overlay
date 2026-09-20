@@ -100,7 +100,13 @@ internal sealed class MeterEngine
     /// <summary>Install cached zone metadata without erasing cached identity.</summary>
     internal void SetInitialZone(string name)
     {
-        if (!this.HasZone) this.zone = BoundName(name);
+        if (this.HasZone) return;
+        this.zone = BoundName(name);
+        if (!this.HasZone) return;
+        foreach (var enc in new[] { this.current, this.view })
+        {
+            if (enc != null) enc.Title = this.zone;
+        }
     }
 
     /// <summary>Set the display idle timeout in seconds. Invalid values are ignored and
@@ -152,12 +158,14 @@ internal sealed class MeterEngine
         }
 
         this.jobs.Set(aid, job);
+        if (this.rosterJobs.ContainsKey(aid)) this.rosterJobs[aid] = job;
         // Update existing rows too. A pet may have created the owner's row before the
         // roster arrived.
         foreach (var enc in new[] { this.current, this.view })
         {
-            if (enc != null && enc.Combatants.ContainsKey(aid))
+            if (enc != null && enc.Combatants.TryGetValue(aid, out var actor))
             {
+                actor.Job = job;
                 this.CombatantFor(enc, aid);
             }
         }
@@ -195,12 +203,14 @@ internal sealed class MeterEngine
             return job;
         }
 
+        if (this.jobs.TryGet(id, out job)) return job;
+
         if (this.current?.Combatants.TryGetValue(id, out var active) == true && active.Job != 0)
         {
             return active.Job;
         }
 
-        return this.jobs.Get(id);
+        return 0;
     }
 
     // Retired players can return after their job cache entry expires.
@@ -495,7 +505,7 @@ internal sealed class MeterEngine
         // Require a player ID because Trust and duty support NPCs also have combat jobs.
         if (job != 0 && fields[2].StartsWith("10", StringComparison.Ordinal))
         {
-            this.jobs.Set(aid.Value, job);
+            this.NoteJob(aid.Value, job);
         }
 
         var owner = ActorInt(fields[6]);
@@ -544,6 +554,7 @@ internal sealed class MeterEngine
         var tgtKey = this.PlayerKey(tid);
 
         var effects = new List<Effect>(8);
+        var reflected = false;
         for (var i = 8; i < 24; i += 2)
         {
             if (i + 1 >= fields.Count)
@@ -556,7 +567,19 @@ internal sealed class MeterEngine
                 continue;
             }
 
-            effects.Add(UnpackEffect(fields[i], fields[i + 1]));
+            if (!uint.TryParse(fields[i], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var flags))
+            {
+                continue;
+            }
+
+            if ((flags & 0xFF) == 0x1D)
+            {
+                reflected = true;
+                continue;
+            }
+
+            var effect = UnpackEffect(fields[i], fields[i + 1]);
+            effects.Add(effect with { Reflected = reflected && effect.Kind == EffectKind.Damage });
         }
 
         // Damage and misses can start an encounter. Healing and buffs before a pull must
@@ -573,8 +596,8 @@ internal sealed class MeterEngine
         }
 
         var now = this.clock();
-        if (effects.Any(e => e.Kind == EffectKind.Damage && e.Amount > 0) &&
-            CreditsPlayer(srcKey, tgtKey, tid))
+        if (effects.Any(e => e.Kind == EffectKind.Damage && e.Amount > 0 &&
+            (e.Reflected ? CreditsPlayer(tgtKey, srcKey, sid) : CreditsPlayer(srcKey, tgtKey, tid))))
         {
             this.NoteDamage(now);
         }
@@ -599,7 +622,8 @@ internal sealed class MeterEngine
         int? tid,
         string ownerName)
     {
-        if (CreditsPlayer(srcKey, tgtKey, tid) && effects.Any(e => e.Kind != EffectKind.None))
+        if (effects.Any(e => e.Kind != EffectKind.None &&
+            (e.Reflected ? CreditsPlayer(tgtKey, srcKey, sid) : CreditsPlayer(srcKey, tgtKey, tid))))
         {
             enc.Last = now;
         }
@@ -611,22 +635,32 @@ internal sealed class MeterEngine
             src = this.CombatantFor(enc, sk, srcKey == sid ? fields[3] : ownerName);
         }
 
-        Combatant? tgt = null;
         foreach (var e in effects)
         {
             if (e.Kind == EffectKind.Damage)
             {
-                if (src != null)
+                var dealerKey = e.Reflected ? tgtKey : srcKey;
+                var victimKey = e.Reflected ? srcKey : tgtKey;
+                var victimId = e.Reflected ? sid : tid;
+                var victimName = e.Reflected ? fields[3] : fields[7];
+                var dealer = src;
+                if (e.Reflected)
                 {
-                    src.Damage += e.Amount;
+                    dealer = tgtKey is int reflector
+                        ? this.CombatantFor(enc, reflector, tgtKey == tid ? fields[7] : string.Empty)
+                        : null;
                 }
 
-                if (tgtKey is int tk && tk != srcKey && tk == tid)
+                if (dealer != null)
+                {
+                    dealer.Damage += e.Amount;
+                }
+
+                if (victimKey is int tk && tk != dealerKey && tk == victimId)
                 {
                     // Match ACT by excluding self damage and pet targets from damage taken.
                     // Enemies do not get meter rows.
-                    tgt ??= this.CombatantFor(enc, tk, fields[7]);
-                    tgt.DamageTaken += e.Amount;
+                    this.CombatantFor(enc, tk, victimName).DamageTaken += e.Amount;
                 }
             }
             else if (e.Kind == EffectKind.Heal)
@@ -894,7 +928,7 @@ internal sealed class MeterEngine
         Miss,
     }
 
-    private readonly record struct Effect(EffectKind Kind, int Amount, bool Crit, bool Dh);
+    private readonly record struct Effect(EffectKind Kind, int Amount, bool Crit, bool Dh, bool Reflected = false);
 
     /// <summary>Encounter duration ends at the last combat activity, excluding time until
     /// finalization. LastDamage is used only by the display view for idle
@@ -907,7 +941,7 @@ internal sealed class MeterEngine
             this.Start = start;
         }
 
-        internal string Title { get; }
+        internal string Title { get; set; }
 
         internal double Start { get; }
 

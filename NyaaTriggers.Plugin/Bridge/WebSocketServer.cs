@@ -426,17 +426,25 @@ internal sealed class WebSocketServer : IDisposable
         }
 
         var key = FindHeader(request, "Sec-WebSocket-Key");
-        var upgrade = FindHeader(request, "Upgrade");
+        var upgrade = FindHeader(request, "Upgrade", combine: true);
+        var connection = FindHeader(request, "Connection", combine: true);
+        var host = FindHeader(request, "Host");
         var version = FindHeader(request, "Sec-WebSocket-Version");
+        var requestLine = request.Split("\r\n", StringSplitOptions.None)[0].Split(' ');
 
         // Reject Origin headers to prevent browser pages from injecting callouts. The
         // program does not send this header.
         var origin = FindHeader(request, "Origin");
 
-        var ok = !string.IsNullOrEmpty(key)
+        var ok = key is { Length: 24 }
+                 && Convert.TryFromBase64String(key, new byte[16], out var keyBytes) && keyBytes == 16
                  && origin == null
-                 && request.StartsWith("GET ", StringComparison.Ordinal)
-                 && string.Equals(upgrade, "websocket", StringComparison.OrdinalIgnoreCase)
+                 && requestLine.Length == 3 && requestLine[0] == "GET" && requestLine[1].Length > 0
+                 && requestLine[1].All(c => c is > ' ' and < '\x7f')
+                 && requestLine[2] == "HTTP/1.1"
+                 && ValidHeaders(request)
+                 && !string.IsNullOrEmpty(host)
+                 && HasToken(upgrade, "websocket") && HasToken(connection, "Upgrade")
                  && version == "13";
 
         if (!ok)
@@ -505,14 +513,38 @@ internal sealed class WebSocketServer : IDisposable
                 return (null, true);
             }
 
-            return (Encoding.ASCII.GetString(buffer, 0, end), true);
+            return (Encoding.Latin1.GetString(buffer, 0, end), true);
         }
 
         return (null, true);   // Request headers exceeded the size limit.
     }
 
-    private static string? FindHeader(string request, string name)
+    private static bool HasToken(string? value, string token)
+        => value?.Split(',').Any(part => part.Trim(' ', '\t').Equals(token, StringComparison.OrdinalIgnoreCase)) == true;
+
+    private static bool ValidHeaders(string request)
     {
+        foreach (var line in request.Split("\r\n", StringSplitOptions.None).Skip(1))
+        {
+            var colon = line.IndexOf(':');
+            if (colon <= 0) return false;
+            for (var i = 0; i < colon; i++)
+            {
+                if (!char.IsAsciiLetterOrDigit(line[i]) && !"!#$%&'*+-.^_`|~".Contains(line[i])) return false;
+            }
+
+            for (var i = colon + 1; i < line.Length; i++)
+            {
+                if ((line[i] < ' ' && line[i] != '\t') || line[i] == '\x7f') return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string? FindHeader(string request, string name, bool combine = false)
+    {
+        string? value = null;
         foreach (var line in request.Split("\r\n", StringSplitOptions.None))
         {
             var colon = line.IndexOf(':');
@@ -521,13 +553,15 @@ internal sealed class WebSocketServer : IDisposable
                 continue;
             }
 
-            if (line.AsSpan(0, colon).Trim().Equals(name, StringComparison.OrdinalIgnoreCase))
+            if (line.AsSpan(0, colon).Equals(name, StringComparison.OrdinalIgnoreCase))
             {
-                return line[(colon + 1)..].Trim();
+                if (value != null && !combine) return string.Empty;
+                var part = line[(colon + 1)..].Trim(' ', '\t');
+                value = value == null ? part : value + "," + part;
             }
         }
 
-        return null;
+        return value;
     }
 
     private async Task ReadLoopAsync(Session session)
@@ -552,7 +586,8 @@ internal sealed class WebSocketServer : IDisposable
             var reserved = header[0] & 0x70;
             var opcode = header[0] & 0x0F;
             var masked = (header[1] & 0x80) != 0;
-            long length = header[1] & 0x7F;
+            var lengthCode = header[1] & 0x7F;
+            long length = lengthCode;
 
             if (length == 126)
             {
@@ -577,11 +612,18 @@ internal sealed class WebSocketServer : IDisposable
 
             // Reject reserved bits, unmasked frames and invalid control frames. Interleaved
             // control frames do not count toward the assembled message limit.
-            if (reserved != 0 || !masked || length < 0 || length > MaxMessageBytes ||
-                (control && (!fin || length > MaxControlPayload)) ||
-                (!control && assembled.Length + length > MaxMessageBytes))
+            if (reserved != 0 || !masked || length < 0 ||
+                opcode is not (0x0 or 0x1 or 0x2 or 0x8 or 0x9 or 0xA) ||
+                (lengthCode == 126 && length < 126) || (lengthCode == 127 && length <= ushort.MaxValue) ||
+                (control && (!fin || length > MaxControlPayload)))
             {
                 await CloseAsync(session, 1002).ConfigureAwait(false);
+                return;
+            }
+
+            if (length > MaxMessageBytes || (!control && assembled.Length + length > MaxMessageBytes))
+            {
+                await CloseAsync(session, 1009).ConfigureAwait(false);
                 return;
             }
 
@@ -626,7 +668,7 @@ internal sealed class WebSocketServer : IDisposable
                     break;
 
                 case 0x8:   // close
-                    await CloseAsync(session, 1000).ConfigureAwait(false);
+                    await CloseAsync(session, CloseReplyStatus(payload)).ConfigureAwait(false);
                     return;
 
                 case 0x9:   // ping
@@ -671,6 +713,31 @@ internal sealed class WebSocketServer : IDisposable
             assembled.SetLength(0);
             assembling = false;
         }
+    }
+
+    private static ushort CloseReplyStatus(byte[] payload)
+    {
+        if (payload.Length == 1) return 1002;
+        if (payload.Length >= 2)
+        {
+            var status = BinaryPrimitives.ReadUInt16BigEndian(payload);
+            if (status < 1000 || status >= 5000 || status is 1004 or 1005 or 1006 or 1015 ||
+                status is >= 1016 and < 3000)
+            {
+                return 1002;
+            }
+
+            try
+            {
+                StrictUtf8.GetCharCount(payload, 2, payload.Length - 2);
+            }
+            catch (DecoderFallbackException)
+            {
+                return 1007;
+            }
+        }
+
+        return 1000;
     }
 
     private static async Task<bool> ReadExactAsync(Stream stream, Memory<byte> into, CancellationToken token)

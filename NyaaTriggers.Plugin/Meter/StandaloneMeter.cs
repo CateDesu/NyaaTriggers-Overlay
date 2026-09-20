@@ -57,6 +57,9 @@ internal sealed class StandaloneMeter : IDisposable
     /// subscribe.</summary>
     private string lastZone = string.Empty;
     private long lastZoneId;
+    private string sessionZone = string.Empty;
+    private long sessionZoneId;
+    private bool hasSessionResult;
 
     internal StandaloneMeter(
         Configuration config, Func<bool> appConnected, Action<DpsState> applyLocal, Action clearLocal)
@@ -122,6 +125,7 @@ internal sealed class StandaloneMeter : IDisposable
                 if (raw == null)
                 {
                     this.engine.FeedLost();
+                    this.ResetEngine();
                 }
                 else
                 {
@@ -219,19 +223,7 @@ internal sealed class StandaloneMeter : IDisposable
 
         this.endpointBad = false;
 
-        // Start with fresh actor and zone state for each connection. Subscription events
-        // repopulate it.
-        this.engine = new MeterEngine(() => this.messageTime ?? Environment.TickCount64 / 1000.0);
-        this.engine.OnEncounterEnd = snap =>
-        {
-            // Apply each ending in order so a later empty pull cannot erase it.
-            this.feeding = true;
-            this.wasLive = false;
-            this.applyLocal(ToEndState(snap));
-        };
-
-        this.wasLive = false;
-        this.nextPush = 0;
+        this.ResetEngine();
 
         // Capture the source to reject callbacks from a replaced client.
         IinactClient? created = null;
@@ -243,6 +235,25 @@ internal sealed class StandaloneMeter : IDisposable
         }
 
         created.Start();
+    }
+
+    private void ResetEngine()
+    {
+        this.sessionZone = string.Empty;
+        this.sessionZoneId = 0;
+        this.hasSessionResult = false;
+        this.engine = new MeterEngine(() => this.messageTime ?? Environment.TickCount64 / 1000.0);
+        this.engine.OnEncounterEnd = snap =>
+        {
+            // Apply each ending in order so a later empty pull cannot erase it.
+            this.feeding = true;
+            this.wasLive = false;
+            this.hasSessionResult |= snap is { HasDamage: true };
+            this.applyLocal(ToEndState(snap));
+        };
+
+        this.wasLive = false;
+        this.nextPush = 0;
     }
 
     private void StopClient()
@@ -341,7 +352,11 @@ internal sealed class StandaloneMeter : IDisposable
                     break;
 
                 case "incombat":
-                    this.engine.SetInCombat(ReadBool(root, "inACTCombat"), ReadBool(root, "inGameCombat"));
+                    if (TryReadBool(root, "inACTCombat", out var inAct) &&
+                        TryReadBool(root, "inGameCombat", out var inGame))
+                    {
+                        this.engine.SetInCombat(inAct, inGame);
+                    }
                     break;
 
                 case "changeprimaryplayer":
@@ -367,40 +382,47 @@ internal sealed class StandaloneMeter : IDisposable
                     }
 
                     var zoneName = ReadString(root, "zoneName").Trim();
-                    if ((zoneId != 0 && zoneId != this.lastZoneId) ||
-                        (zoneId == 0 && zoneName.Length > 0 && zoneName != this.lastZone))
+                    var heldZoneChanged = zoneId != 0 && this.lastZoneId != 0
+                        ? zoneId != this.lastZoneId
+                        : zoneName.Length > 0 && this.lastZone.Length > 0 && zoneName != this.lastZone;
+                    var zoneChanged = zoneId != 0 && this.sessionZoneId != 0
+                        ? zoneId != this.sessionZoneId
+                        : zoneName.Length > 0 && this.sessionZone.Length > 0 && zoneName != this.sessionZone;
+                    if (zoneChanged)
                     {
-                        // Initial zone metadata may arrive after identity, which must be
-                        // preserved.
-                        if (zoneName.Length > 0)
-                        {
-                            if (!this.engine.HasZone)
-                            {
-                                this.engine.SetInitialZone(zoneName);
-                            }
-                            else
-                            {
-                                this.engine.Process(new[] { "01", "", "", zoneName });
-                            }
-                        }
-
-                        this.ClearDisplay();
+                        this.engine.Process(new[] { "01", "", "", zoneName });
+                        this.sessionZoneId = zoneId;
+                        this.sessionZone = zoneName;
                     }
                     else if (zoneName.Length > 0 && !this.engine.HasZone)
                     {
                         // Initialize the new engine's zone even when this replay was
                         // already deduplicated by the feed.
                         this.engine.SetInitialZone(zoneName);
+                        this.nextPush = 0;
+                    }
+
+                    if (zoneChanged || (heldZoneChanged && !this.engine.HasLiveDamage && !this.hasSessionResult))
+                    {
+                        this.ClearDisplay();
+                    }
+
+                    if (zoneChanged || heldZoneChanged)
+                    {
+                        this.lastZoneId = zoneId;
+                        this.lastZone = zoneName;
                     }
 
                     if (zoneId != 0)
                     {
                         this.lastZoneId = zoneId;
+                        this.sessionZoneId = zoneId;
                     }
 
                     if (zoneName.Length > 0)
                     {
                         this.lastZone = zoneName;
+                        this.sessionZone = zoneName;
                     }
 
                     break;
@@ -497,18 +519,25 @@ internal sealed class StandaloneMeter : IDisposable
             // Record this valid zone line so the matching ChangeZone event does not clear
             // twice.
             this.lastZone = fields[3].Trim();
+            this.sessionZone = this.lastZone;
             if (long.TryParse(
                     fields[2], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var zoneId))
             {
                 this.lastZoneId = zoneId;
             }
+            else
+            {
+                this.lastZoneId = 0;
+            }
 
+            this.sessionZoneId = this.lastZoneId;
             this.ClearDisplay();
         }
     }
 
     private void ClearDisplay()
     {
+        this.hasSessionResult = false;
         this.feeding = true;
         this.wasLive = false;
         this.applyLocal(new DpsState());
@@ -640,8 +669,14 @@ internal sealed class StandaloneMeter : IDisposable
         return id is > 0 and <= int.MaxValue ? (int)id : null;
     }
 
-    private static bool ReadBool(JsonElement root, string name)
-        => root.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True;
+    private static bool TryReadBool(JsonElement root, string name, out bool result)
+    {
+        result = false;
+        if (!root.TryGetProperty(name, out var value) ||
+            value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return false;
+        result = value.GetBoolean();
+        return true;
+    }
 
     private static long ReadLong(JsonElement root, string name)
     {

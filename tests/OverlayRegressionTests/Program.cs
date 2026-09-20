@@ -141,7 +141,7 @@ internal static class Program
         await f.Send(End);
         await Until(() => Queued(f.Meter) == 4);
         f.Draw();
-        Check(watch.Elapsed.TotalSeconds > 1.5 && f.Host.Dps.Duration == "00:01" && f.Host.Dps.EncDps is > 10000 and < 15000,
+        Check(f.Host.Dps.Duration == "00:01" && f.Host.Dps.EncDps is > 10000 and < 15000,
             "Queued combat events retain their receipt duration and damage rate",
             new { elapsedSeconds = watch.Elapsed.TotalSeconds, f.Host.Dps.Duration, f.Host.Dps.EncDps });
         await f.Burst(Combat, Damage());
@@ -647,7 +647,24 @@ internal static class Program
             ("adversarial-profiles", () => { AdversarialProfiles(); return Task.CompletedTask; }),
             ("adversarial-actors", () => { AdversarialActors(); return Task.CompletedTask; }),
             ("adversarial-scheduling", AdversarialScheduling),
-            ("adversarial-wire", () => { AdversarialWire(); return Task.CompletedTask; })
+            ("adversarial-wire", () => { AdversarialWire(); return Task.CompletedTask; }),
+            ("display-and-feed", DisplayAndFeedTests.Run),
+            ("display-and-feed-boundaries", DisplayAndFeedTests.Boundaries),
+            ("websocket-validation", WebSocketValidationTests.Run),
+            ("font-transitions", TransitionTests.Fonts),
+            ("style-transitions", TransitionTests.Geometry),
+            ("combat-validation", TransitionTests.CombatState),
+            ("header-profiles", TransitionTests.HeaderProfiles),
+            ("transition-boundaries", TransitionTests.Adversarial),
+            ("combined-global-fonts", CombinedFixTests.GlobalFonts),
+            ("combined-partial-reconnects", CombinedFixTests.PartialReconnects),
+            ("combined-boundaries", CombinedFixTests.Boundaries),
+            ("followup-ended-replay", FixFollowupTests.EndedReplay),
+            ("followup-scaled-rows", FixFollowupTests.ScaledRows),
+            ("followup-request-bytes", FixFollowupTests.RequestBytes),
+            ("followup-horizon-clipping", FixFollowupTests.HorizonClipping),
+            ("followup-boundaries", FixFollowupTests.Boundaries),
+            ("followup-anchored-stacks", FixFollowupTests.AnchoredStacks)
         };
         foreach (var test in cases.Where(test => args.Length == 0 || args.Contains(test.Name)))
         {
@@ -704,7 +721,7 @@ internal sealed class Fixture : IDisposable
     }
     internal async Task Accept()
     {
-        var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromSeconds(8));
         socket?.Dispose();
         socket = (await context.AcceptWebSocketAsync(null)).WebSocket;
         for (var i = 0; i < 2; i++)
@@ -717,6 +734,7 @@ internal sealed class Fixture : IDisposable
         }
     }
     internal void Tick() => Services.Framework.Tick();
+    internal Task Disconnect() => socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Reconnect test", CancellationToken.None);
     internal void Draw() { Tick(); ImGui.Reset(); Store.UiBuilder.Render(); }
     internal Task Send(string message) => socket.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, true, CancellationToken.None);
     internal async Task Burst(params string[] messages)

@@ -266,7 +266,7 @@ internal sealed class Configuration : IPluginConfiguration
 
     public Vector4 TimelineTextColor { get; set; } = new(0.95f, 0.95f, 0.98f, 1.00f);
 
-    /// <summary>Row height before text scaling.</summary>
+    /// <summary>Minimum row height before text scaling.</summary>
     public float TimelineBarHeight { get; set; } = 22.0f;
 
     public float TimelineBarSpacing { get; set; } = 4.0f;
@@ -467,13 +467,28 @@ internal sealed class Configuration : IPluginConfiguration
 
     /// <summary>Supports {title}, {duration} and {dps}. Empty uses the default layout with
     /// dot separators.</summary>
-    public string DpsHeaderFormat { get; set; } = string.Empty;
+    public string DpsHeaderFormat
+    {
+        get;
+        set
+        {
+            // Imported formats use the same length limit as the text editor.
+            var text = value ?? string.Empty;
+            var length = Math.Min(text.Length, 128);
+            if (length < text.Length && char.IsHighSurrogate(text[length - 1]) && char.IsLowSurrogate(text[length]))
+            {
+                length--;
+            }
+
+            field = text[..length];
+        }
+    } = string.Empty;
 
     /// <summary>Limits display rows in every style. The feed can supply a full
     /// alliance.</summary>
     public int DpsMaxRows { get; set; } = 8;
 
-    /// <summary>Row height before text scaling.</summary>
+    /// <summary>Minimum row height before text scaling.</summary>
     public float DpsBarHeight { get; set; } = 22.0f;
 
     public float DpsBarSpacing { get; set; } = 4.0f;
@@ -536,7 +551,7 @@ internal sealed class Configuration : IPluginConfiguration
     /// equally.</summary>
     public float DpsHorizMaxBarWidth { get; set; } = 140.0f;
 
-    /// <summary>Bar height before text scaling.</summary>
+    /// <summary>Minimum bar height before text scaling.</summary>
     public float DpsHorizBarHeight { get; set; } = 32.0f;
 
     /// <summary>Skew angle in degrees. Zero produces a rectangle.</summary>

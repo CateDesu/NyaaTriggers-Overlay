@@ -206,23 +206,10 @@ internal sealed class AlertsWindow : OverlayWindow
     private DrawItem MakeItem(string text, Vector4 color, float alpha, bool isAlarm, float scale, float life)
     {
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        if (scale > 1.0f)
+        using (this.UseFont(this.TextPx * scale))
         {
-            var handle = this.Fonts.Get(this.TextPx * scale);
-            if (handle is { Available: true })
-            {
-                using (handle.Push())
-                {
-                    return this.MakeItemMeasured(text, color, alpha, isAlarm, scale, life, width);
-                }
-            }
-
-            // Approximate the target layout with scaled dimensions until the font is ready.
-            var item = this.MakeItemMeasured(text, color, alpha, isAlarm, scale, life, width / scale);
-            return item with { LineHeight = item.LineHeight * scale };
+            return this.MakeItemMeasured(text, color, alpha, isAlarm, scale, life, width);
         }
-
-        return this.MakeItemMeasured(text, color, alpha, isAlarm, scale, life, width);
     }
 
     private DrawItem MakeItemMeasured(
@@ -287,34 +274,7 @@ internal sealed class AlertsWindow : OverlayWindow
                 4.0f);
         }
 
-        // Use the alarm font when ready, or scale the current font to match its reserved
-        // height.
-        if (item.Scale > 1.0f)
-        {
-            var handle = this.Fonts.Get(this.TextPx * item.Scale);
-            if (handle is { Available: true })
-            {
-                using (handle.Push())
-                {
-                    this.DrawAlertLines(drawList, item, origin, width);
-                }
-            }
-            else
-            {
-                var fontSize = ImGui.GetFont().FontSize;
-                var restore = fontSize > 0.0f ? this.TextPx / fontSize : 1.0f;
-                ImGui.SetWindowFontScale(restore * item.Scale);
-                try
-                {
-                    this.DrawAlertLines(drawList, item, origin, width);
-                }
-                finally
-                {
-                    ImGui.SetWindowFontScale(restore);
-                }
-            }
-        }
-        else
+        using (this.UseFont(this.TextPx * item.Scale))
         {
             this.DrawAlertLines(drawList, item, origin, width);
         }

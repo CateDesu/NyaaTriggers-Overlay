@@ -81,8 +81,9 @@ namespace Dalamud.Bindings.ImGui
     }
     public enum ImGuiCond { Always, FirstUseEver }
     public enum ImGuiCol { WindowBg }
+    public enum ImGuiStyleVar { ItemSpacing }
     public enum ImDrawFlags { None }
-    public readonly record struct ImFontPtr(float FontSize);
+    public readonly record struct ImFontPtr(float FontSize, float Scale = 1);
     public readonly record struct ImGuiStylePtr(Vector2 WindowPadding);
     public readonly record struct DrawCommand(string Kind, string? Text, Vector2 A, Vector2 B);
 
@@ -91,18 +92,23 @@ namespace Dalamud.Bindings.ImGui
         public static readonly List<DrawCommand> Commands = new();
         public static Vector2 Cursor;
         public static float FontScale = 1;
-        public static void Reset() { Commands.Clear(); Cursor = Vector2.Zero; FontScale = 1; }
+        private static Vector2 itemSpacing = new(8, 4);
+        private static readonly Stack<Vector2> SpacingStack = new();
+        public static void Reset() { Commands.Clear(); SpacingStack.Clear(); itemSpacing = new(8, 4); Cursor = Vector2.Zero; FontScale = 1; }
         public static Vector2 CalcTextSize(string text) => new(text.Length * 7 * FontScale, 16 * FontScale);
         public static float GetTextLineHeight() => 16 * FontScale;
         public static ImFontPtr GetFont() => new(16);
+        public static float GetFontSize() => 16 * FontScale;
         public static ImGuiStylePtr GetStyle() => new(new Vector2(8));
         public static ImDrawListPtr GetWindowDrawList() => new();
         public static Vector2 GetContentRegionAvail() => new(1600, 900);
         public static Vector2 GetCursorScreenPos() => Cursor;
         public static Vector2 GetWindowPos() => Vector2.Zero;
         public static Vector2 GetWindowSize() => new(1600, 900);
-        public static void Dummy(Vector2 size) => Cursor += new Vector2(0, size.Y);
+        public static void Dummy(Vector2 size) => Cursor = new(Cursor.X, MathF.Truncate(Cursor.Y + size.Y + itemSpacing.Y));
         public static void SetWindowFontScale(float scale) => FontScale = scale;
+        public static void PushStyleVar(ImGuiStyleVar style, Vector2 value) { SpacingStack.Push(itemSpacing); itemSpacing = value; }
+        public static void PopStyleVar() => itemSpacing = SpacingStack.Pop();
         public static void SetNextWindowBgAlpha(float alpha) { }
         public static uint ColorConvertFloat4ToU32(Vector4 color) => 0xffffffff;
         public static uint GetColorU32(Vector4 color) => ColorConvertFloat4ToU32(color);

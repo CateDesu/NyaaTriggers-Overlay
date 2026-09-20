@@ -104,6 +104,8 @@ The program already had reconnect handling for talking to IINACT, and the same c
   evict the program. A local process that completes handshakes can replace it by design.
 - A handshake gets 5 seconds, then the slot is reclaimed. An older accepted socket cannot take
   ownership after a newer session has connected, even if that newer session has disconnected.
+- Header parsing preserves the original bytes so invalid request characters cannot become ASCII
+  replacements before validation. Only spaces and tabs pad handshake field values.
 - TCP keepalive is on (30s idle, then 3 probes 10s apart), so a half-open peer dies in about a
   minute instead of the OS default of hours.
 - Any handshake carrying an `Origin` header is refused. WebSocket is exempt from the same-origin
@@ -209,8 +211,14 @@ Encounter endings and zone clears are applied in arrival order within each updat
 empty encounter cannot cancel a zone clear or discard the newest completed pull.
 
 Applying a different feed endpoint clears the old standalone result. Cached initial zone data
-preserves the local identity delivered by the subscription. Combatant snapshots use the same
+preserves the local identity delivered by the subscription, including after reconnects.
+Zone IDs and names may arrive separately. Additional metadata fills in the current encounter,
+while a changed known ID clears it even before the new name arrives. Reconnects track new zone
+metadata separately from the zone attached to held rows. Delayed initial metadata preserves a
+completed pull from the new session too. A real zone boundary or another reconnect resets that
+protection. Combatant snapshots use the same
 player ID range as spawn lines so NPC jobs cannot enter player totals.
+Combat state events require both boolean flags. Missing or malformed flags leave the active pull intact.
 
 The snapshot carries the top 24 damage rows and the local row if ranked lower. Solo and self-first
 views keep that row's original rank. Each encounter and display segment retain at most 1024 actor
@@ -221,8 +229,10 @@ It starts a new individual row, so individual history
 and ranks are limited in that case. The next display segment starts clean.
 
 Appearance profiles export only settings they can apply. Copying a profile saved by an older
-build removes its connection and placement fields. Loaded and imported dimensions are bounded
+build removes its connection and placement fields. Loaded, imported and manually entered dimensions are bounded
 to the supported settings ranges before drawing.
+Header formats keep the text editor's 128 character limit when loaded or imported. Token values
+are inserted once, so text inside a title or duration cannot expand more tokens.
 
 `tests/MeterEngineTests` is a dependency-free harness that drives the engine with synthetic log
 lines, including the wire-decode examples from `dps_meter.py`'s docstring. Run it with
@@ -249,7 +259,17 @@ python3 tests/test_release_channel.py
 
 This suite includes the production plugin lifecycle and all windows with recording service
 adapters. It exercises suppressed drawing, delayed queues, concurrent updates, session changes,
-profile sharing, extreme geometry and actor retention. Release tests use a recording GitHub CLI
+profile sharing, extreme geometry and actor retention. It also checks moved meter rows, font loading,
+large icons, split zone metadata, reflected damage and malformed WebSocket handshakes and frames.
+Font checks cover cached fonts becoming available at different times, nested caption scales,
+global UI scaling, custom font scales, alarm wrapping and recovery after drawing errors.
+Bar heights are minimums and expand to fit text in DPS and timeline windows. Regression checks
+cover consecutive rows, Horizon clip bounds and fonts becoming available at different times.
+Overlays reserve their own gaps and suppress implicit ImGui item spacing while drawing.
+Both drawing adapters include that spacing and cursor pixel alignment in their layout calculations.
+Placement checks include changing meter styles
+while unlocking at different UI scales.
+Release tests use a recording GitHub CLI
 substitute and do not publish or delete live releases.
 
 ## Status

@@ -792,9 +792,9 @@ internal sealed class ConfigWindow : Window
     private void Slider(string label, float min, float max, string format, Func<float> get, Action<float> set)
     {
         var value = get();
-        if (ImGui.SliderFloat(label, ref value, min, max, format))
+        if (ImGui.SliderFloat(label, ref value, min, max, format) && float.IsFinite(value))
         {
-            set(value);
+            set(Math.Clamp(value, min, max));
         }
 
         this.SaveIfDragEnded();
@@ -805,7 +805,7 @@ internal sealed class ConfigWindow : Window
         var value = get();
         if (ImGui.SliderInt(label, ref value, min, max))
         {
-            set(value);
+            set(Math.Clamp(value, min, max));
         }
 
         this.SaveIfDragEnded();
@@ -817,9 +817,9 @@ internal sealed class ConfigWindow : Window
         string label, Func<float> get, Action<float> set, float min = 0.0f, float max = 100.0f)
     {
         var value = get() * 100.0f;
-        if (ImGui.SliderFloat(label, ref value, min, max, "%.0f%%"))
+        if (ImGui.SliderFloat(label, ref value, min, max, "%.0f%%") && float.IsFinite(value))
         {
-            set(value / 100.0f);
+            set(Math.Clamp(value, min, max) / 100.0f);
         }
 
         this.SaveIfDragEnded();

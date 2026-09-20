@@ -64,6 +64,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var window = Math.Max(this.Config.TimelineWindow, 1.0f);
         var max = Math.Clamp(this.Config.TimelineRows, 1, 12);
         var clock = this.bridge.Clock;
+        var height = Math.Max(Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale), MathF.Ceiling(ImGui.GetTextLineHeight()));
 
         // Collect rows first so bottom placement can use the full stack height.
         var rows = this.rows;
@@ -114,8 +115,7 @@ internal sealed class TimelineWindow : OverlayWindow
         if (this.Config.TimelineAnchorBottom)
         {
             var spacing = Math.Max(this.Config.TimelineBarSpacing, 0.0f);
-            var total = rows.Count *
-                ((Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale)) + spacing);
+            var total = rows.Count * (height + spacing);
             if (clockLine)
             {
                 total += ImGui.GetTextLineHeight() + spacing;
@@ -135,7 +135,7 @@ internal sealed class TimelineWindow : OverlayWindow
 
         foreach (var row in rows)
         {
-            this.DrawBar(row.Label, row.Remaining, window, row.Fired, row.Kind);
+            this.DrawBar(row.Label, row.Remaining, window, row.Fired, row.Kind, height);
         }
     }
 
@@ -183,12 +183,11 @@ internal sealed class TimelineWindow : OverlayWindow
             (total % 60).ToString("D2", CultureInfo.InvariantCulture));
     }
 
-    private void DrawBar(string label, float remaining, float window, bool fired, string kind)
+    private void DrawBar(string label, float remaining, float window, bool fired, string kind, float height)
     {
         var drawList = ImGui.GetWindowDrawList();
         var origin = ImGui.GetCursorScreenPos();
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale);
         var rounding = Math.Min(Math.Max(this.Config.TimelineBarRounding, 0.0f), height * 0.5f);
 
         // Fired cues flash as full bars in either fill mode.

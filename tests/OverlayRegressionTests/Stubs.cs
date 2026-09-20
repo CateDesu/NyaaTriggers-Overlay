@@ -103,7 +103,7 @@ namespace Dalamud.Interface.Utility
 {
     public static class ImGuiHelpers
     {
-        public static float GlobalScale => 1;
+        public static float GlobalScale { get; set; } = 1;
     }
 }
 
@@ -119,39 +119,50 @@ namespace Dalamud.Bindings.ImGui
     }
     public enum ImGuiCond { Always, FirstUseEver }
     public enum ImGuiCol { WindowBg }
+    public enum ImGuiStyleVar { ItemSpacing }
     public enum ImDrawFlags { None }
     public enum ImGuiTreeNodeFlags { DefaultOpen }
     [Flags] public enum ImGuiColorEditFlags { NoInputs = 1, AlphaBar = 2 }
     public readonly record struct ImGuiViewportPtr(Vector2 Pos, Vector2 Size);
-    public readonly record struct ImFontPtr(float FontSize);
-    public readonly record struct ImGuiStylePtr(Vector2 WindowPadding);
+    public readonly record struct ImFontPtr(float FontSize, float Scale = 1);
+    public readonly record struct ImGuiStylePtr(Vector2 WindowPadding, Vector2 ItemSpacing);
     public readonly record struct DrawCommand(string Kind, string? Text, Vector2 A, Vector2 B);
 
     public static class ImGui
     {
         public static readonly List<DrawCommand> Commands = new();
+        public static readonly List<(Vector2 Min, Vector2 Max)> ClipRects = new();
+        public static Vector2 ItemSpacing = new(8, 4);
+        private static readonly Stack<Vector2> SpacingStack = new();
         public static Vector2 Cursor;
         public static float FontScale = 1;
+        public static float FontBaseSize = 16;
+        public static float FontMultiplier = 1;
+        public static Vector2 WindowPosition;
+        public static Vector2 WindowSize = new(1600, 900);
+        public static string? ThrowForText;
         public static Vector2 Available = new(1600, 900);
         public static int Disabled;
         public static readonly List<(string Label, bool Disabled)> Buttons = new();
-        public static void Reset() { Commands.Clear(); Cursor = Vector2.Zero; FontScale = 1; }
-        public static Vector2 CalcTextSize(string text) => new(text.Split('\n').Max(line => line.Length) * 7 * FontScale, text.Split('\n').Length * 16 * FontScale);
-        public static float GetTextLineHeight() => 16 * FontScale;
-        public static ImFontPtr GetFont() => new(16);
-        public static ImGuiStylePtr GetStyle() => new(new Vector2(8));
+        public static void Reset() { Commands.Clear(); ClipRects.Clear(); SpacingStack.Clear(); ItemSpacing = new(8, 4); Cursor = Vector2.Zero; FontScale = 1; FontBaseSize = 16; FontMultiplier = 1; }
+        public static Vector2 CalcTextSize(string text) => new(text.Split('\n').Max(line => line.Length) * 7 * GetFontSize() / 16, text.Split('\n').Length * GetFontSize());
+        public static float GetTextLineHeight() => GetFontSize();
+        public static ImFontPtr GetFont() => new(FontBaseSize, FontMultiplier);
+        public static ImGuiStylePtr GetStyle() => new(new Vector2(8), ItemSpacing);
         public static ImDrawListPtr GetWindowDrawList() => new();
         public static Vector2 GetContentRegionAvail() => Available;
         public static Vector2 GetCursorScreenPos() => Cursor;
-        public static Vector2 GetWindowPos() => Vector2.Zero;
-        public static Vector2 GetWindowSize() => new(1600, 900);
-        public static void Dummy(Vector2 size) => Cursor += new Vector2(0, size.Y);
+        public static Vector2 GetWindowPos() => WindowPosition;
+        public static Vector2 GetWindowSize() => WindowSize;
+        public static void Dummy(Vector2 size) => Cursor = new(Cursor.X, MathF.Truncate(Cursor.Y + size.Y + ItemSpacing.Y));
+        public static void PushStyleVar(ImGuiStyleVar style, Vector2 value) { SpacingStack.Push(ItemSpacing); ItemSpacing = value; }
+        public static void PopStyleVar() => ItemSpacing = SpacingStack.Pop();
         public static void SetWindowFontScale(float scale) => FontScale = scale;
         public static void SetNextWindowBgAlpha(float alpha) { }
         public static uint ColorConvertFloat4ToU32(Vector4 color) => 0xffffffff;
         public static uint GetColorU32(Vector4 color) => ColorConvertFloat4ToU32(color);
         public static uint GetColorU32(ImGuiCol color, float alpha) => 0xffffffff;
-        public static float GetFontSize() => 16 * FontScale;
+        public static float GetFontSize() => Math.Max(1, FontBaseSize * FontMultiplier * Dalamud.Interface.Utility.ImGuiHelpers.GlobalScale) * FontScale;
         public static float GetFrameHeightWithSpacing() => 22;
         public static ImGuiViewportPtr GetMainViewport() => new(Vector2.Zero, Available);
         public static bool IsRectVisible(Vector2 a, Vector2 b) => true;
@@ -177,8 +188,22 @@ namespace Dalamud.Bindings.ImGui
         public static bool InputInt(string label, ref int value) => false;
         public static bool InputText(string label, ref string value, uint size) => false;
         public static bool InputTextWithHint(string label, string hint, ref string value, uint size) => false;
-        public static bool SliderFloat(string label, ref float value, float min, float max, string format) => false;
-        public static bool SliderInt(string label, ref int value, int min, int max) => false;
+        public static float? FloatInput;
+        public static int? IntInput;
+        public static bool SliderFloat(string label, ref float value, float min, float max, string format)
+        {
+            if (FloatInput is not float input) return false;
+            value = input;
+            FloatInput = null;
+            return true;
+        }
+        public static bool SliderInt(string label, ref int value, int min, int max)
+        {
+            if (IntInput is not int input) return false;
+            value = input;
+            IntInput = null;
+            return true;
+        }
         public static bool Combo(string label, ref int value, string[] names, int count) => false;
         public static bool ColorEdit4(string label, ref Vector4 value, ImGuiColorEditFlags flags) => false;
         public static bool IsItemDeactivatedAfterEdit() => false;
@@ -194,7 +219,10 @@ namespace Dalamud.Bindings.ImGui
     public readonly struct ImDrawListPtr
     {
         public void AddText(Vector2 position, uint color, string text)
-            => ImGui.Commands.Add(new("text", text, position, position));
+        {
+            if (text == ImGui.ThrowForText) throw new ArithmeticException("Forced drawing failure");
+            ImGui.Commands.Add(new("text", text, position, position + ImGui.CalcTextSize(text)));
+        }
         public void AddRectFilled(Vector2 min, Vector2 max, uint color, float rounding = 0)
             => ImGui.Commands.Add(new("rect", null, min, max));
         public void AddRect(Vector2 min, Vector2 max, uint color, float rounding = 0,
@@ -211,7 +239,7 @@ namespace Dalamud.Bindings.ImGui
         }
         public void AddImage(nint texture, Vector2 a, Vector2 b, Vector2 uv1, Vector2 uv2, uint color)
             => ImGui.Commands.Add(new("image", null, a, b));
-        public void PushClipRect(Vector2 a, Vector2 b, bool intersect) { }
+        public void PushClipRect(Vector2 a, Vector2 b, bool intersect) => ImGui.ClipRects.Add((a, b));
         public void PopClipRect() { }
     }
 }
@@ -248,12 +276,14 @@ namespace Dalamud.Interface.Windowing
         public void AddWindow(Window window) => windows.Add(window);
         public void RemoveAllWindows() => windows.Clear();
         internal static Action? BeforeDraw;
+        internal static Action<Window>? AfterPreDraw;
         public void Draw()
         {
             BeforeDraw?.Invoke();
             foreach (var window in windows.Where(window => window.IsOpen))
             {
                 window.PreDraw();
+                AfterPreDraw?.Invoke(window);
                 window.Draw();
             }
         }
@@ -264,14 +294,33 @@ namespace NyaaTriggers.Plugin.Ui
 {
     internal sealed class ScaledFonts : IDisposable
     {
-        internal IFontHandle? Get(float size) => null;
+        internal Func<float, float?>? AvailableSize;
+        internal IFontHandle? Get(float size)
+            => this.AvailableSize?.Invoke(size) is float pixels ? new TestFont(pixels) : null;
         internal int Generation => 0;
         public void Dispose() { }
+    }
+    internal sealed class TestFont(float pixels) : IFontHandle
+    {
+        public bool Available => true;
+        public IDisposable Push()
+        {
+            var restore = new RestoreFont(ImGui.FontBaseSize, ImGui.FontMultiplier);
+            ImGui.FontBaseSize = pixels;
+            ImGui.FontMultiplier = 1;
+            return restore;
+        }
+
+        private sealed class RestoreFont(float pixels, float multiplier) : IDisposable
+        {
+            public void Dispose() { ImGui.FontBaseSize = pixels; ImGui.FontMultiplier = multiplier; }
+        }
     }
     internal sealed class TestIcon { internal nint Handle => 1; }
     internal static class JobIcons
     {
-        internal static TestIcon? Get(string job) => null;
+        internal static bool Available;
+        internal static TestIcon? Get(string job) => Available ? new TestIcon() : null;
     }
 }
 
