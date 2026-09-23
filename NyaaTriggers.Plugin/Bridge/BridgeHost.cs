@@ -16,17 +16,20 @@ internal enum Severity
 
 internal readonly record struct TimelineEntry(float Time, string Label, string Kind);
 
-internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0);
+internal readonly record struct DpsRow(string Name, string Job, double Dps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0)
+{
+    internal CombatStats? Stats { get; init; }
+}
 
-/// <summary>Replaced as a whole so drawing never sees a partially updated DPS
-/// frame.</summary>
 internal sealed class DpsState
 {
+    internal string Id { get; init; } = string.Empty;
+    internal string Zone { get; init; } = string.Empty;
+    internal double EncHps { get; init; }
+    internal int Participants { get; init; }
     internal bool Show { get; init; }
 
-    /// <summary>Keeps the final rows available to the hold option, even if the last live
-    /// frame and ending arrive in one update. Wipe cleanup preserves them. A zone reset
-    /// clears them.</summary>
+    /// <summary>Retain final rows even when live and ending frames arrive in one update.</summary>
     internal bool Ended { get; init; }
 
     internal string Title { get; init; } = string.Empty;
@@ -52,8 +55,6 @@ internal sealed class ActiveAlert
     /// <summary>Reset on a merged repeat to restart the entry animation.</summary>
     internal required long ShownAt { get; set; }
 
-    /// <summary>Repeat count for the current top callout. The counter is displayed only
-    /// above one.</summary>
     internal int Count { get; set; } = 1;
 }
 
@@ -61,28 +62,20 @@ internal sealed class ActiveAlert
 /// state lock shared with drawing and settings.</summary>
 internal sealed class BridgeHost : IDisposable
 {
-    /// <summary>Increment for incompatible protocol changes. The program checks this in the
-    /// greeting.</summary>
+    /// <summary>Increment for incompatible protocol changes.</summary>
     internal const int ProtocolVersion = 1;
 
-    /// <summary>Limits message processing to avoid stalling the render thread.</summary>
     private const int MaxMessagesPerFrame = 64;
 
     private const int MaxAlerts = 8;
 
-    /// <summary>Allows complete timelines with hundreds of entries while bounding retained
-    /// state.</summary>
     private const int MaxTimelineEntries = 1024;
 
-    /// <summary>A full alliance. The display setting may show fewer rows.</summary>
     private const int MaxDpsRows = 24;
 
-    /// <summary>Bounds text measured and drawn every frame, independently of the wire size
-    /// limit.</summary>
+    /// <summary>Bound layout work independently of wire size.</summary>
     private const int MaxTextChars = 256;
 
-    /// <summary>Maximum wait in milliseconds for background server disposal during
-    /// unload.</summary>
     private const int DrainWaitMs = 4000;
 
     internal object StateLock { get; } = new();
@@ -95,27 +88,19 @@ internal sealed class BridgeHost : IDisposable
     private readonly List<TimelineEntry> timeline = new();
     private readonly List<ActiveAlert> alerts = new();
 
-    /// <summary>Runs when no program session is connected. Updated under the UI state
-    /// lock.</summary>
     private readonly StandaloneMeter standalone;
 
-    /// <summary>Makes server replacement, source checks and inbox writes atomic with
-    /// shutdown.</summary>
+    /// <summary>Keep replacement, source checks and inbox writes atomic with shutdown.</summary>
     private readonly object serverLock = new();
 
-    /// <summary>Unload waits for these server tasks so their callbacks can
-    /// finish.</summary>
     private readonly List<Task> pendingDrains = new();
 
     /// <summary>Read by socket threads without taking serverLock.</summary>
     private volatile WebSocketServer? server;
 
-    /// <summary>Current session sequence, guarded by serverLock. Rejects late messages and
-    /// disconnects from replaced sessions on the same server.</summary>
+    /// <summary>Reject late events from replaced sessions on the same server.</summary>
     private long currentSession;
 
-    /// <summary>Fight time at <see cref="clockStamp"/>, interpolated between program
-    /// ticks.</summary>
     private double clockBase;
     private long clockStamp;
     private bool clockRunning;
@@ -126,8 +111,7 @@ internal sealed class BridgeHost : IDisposable
         this.standalone = new StandaloneMeter(config, () => this.IsConnected, this.ApplyLocalDps, this.ClearLocalDps);
     }
 
-    /// <summary>Read from the current server so an old callback cannot leave a stale
-    /// connection flag.</summary>
+    /// <summary>Read current state so old callbacks cannot leave a stale flag.</summary>
     internal bool IsConnected => this.server?.IsConnected ?? false;
 
     internal string? LastError => this.server?.LastError;
@@ -136,26 +120,51 @@ internal sealed class BridgeHost : IDisposable
 
     internal IReadOnlyList<ActiveAlert> Alerts => this.alerts;
 
-    internal DpsState Dps { get; private set; } = new();
+    private DpsState dps = new();
+    internal DpsState UnheldDps { get; private set; } = new();
+    private readonly List<DpsState> dpsHistory = new();
+    internal IReadOnlyList<DpsState> DpsHistory => this.dpsHistory;
+
+    internal DpsState Dps
+    {
+        get => this.dps;
+        private set
+        {
+            if (value.Ended && value.HasDamage && value.Rows.Count > 0)
+            {
+                var previous = this.dpsHistory.Count > 0 ? this.dpsHistory[0] : null;
+                if (previous != null && ((!string.IsNullOrEmpty(value.Id) && previous.Id == value.Id)
+                    || (string.IsNullOrEmpty(value.Id) && this.dps.Ended)))
+                {
+                    this.dpsHistory[0] = value;
+                }
+                else
+                {
+                    this.dpsHistory.Insert(0, value);
+                    if (this.dpsHistory.Count > 20) this.dpsHistory.RemoveAt(20);
+                }
+            }
+
+            this.dps = value;
+            this.UnheldDps = value;
+        }
+    }
 
     private DpsState? lastLocal;
 
-    /// <summary>Retains the latest program snapshot for endings from older programs.
-    /// Legacy clears preserve it for wipe sequences. Explicit zone clears discard it.</summary>
+    /// <summary>Snapshot for legacy endings. Survives legacy wipe clears, but not explicit zone clears.</summary>
     private DpsState? lastLive;
 
     internal double Clock => this.clockRunning
         ? this.clockBase + ((Environment.TickCount64 - this.clockStamp) / 1000.0)
         : this.clockBase;
 
-    /// <summary>Keeps the timeline clock hidden until the first tick.</summary>
     internal bool ClockRunning => this.clockRunning;
 
     internal void Start()
     {
         this.Stop();
 
-        // Capture the source to reject callbacks from a replaced server.
         WebSocketServer? created = null;
         created = new WebSocketServer(
             this.config.Port,
@@ -179,8 +188,7 @@ internal sealed class BridgeHost : IDisposable
         // Preserve only rows still owned by the independent standalone feed.
         this.ClearState(resetDps: !ReferenceEquals(this.Dps, this.lastLocal));
         this.lastLive = null;
-        // Discard queued frames from the old server. Keep this out of ClearState because a
-        // zone change queues a fresh timeline immediately after clear.
+        // ClearState must keep queued frames because zone changes send a timeline after clear.
         this.inbox.Clear();
 
         if (old == null)
@@ -188,9 +196,7 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Dispose in the background because settings apply on the render thread. Old
-        // callbacks are already rejected, and unload waits for disposal. A port rebind may
-        // need a retry if the old listener has not closed yet.
+        // Keep disposal off the render thread. Unload waits, but a port rebind may need a retry.
         var drain = Task.Run(old.Dispose);
         lock (this.serverLock)
         {
@@ -199,9 +205,7 @@ internal sealed class BridgeHost : IDisposable
         }
     }
 
-    /// <summary>Queue socket messages under serverLock. Source and session checks must be
-    /// atomic with replacement and inbox clearing so stale frames cannot arrive after a
-    /// reset.</summary>
+    /// <summary>Reject stale frames atomically with replacement and inbox clearing.</summary>
     private void Receive(WebSocketServer source, long sequence, string raw)
     {
         var overloaded = false;
@@ -229,7 +233,6 @@ internal sealed class BridgeHost : IDisposable
         }
     }
 
-    /// <summary>Rebind after a port change.</summary>
     internal void Restart() => this.Start();
 
     internal void RestartStandalone() => this.standalone.Restart();
@@ -238,22 +241,20 @@ internal sealed class BridgeHost : IDisposable
 
     internal string StandaloneStatusText => this.standalone.Status;
 
-    /// <summary>Apply standalone frames only while the program is disconnected.</summary>
     private void ApplyLocalDps(DpsState state)
     {
-        if (!this.IsConnected && !this.KeepFinalDps(state))
-        {
-            this.Dps = state;
-            this.lastLocal = state;
-        }
+        if (this.IsConnected) return;
+        this.UnheldDps = state;
+        if (this.KeepFinalDps(state)) return;
+        this.Dps = state;
+        this.lastLocal = state;
     }
 
     private bool KeepFinalDps(DpsState next)
-        => this.config.DpsHoldLast && this.Dps.Ended && this.Dps.Rows.Count > 0
+        => this.config.HoldFinalMeter && this.Dps.Ended && this.Dps.Rows.Count > 0
             && (next.Show || next.Ended) && !next.HasDamage;
 
-    /// <summary>Clear only the state the standalone feed still owns.
-    /// A program frame applied earlier in this update must survive.</summary>
+    /// <summary>A program frame applied earlier in this update must survive.</summary>
     private void ClearLocalDps()
     {
         if (ReferenceEquals(this.Dps, this.lastLocal))
@@ -266,8 +267,7 @@ internal sealed class BridgeHost : IDisposable
 
     private void OnConnectionChanged(WebSocketServer source, long sequence, bool connected)
     {
-        // Keep the source check and enqueue atomic with Stop so an old disconnect cannot
-        // clear the new server state.
+        // An old disconnect must not clear state after Stop replaces the server.
         lock (this.serverLock)
         {
             if (!ReferenceEquals(source, this.server))
@@ -277,7 +277,6 @@ internal sealed class BridgeHost : IDisposable
 
             if (connected)
             {
-                // Reject a session start that was overtaken by a newer session.
                 if (sequence <= this.currentSession)
                 {
                     return;
@@ -285,14 +284,12 @@ internal sealed class BridgeHost : IDisposable
 
                 this.currentSession = sequence;
 
-                // New session frames arrive after this callback, so the old backlog can be
-                // cleared.
+                // New session frames arrive after this callback.
                 this.inbox.Clear();
                 this.inbox.TryEnqueue(null);
                 return;
             }
 
-            // An old disconnect must not clear the current session.
             if (sequence != this.currentSession)
             {
                 return;
@@ -303,15 +300,12 @@ internal sealed class BridgeHost : IDisposable
         }
     }
 
-    /// <summary>Return the greeting so the server can queue it before publishing the
-    /// session. This guarantees it is the first frame.</summary>
     private string? Greeting(WebSocketServer source)
         => ReferenceEquals(source, this.server)
             ? $"{{\"ev\":\"hello\",\"protocol\":{ProtocolVersion}," +
               $"\"plugin\":{JsonSerializer.Serialize(PluginVersion.Value)},\"dpsRetention\":true}}"
             : null;
 
-    /// <summary>Drain the inbox and expire stale alerts. Serialized with drawing and settings.</summary>
     internal void Update()
     {
         lock (this.StateLock) this.UpdateState();
@@ -358,8 +352,6 @@ internal sealed class BridgeHost : IDisposable
         var now = Environment.TickCount64;
         this.alerts.RemoveAll(a => a.ExpiresAt <= now);
 
-        // Process standalone updates last. ApplyLocalDps rejects them while a program
-        // session is connected.
         this.standalone.Update();
     }
 
@@ -387,7 +379,6 @@ internal sealed class BridgeHost : IDisposable
         switch (command.GetString())
         {
             case "tick":
-                // Invalid ticks must not reset the fight clock to zero.
                 if (root.TryGetProperty("t", out var tick) && TryFinite(tick, out var time))
                 {
                     this.clockBase = time;
@@ -429,7 +420,6 @@ internal sealed class BridgeHost : IDisposable
 
     private void ApplyTimeline(JsonElement root)
     {
-        // Validate before replacing the live schedule.
         if (!root.TryGetProperty("v", out var entries) || entries.ValueKind != JsonValueKind.Array)
         {
             return;
@@ -439,8 +429,7 @@ internal sealed class BridgeHost : IDisposable
 
         foreach (var entry in entries.EnumerateArray())
         {
-            // Entries are [time, label] or [time, label, kind]. Missing and unknown kinds
-            // use the default mechanic appearance.
+            // Timeline entries are [time, label, optional kind].
             if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
             {
                 continue;
@@ -483,7 +472,7 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Limit text before wrapping to bound allocations and layout work on each frame.
+        // Bound wrapping and layout work per frame.
         const int MaxAlertTextChars = 4096;
         var text = SanitizeText(textElement.GetString(), MaxAlertTextChars);
         if (string.IsNullOrWhiteSpace(text))
@@ -502,7 +491,6 @@ internal sealed class BridgeHost : IDisposable
             };
         }
 
-        // Use the configured duration for this severity unless the message supplies a ttl.
         var seconds = severity switch
         {
             Severity.Alarm => this.config.AlertSecondsAlarm,
@@ -516,7 +504,6 @@ internal sealed class BridgeHost : IDisposable
             seconds = (float)Math.Clamp(ttlSeconds, 0.5, 30.0);
         }
 
-        // Keep callouts readable without allowing them to remain indefinitely.
         seconds = Math.Clamp(seconds, 0.5f, 30.0f);
 
         var now = this.messageStamp ?? Environment.TickCount64;
@@ -548,6 +535,10 @@ internal sealed class BridgeHost : IDisposable
                 : new DpsState
                 {
                     Ended = true,
+                    Id = last.Id,
+                    Zone = last.Zone,
+                    EncHps = last.EncHps,
+                    Participants = last.Participants,
                     Title = last.Title,
                     Duration = last.Duration,
                     EncDps = last.EncDps,
@@ -567,12 +558,22 @@ internal sealed class BridgeHost : IDisposable
         var title = string.Empty;
         var duration = string.Empty;
         var encDps = 0.0;
+        var encHps = 0.0;
+        var id = string.Empty;
+        var zone = string.Empty;
+        var participants = 0;
         bool? hasDamage = null;
         if (root.TryGetProperty("enc", out var enc) && enc.ValueKind == JsonValueKind.Object)
         {
             title = SanitizeText(ReadString(enc, "t"), MaxTextChars);
             duration = SanitizeText(ReadString(enc, "d"), MaxTextChars);
+            id = SanitizeText(ReadString(enc, "id"), MaxTextChars);
+            zone = SanitizeText(ReadString(enc, "zone"), MaxTextChars);
             if (enc.TryGetProperty("dps", out var total) && !TryFinite(total, out encDps)) return;
+            if (enc.TryGetProperty("hps", out var healing) && !TryFinite(healing, out encHps)) return;
+            if (enc.TryGetProperty("participants", out var count) && count.ValueKind == JsonValueKind.Number
+                && count.TryGetInt32(out var parsedCount))
+                participants = Math.Clamp(parsedCount, 0, 1024);
             if (enc.TryGetProperty("hasDamage", out var damage))
             {
                 if (damage.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return;
@@ -631,7 +632,10 @@ internal sealed class BridgeHost : IDisposable
                     Math.Clamp(rowShare, 0, 100),
                     Math.Max(0, hps),
                     isSelf,
-                    deaths));
+                    deaths)
+                {
+                    Stats = entry.GetArrayLength() > 7 ? ReadCombatStats(entry[7]) : null,
+                });
 
                 if (rows.Count >= MaxDpsRows)
                 {
@@ -648,10 +652,15 @@ internal sealed class BridgeHost : IDisposable
             Title = title,
             Duration = duration,
             EncDps = Math.Max(0, encDps),
+            Id = id,
+            Zone = zone,
+            EncHps = Math.Max(0, encHps),
+            Participants = Math.Max(participants, rows.Count),
             HasDamage = hasDamage ?? (encDps > 0 || rows.Any(row => row.Dps > 0 || row.Share > 0)),
             Rows = rows,
         };
 
+        this.UnheldDps = state;
         // Combat flags, healing and misses must not replace the previous pull.
         if (this.KeepFinalDps(state)) return;
 
@@ -659,8 +668,26 @@ internal sealed class BridgeHost : IDisposable
         this.Dps = state;
     }
 
-    /// <summary>Clear program state. Clear DPS only when resetDps is true because
-    /// standalone rows must survive server restarts.</summary>
+    private static CombatStats? ReadCombatStats(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object) return null;
+
+        double? Read(string name, bool percent = false)
+        {
+            if (!element.TryGetProperty(name, out var item) || !TryFinite(item, out var value)) return null;
+            return Math.Clamp(value, 0, percent ? 100 : 1e18);
+        }
+
+        return new CombatStats
+        {
+            Damage = Read("damage"), Healed = Read("healed"), HealShare = Read("healShare", true),
+            Crit = Read("crit", true), Direct = Read("direct", true), CritDirect = Read("critDirect", true),
+            Taken = Read("taken"), HealingTaken = Read("healingTaken"), Heals = Read("heals"),
+            Overheal = Read("overheal", true), Hits = Read("hits"),
+        };
+    }
+
+    /// <summary>Standalone rows must survive server restarts.</summary>
     internal void ClearState(bool resetDps)
     {
         this.timeline.Clear();
@@ -674,8 +701,7 @@ internal sealed class BridgeHost : IDisposable
         this.clockRunning = false;
     }
 
-    /// <summary>Use distinct text for each test severity so the samples do not
-    /// merge.</summary>
+    /// <summary>Distinct severity text prevents samples from merging.</summary>
     internal void PushTestAlert(Severity severity)
     {
         var now = Environment.TickCount64;
@@ -688,8 +714,6 @@ internal sealed class BridgeHost : IDisposable
         });
     }
 
-    /// <summary>Merge repeats of the top callout when enabled. Otherwise append and remove
-    /// the oldest alerts above the limit.</summary>
     private void Push(ActiveAlert alert)
     {
         if (this.config.AlertsCollapseDupes && this.alerts.Count > 0)
@@ -700,7 +724,6 @@ internal sealed class BridgeHost : IDisposable
                 last.Count++;
                 last.ShownAt = alert.ShownAt;
 
-                // A repeat with a shorter duration must not shorten the current alert.
                 last.ExpiresAt = Math.Max(last.ExpiresAt, alert.ExpiresAt);
                 return;
             }
@@ -724,8 +747,7 @@ internal sealed class BridgeHost : IDisposable
             ? value.GetString() ?? string.Empty
             : string.Empty;
 
-    /// <summary>Remove line breaks to prevent row overlap and cap text length to bound
-    /// layout work. Shared with the standalone meter.</summary>
+    /// <summary>Prevent row overlap and bound layout work.</summary>
     internal static string SanitizeText(string? text, int maxChars)
     {
         if (string.IsNullOrEmpty(text))
@@ -739,7 +761,6 @@ internal sealed class BridgeHost : IDisposable
             return text;
         }
 
-        // Avoid truncating inside a surrogate pair.
         var cut = maxChars;
         if (cut > 0 && char.IsHighSurrogate(text[cut - 1]) && char.IsLowSurrogate(text[cut]))
         {
@@ -754,8 +775,6 @@ internal sealed class BridgeHost : IDisposable
         this.Stop();
         this.standalone.Dispose();
 
-        // Wait for background server disposal before unload, with time for those tasks to
-        // start.
         Task[] drains;
         lock (this.serverLock)
         {
@@ -783,8 +802,7 @@ internal sealed class BridgeHost : IDisposable
 
 internal static class PluginVersion
 {
-    /// <summary>Include the fourth version component to distinguish rolling builds in the
-    /// program status.</summary>
+    /// <summary>The fourth component distinguishes rolling builds.</summary>
     internal static readonly string Value =
         typeof(PluginVersion).Assembly.GetName().Version?.ToString(4)
         ?? "0.0.0";

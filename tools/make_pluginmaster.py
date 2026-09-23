@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Dalamud listing from the packaged manifest and release metadata.
-
-    python tools/make_pluginmaster.py \
-        --manifest NyaaTriggers.Plugin/bin/Release/NyaaTriggers.json \
-        --repo CateDesu/NyaaTriggers-Overlay \
-        --tag v0.1.0.0 \
-        --out pluginmaster.json
-
-Publishes only the stable channel.
-"""
+"""Build the stable Dalamud listing from the packaged manifest and release metadata."""
 import argparse
 import json
 import sys
@@ -30,7 +21,6 @@ def build_entry(manifest: dict, repo: str, tag: str, changelog: str) -> dict:
     if not version:
         raise SystemExit("manifest has no AssemblyVersion; was the plugin built?")
 
-    # Keep the advertised version consistent with the download target.
     if tag.lstrip("v") != version:
         raise SystemExit(
             f"tag {tag!r} and AssemblyVersion {version!r} disagree. "

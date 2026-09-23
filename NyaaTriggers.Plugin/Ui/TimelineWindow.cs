@@ -7,8 +7,6 @@ using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Interpolate the fight clock between program ticks so timeline bars move
-/// smoothly.</summary>
 internal sealed class TimelineWindow : OverlayWindow
 {
     private const float TextPadding = 6.0f;
@@ -17,8 +15,6 @@ internal sealed class TimelineWindow : OverlayWindow
 
     private readonly BridgeHost bridge;
 
-    /// <summary>Reuse the row list across frames to avoid allocating a list for each
-    /// draw.</summary>
     private readonly List<(string Label, float Remaining, bool Fired, string Kind)> rows = new();
 
     internal TimelineWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
@@ -66,7 +62,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var clock = this.bridge.Clock;
         var height = Math.Max(Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale), MathF.Ceiling(ImGui.GetTextLineHeight()));
 
-        // Collect rows first so bottom placement can use the full stack height.
+        // Measure the full stack before anchoring it at the bottom.
         var rows = this.rows;
         rows.Clear();
         foreach (var entry in this.bridge.Timeline)
@@ -83,8 +79,6 @@ internal sealed class TimelineWindow : OverlayWindow
 
             var remaining = entry.Time - clock;
 
-            // Retain recently fired cues when flashing is enabled. The sorted schedule
-            // allows stopping at the first cue beyond the display window.
             var fired = this.Config.TimelineFireFlash
                 && remaining < 0.0 && remaining >= -FireFlashSeconds;
             if (remaining < 0.0 && !fired)
@@ -102,13 +96,11 @@ internal sealed class TimelineWindow : OverlayWindow
 
         if (rows.Count == 0 && !this.Config.Locked)
         {
-            // Preview all cue kinds and the imminent colour while placing an empty window.
             rows.Add(("Sample tankbuster", window * 0.6f, false, "tankbuster"));
             rows.Add(("Sample raidwide", window * 0.35f, false, "raidwide"));
             rows.Add(("Sample mechanic", this.Config.ImminentSeconds * 0.5f, false, "mechanic"));
         }
 
-        // Preview the clock while unlocked, even before a real tick arrives.
         var clockLine = this.Config.TimelineShowClock
             && (this.bridge.ClockRunning || !this.Config.Locked);
 
@@ -149,7 +141,6 @@ internal sealed class TimelineWindow : OverlayWindow
         ImGui.Dummy(new Vector2(width, ImGui.GetTextLineHeight() + Math.Max(this.Config.TimelineBarSpacing, 0.0f)));
     }
 
-    /// <summary>Missing and unknown kinds use the mechanic filter.</summary>
     private bool KindVisible(string kind) => kind switch
     {
         "tankbuster" => this.Config.TimelineShowTankbuster,
@@ -157,7 +148,6 @@ internal sealed class TimelineWindow : OverlayWindow
         _ => this.Config.TimelineShowMechanic,
     };
 
-    /// <summary>Missing and unknown kinds use the shared colour.</summary>
     private Vector4 BarColor(string kind)
     {
         if (!this.Config.TimelineKindColors)
@@ -190,7 +180,6 @@ internal sealed class TimelineWindow : OverlayWindow
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
         var rounding = Math.Min(Math.Max(this.Config.TimelineBarRounding, 0.0f), height * 0.5f);
 
-        // Fired cues flash as full bars in either fill mode.
         var fraction = fired ? 1.0f : Math.Clamp(remaining / window, 0.0f, 1.0f);
         if (!fired && this.Config.BarFill == BarFillMode.Fill)
         {
@@ -235,7 +224,6 @@ internal sealed class TimelineWindow : OverlayWindow
 
         this.DrawBarText(drawList, label, remaining, origin, width, height);
 
-        // Draw list calls reserve no layout space, so advance past this row explicitly.
         ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.TimelineBarSpacing, 0.0f)));
     }
 
@@ -253,8 +241,6 @@ internal sealed class TimelineWindow : OverlayWindow
 
         if (countdown != null && this.Config.CountdownSplit)
         {
-            // Reserve the countdown width before fitting the label. Omit the label if both
-            // cannot fit.
             var countdownWidth = ImGui.CalcTextSize(countdown).X;
             if (width - countdownWidth - (2.0f * TextPadding) > 0.0f)
             {

@@ -617,13 +617,13 @@ internal static class Program
         var store = new TestConfigStore { Config = config };
         using (var plugin = new Plugin(store))
         {
-            Check(config.Version == 5 && config.DpsHoldLast, "Existing settings enable the retained meter on upgrade");
-            config.DpsHoldLast = false;
+            Check(config.Version == 7 && config.GetMeter(DpsMeterStyle.LMeter).DpsHoldLast, "Existing settings enable the retained meter on upgrade");
+            config.GetMeter(DpsMeterStyle.LMeter).DpsHoldLast = false;
         }
 
         using (var plugin = new Plugin(store))
         {
-            Check(!config.DpsHoldLast, "Disabling the retained meter after upgrading survives reload");
+            Check(!config.GetMeter(DpsMeterStyle.LMeter).DpsHoldLast, "Disabling the retained meter after upgrading survives reload");
         }
     }
 
@@ -633,6 +633,9 @@ internal static class Program
             "Headless environment");
         var cases = new (string Name, Func<Task> Run)[]
         {
+            ("kagerou", KagerouTests.Run),
+            ("meter-windows", MeterWindowsTests.Run),
+            ("lmeter", LMeterTests.Run),
             ("subscription", SubscriptionOrder), ("npc", NpcRoster), ("hidden-ui", HiddenUi),
             ("delayed-fight", DelayedFight), ("endpoint", EndpointRestart),
             ("retained-meter", () => { RetainedMeterMigration(); return Task.CompletedTask; }),

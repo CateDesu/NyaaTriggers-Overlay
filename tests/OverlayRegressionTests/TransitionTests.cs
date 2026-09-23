@@ -119,15 +119,16 @@ internal static class TransitionTests
         {
             var config = new Configuration
             {
-                Locked = true, DpsStyle = DpsMeterStyle.HorizonOverlay,
+                Locked = true, DpsStyle = style,
                 DpsTextEffect = TextEffectStyle.Off, DpsPos = new Vector2(80, 620),
                 DpsSize = new Vector2(600, 400), ShowTimeline = false, ShowAlerts = false,
             };
             using var host = new BridgeHost(config);
             Call(host, "Apply", Dps());
             using var ui = new PluginUi(config, host, new ScaledFonts());
-            var window = (DpsWindow)Field(ui, "dps");
-            var initialSize = config.DpsSize;
+            var window = ((DpsWindow[])Field(ui, "meters")).Single(item => item.Meter.DpsStyle == style);
+            var meter = window.Meter;
+            var initialSize = meter.DpsSize;
             var appeared = false;
             ImGuiHelpers.GlobalScale = uiScale;
             WindowSystem.AfterPreDraw = active =>
@@ -147,25 +148,24 @@ internal static class TransitionTests
                 ui.Draw();
                 ui.Draw();
                 var fittedHeight = ImGui.WindowSize.Y;
-                Check(fittedHeight < initialSize.Y && config.DpsSize == initialSize,
-                    "Control Horizon fits without overwriting the placement size", new { uiScale, fittedHeight });
-                config.ShowDps = false;
+                Check((style != DpsMeterStyle.HorizonOverlay || fittedHeight < initialSize.Y) && meter.DpsSize == initialSize,
+                    "Meters preserve placement while Horizon fits its content", new { uiScale, fittedHeight });
+                meter.ShowDps = false;
                 ui.Draw();
-                config.DpsStyle = style;
                 ui.Draw();
                 ui.SetLocked(false);
                 ui.Draw();
                 Check(!window.IsOpen && ImGui.WindowSize.Y == fittedHeight,
                     "The hidden meter retains its fitted geometry while settings change");
-                config.ShowDps = true;
+                meter.ShowDps = true;
                 ui.Draw();
-                Check(config.DpsSize == initialSize && ImGui.WindowSize == initialSize,
-                    "Unlocking during a style change restores the saved placement size",
-                    new { style = style.ToString(), uiScale, expectedHeight = initialSize.Y, actualHeight = config.DpsSize.Y });
+                Check(meter.DpsSize == initialSize && ImGui.WindowSize == initialSize,
+                    "Unlocking a hidden meter restores its saved placement size",
+                    new { style = style.ToString(), uiScale, expectedHeight = initialSize.Y, actualHeight = meter.DpsSize.Y });
                 var resized = new Vector2(500, 350);
                 ImGui.WindowSize = resized;
                 ui.Draw();
-                Check(config.DpsSize == resized, "Restoring the placement size still allows the next manual resize");
+                Check(meter.DpsSize == resized, "Restoring the placement size still allows the next manual resize");
             }
             finally
             {

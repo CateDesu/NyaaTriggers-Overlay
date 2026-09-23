@@ -17,15 +17,11 @@ internal enum StandaloneState
     Error,
 }
 
-/// <summary>Runs the meter from IINACT while the program is disconnected. Socket callbacks
-/// queue messages for <see cref="Update"/> under the UI state lock. A program connection
-/// stops the client and takes priority.</summary>
+/// <summary>Program connections take priority. Socket callbacks queue for Update under the UI state lock.</summary>
 internal sealed class StandaloneMeter : IDisposable
 {
     private const int MaxMessagesPerFrame = 64;
 
-    /// <summary>Maximum wait in milliseconds for background client disposal during
-    /// unload.</summary>
     private const int DrainWaitMs = 4000;
 
     private readonly Configuration config;
@@ -36,12 +32,9 @@ internal sealed class StandaloneMeter : IDisposable
     private long droppedMessages;
     private long nextWarning;
 
-    /// <summary>Makes source checks and inbox writes atomic with client
-    /// replacement.</summary>
+    /// <summary>Keep source checks and inbox writes atomic with replacement.</summary>
     private readonly object gate = new();
 
-    /// <summary>Unload waits for these client tasks so their callbacks can
-    /// finish.</summary>
     private readonly List<Task> pendingDrains = new();
 
     private double? messageTime;
@@ -53,8 +46,7 @@ internal sealed class StandaloneMeter : IDisposable
     private long nextPush;
     private long retryAt;
 
-    /// <summary>Deduplicate zone notifications because IINACT replays the current zone on
-    /// subscribe.</summary>
+    /// <summary>IINACT replays the zone on subscribe.</summary>
     private string lastZone = string.Empty;
     private long lastZoneId;
     private string sessionZone = string.Empty;
@@ -84,8 +76,6 @@ internal sealed class StandaloneMeter : IDisposable
 
         if (!wanted)
         {
-            // Discard the old feed backlog so it cannot restore rows after the ownership
-            // change.
             this.inbox.Clear();
 
             if (this.feeding)
@@ -93,8 +83,7 @@ internal sealed class StandaloneMeter : IDisposable
                 this.feeding = false;
                 this.wasLive = false;
 
-                // Clear standalone rows even when the program takes over. An idle program
-                // may send no replacement DPS frame.
+                // An idle program may take over without sending a replacement DPS frame.
                 this.clearLocal();
             }
 
@@ -225,7 +214,6 @@ internal sealed class StandaloneMeter : IDisposable
 
         this.ResetEngine();
 
-        // Capture the source to reject callbacks from a replaced client.
         IinactClient? created = null;
         created = new IinactClient(uri, raw => this.Receive(created!, raw),
             () => this.Receive(created!, null));
@@ -266,8 +254,6 @@ internal sealed class StandaloneMeter : IDisposable
             this.droppedMessages = 0;
         }
 
-        // Clear the old backlog before the next Update creates a new engine. Receive
-        // already rejects further old client messages.
         this.inbox.Clear();
 
         if (old == null)
@@ -275,8 +261,7 @@ internal sealed class StandaloneMeter : IDisposable
             return;
         }
 
-        // Stop without blocking this thread. Dispose waits for background cleanup during
-        // unload.
+        // Unload waits for background cleanup.
         old.Stop();
         var drain = Task.Run(old.Dispose);
         lock (this.gate)
@@ -286,8 +271,7 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Queue messages under gate so source checks are atomic with client
-    /// replacement. Stale frames must not reach the next engine.</summary>
+    /// <summary>Reject stale frames atomically with client replacement.</summary>
     private void Receive(IinactClient source, string? raw)
     {
         lock (this.gate)
@@ -396,8 +380,7 @@ internal sealed class StandaloneMeter : IDisposable
                     }
                     else if (zoneName.Length > 0 && !this.engine.HasZone)
                     {
-                        // Initialize the new engine's zone even when this replay was
-                        // already deduplicated by the feed.
+                        // The new engine still needs zone metadata after replay deduplication.
                         this.engine.SetInitialZone(zoneName);
                         this.nextPush = 0;
                     }
@@ -456,8 +439,7 @@ internal sealed class StandaloneMeter : IDisposable
                     break;
 
                 default:
-                    // Identify combatant replies by their list because the type casing
-                    // varies.
+                    // Reply type casing varies, so identify combatants by their list.
                     if (root.TryGetProperty("combatants", out var list) && list.ValueKind == JsonValueKind.Array)
                     {
                         this.HandleCombatants(root);
@@ -468,8 +450,6 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Fill player jobs from the roster when earlier spawn lines are
-    /// unavailable.</summary>
     private void HandleCombatants(JsonElement root)
     {
         if (!root.TryGetProperty("combatants", out var combs) || combs.ValueKind != JsonValueKind.Array)
@@ -503,8 +483,7 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Process a zone line before clearing the display so the encounter ending
-    /// precedes the clear.</summary>
+    /// <summary>Apply the encounter ending before clearing for a zone change.</summary>
     private void TreatLine(string raw)
     {
         if (raw.Length == 0)
@@ -516,8 +495,7 @@ internal sealed class StandaloneMeter : IDisposable
         this.engine.Process(fields);
         if (fields.Length > 3 && fields[0] == "01")
         {
-            // Record this valid zone line so the matching ChangeZone event does not clear
-            // twice.
+            // Deduplicate the matching ChangeZone event.
             this.lastZone = fields[3].Trim();
             this.sessionZone = this.lastZone;
             if (long.TryParse(
@@ -545,7 +523,6 @@ internal sealed class StandaloneMeter : IDisposable
 
     private static DpsState ToState(OverlaySnapshot snap, bool ended = false)
     {
-        // Bound actor text before it is measured and drawn on every frame.
         const int MaxTextChars = 256;
         var rows = new List<DpsRow>(snap.Rows.Count);
         foreach (var row in snap.Rows)
@@ -558,11 +535,15 @@ internal sealed class StandaloneMeter : IDisposable
                 row.Hps,
                 row.IsSelf,
                 row.Deaths,
-                row.Rank));
+                row.Rank) { Stats = row.Stats });
         }
 
         return new DpsState
         {
+            Id = snap.Id,
+            Zone = BridgeHost.SanitizeText(snap.Zone, MaxTextChars),
+            EncHps = snap.EncHps,
+            Participants = snap.Participants,
             Show = !ended,
             Ended = ended,
             Title = BridgeHost.SanitizeText(snap.Title, MaxTextChars),
@@ -573,7 +554,6 @@ internal sealed class StandaloneMeter : IDisposable
         };
     }
 
-    /// <summary>Attach final display rows to the ending when a snapshot exists.</summary>
     private static DpsState ToEndState(OverlaySnapshot? snap)
         => snap == null ? new DpsState { Ended = true } : ToState(snap, ended: true);
 
@@ -590,8 +570,6 @@ internal sealed class StandaloneMeter : IDisposable
             : null;
     }
 
-    /// <summary>Accept rawLine or a split line array, joining the array when
-    /// necessary.</summary>
     private static string ExtractLogLine(JsonElement root)
     {
         var raw = ReadString(root, "rawLine");
@@ -624,8 +602,6 @@ internal sealed class StandaloneMeter : IDisposable
         return joined.ToString();
     }
 
-    /// <summary>Accept numeric or hexadecimal string actor IDs, with a decimal string
-    /// fallback.</summary>
     private static int? ReadActorId(JsonElement root, string name)
     {
         if (!root.TryGetProperty(name, out var value))

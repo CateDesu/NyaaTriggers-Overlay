@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Drive the NyaaTriggers companion plugin without the program.
-
-Send a sample timeline and callouts, or a DPS encounter, over loopback WebSocket.
-
-    python test_bridge.py [--port 27080] [--speed 1.0]
-    python test_bridge.py --dps          fake encounter for the DPS meter instead
+"""Send a sample timeline and callouts, or a DPS encounter, to the plugin.
 
 Requires the websockets package.
-
-The plugin interpolates time between ticks. Speeds above 1x are useful for
-checking callout timing but make bar motion uneven.
 """
 import argparse
 import asyncio
@@ -69,7 +61,6 @@ DPS_FRAMES = 6
 
 
 async def handshake(ws) -> None:
-    """Check protocol compatibility before sending sample data."""
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=HELLO_TIMEOUT)
     except asyncio.TimeoutError:
@@ -122,7 +113,6 @@ async def run_dps(port: int) -> None:
     async with connect(url) as ws:
         await handshake(ws)
 
-        # Seeded so the demo looks the same every run.
         rng = random.Random(42)
         print(f"sending {DPS_FRAMES} dps frames, one per second (ctrl-c to stop)")
         for frame in range(DPS_FRAMES):

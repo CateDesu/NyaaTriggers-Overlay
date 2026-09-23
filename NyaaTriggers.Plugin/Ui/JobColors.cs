@@ -11,7 +11,7 @@ internal enum JobRole
     Healer,
 }
 
-/// <summary>Job accent colours based on cactbot. Unknown jobs use neutral grey.</summary>
+/// <summary>Job accent colours based on cactbot.</summary>
 internal static class JobColors
 {
     private static readonly Vector4 Unknown = Hex(0x9A9A9A);
@@ -33,7 +33,6 @@ internal static class JobColors
         "BST",
     };
 
-    /// <summary>Return null for unknown jobs so they use the neutral bar colour.</summary>
     internal static JobRole? RoleOf(string job)
     {
         if (string.IsNullOrWhiteSpace(job))

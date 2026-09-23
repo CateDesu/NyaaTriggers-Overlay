@@ -1,5 +1,4 @@
 # Set the DISCORD_WEBHOOK repository secret to the destination webhook URL.
-# The username distinguishes these notifications from the desktop program's.
 name: Discord notify
 
 on:
@@ -25,7 +24,7 @@ jobs:
             echo "DISCORD_WEBHOOK secret not set — skipping."
             exit 0
           fi
-          # Truncate content to Discord's 2000 character limit and fail on HTTP errors.
+          # Discord limits content to 2000 characters.
           jq -nc --arg c "📦 Push to **${REPO}** (${REF}) by ${ACTOR}
 
           ${COMMIT_MSG}

@@ -19,7 +19,7 @@ internal sealed class PluginUi : IDisposable
     private readonly FlashWindow flash;
     private readonly TimelineWindow timeline;
     private readonly AlertsWindow alerts;
-    private readonly DpsWindow dps;
+    private readonly DpsWindow[] meters;
     private readonly ConfigWindow configWindow;
 
     internal PluginUi(Configuration config, BridgeHost bridge, ScaledFonts fonts)
@@ -31,14 +31,19 @@ internal sealed class PluginUi : IDisposable
         this.flash = new FlashWindow(config);
         this.timeline = new TimelineWindow(config, bridge, fonts);
         this.alerts = new AlertsWindow(config, bridge, fonts);
-        this.dps = new DpsWindow(config, bridge, fonts);
+        this.meters = new[]
+        {
+            new DpsWindow(config, bridge, fonts, config.GetMeter(DpsMeterStyle.LMeter)),
+            new DpsWindow(config, bridge, fonts, config.GetMeter(DpsMeterStyle.HorizonOverlay)),
+            new DpsWindow(config, bridge, fonts, config.GetMeter(DpsMeterStyle.Kagerou)),
+        };
         this.configWindow = new ConfigWindow(config, bridge, this);
 
         // Draw the flash behind the other windows.
         this.windows.AddWindow(this.flash);
         this.windows.AddWindow(this.timeline);
         this.windows.AddWindow(this.alerts);
-        this.windows.AddWindow(this.dps);
+        foreach (var meter in this.meters) this.windows.AddWindow(meter);
         this.windows.AddWindow(this.configWindow);
     }
 
@@ -58,7 +63,6 @@ internal sealed class PluginUi : IDisposable
         }
     }
 
-    /// <summary>Save geometry when changing the lock state.</summary>
     internal void SetLocked(bool locked)
     {
         lock (this.bridge.StateLock)
@@ -69,7 +73,6 @@ internal sealed class PluginUi : IDisposable
         }
     }
 
-    /// <summary>Lets settings explain why a test alert is hidden.</summary>
     internal bool AlertsVisible { get; private set; } = true;
 
     /// <summary>Feed processing continues when Dalamud suppresses drawing.</summary>
@@ -96,16 +99,17 @@ internal sealed class PluginUi : IDisposable
         this.timeline.IsOpen = this.ShouldShow(this.config.TimelineOnlyInDuty, this.config.TimelineOnlyInCombat)
             && this.config.ShowTimeline;
 
-        // Held final rows bypass the combat filter, but still obey duty and cutscene
-        // filters. Unlocked windows remain visible for placement.
-        var dps = this.bridge.Dps;
-        var held = this.dps.HasHeldContent;
-        this.dps.IsOpen = this.ShouldShow(this.config.DpsOnlyInDuty, this.config.DpsOnlyInCombat && !held)
-            && this.config.ShowDps &&
-            (!this.config.Locked || (dps.Show && dps.Rows.Count > 0) || held);
+        // Held rows bypass combat filtering but still obey duty and cutscene filters.
+        foreach (var window in this.meters)
+        {
+            var meter = window.Meter;
+            var dps = window.CurrentDps;
+            var held = window.HasHeldContent;
+            window.IsOpen = this.ShouldShow(meter.DpsOnlyInDuty, meter.DpsOnlyInCombat && !held)
+                && meter.ShowDps &&
+                (!this.config.Locked || (dps.Show && dps.Rows.Count > 0) || held);
+        }
 
-        // Flash only while locked and alerts are visible. Use the alarm opacity to fade
-        // with the callout.
         var alarmAlpha = this.LiveAlarmAlpha();
         this.flash.AlarmAlpha = alarmAlpha;
         this.flash.IsOpen = this.AlertsVisible && this.config.Locked &&
@@ -115,8 +119,6 @@ internal sealed class PluginUi : IDisposable
         this.windows.Draw();
     }
 
-    /// <summary>Return the strongest live alarm opacity using the callout fade timings, or
-    /// zero if none are active.</summary>
     private float LiveAlarmAlpha()
     {
         var strongest = 0.0f;
@@ -178,7 +180,7 @@ internal sealed class PluginUi : IDisposable
     {
         this.timeline.ResetGeometry();
         this.alerts.ResetGeometry();
-        this.dps.ResetGeometry();
+        foreach (var meter in this.meters) meter.ResetGeometry();
         this.config.Save();
     }
 

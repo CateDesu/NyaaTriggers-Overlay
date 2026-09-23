@@ -5,15 +5,13 @@ using Dalamud.Interface.ManagedFontAtlas;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Cache fonts rasterized at sizes just above requested pixel sizes to reduce
-/// bitmap scaling. Build sizes lazily in a private atlas with global scaling disabled so
-/// pixel sizes remain predictable.</summary>
+/// <summary>Rasterize just above the requested size to limit bitmap scaling. Disable global scaling.</summary>
 internal sealed class ScaledFonts : IDisposable
 {
     /// <summary>Cover 16 px text at maximum text, alarm and UI scales.</summary>
     private const float MaxRequestPx = 16.0f * 6.0f * 2.0f * 3.0f;
 
-    /// <summary>Preserve existing size choices before generating larger sizes.</summary>
+    /// <summary>Preserve existing size choices.</summary>
     private static readonly float[] ListedBuckets =
     {
         8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
@@ -23,8 +21,6 @@ internal sealed class ScaledFonts : IDisposable
         150, 158, 166, 174, 183, 192, 202, 212, 222, 233,
     };
 
-    /// <summary>Use the listed sizes, then roughly 5 percent steps up to <see
-    /// cref="MaxRequestPx"/> to limit residual bitmap scaling.</summary>
     private static readonly float[] Buckets = BuildBuckets();
 
     private int generation;
@@ -39,9 +35,7 @@ internal sealed class ScaledFonts : IDisposable
             FontAtlasAutoRebuildMode.Async, false, "NyaaTriggers");
     }
 
-    /// <summary>Choose the nearest font size at or above the request. Check <see
-    /// cref="IFontHandle.Available"/> and use scaled text until the font is
-    /// ready.</summary>
+    /// <summary>Check IFontHandle.Available and use scaled text until ready.</summary>
     internal IFontHandle? Get(float sizePx)
     {
         var bucket = PickBucket(sizePx);

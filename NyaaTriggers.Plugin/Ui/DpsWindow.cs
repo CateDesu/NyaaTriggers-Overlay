@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -10,21 +11,17 @@ using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-internal sealed class DpsWindow : OverlayWindow
+internal sealed partial class DpsWindow : OverlayWindow
 {
     private const float TextPadding = 6.0f;
 
     private static readonly Vector4 HorizonChip = new(0.000f, 0.000f, 0.000f, 0.25f);
 
-    /// <summary>Split between the two bar shades. Emphasize HPS for healers whose HPS
-    /// exceeds DPS, otherwise DPS.</summary>
     private const float HorizonSeam = 0.49f;
 
     /// <summary>Unit caption size relative to its number.</summary>
     private const float HorizonLabelRatio = 0.625f;
 
-    /// <summary>Try smaller stat fonts in this order after dropping the unit
-    /// label.</summary>
     private static readonly float[] StatFitRatios = { 1.0f, 0.85f, 0.7f, 0.55f };
 
     private static readonly DpsRow[] SampleRows =
@@ -41,29 +38,44 @@ internal sealed class DpsWindow : OverlayWindow
 
     private static readonly Vector4 DeathsColor = new(0.95f, 0.42f, 0.42f, 1.00f);
 
-    /// <summary>Content height including padding, used to fit the locked Horizon Overlay
-    /// window.</summary>
     private float contentHeight;
 
-    /// <summary>Restore the stored height on unlock so geometry capture does not overwrite
-    /// it with the fitted height.</summary>
     private bool wasLocked;
 
-    /// <summary>Original ranks for filtered rows. Empty when the original list is used
-    /// unchanged.</summary>
+    /// <summary>Original DPS ranks for filtered or sorted rows.</summary>
     private readonly List<int> keptRanks = new();
 
-    internal DpsWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts)
-        : base("NyaaTriggers DPS###nyaaDps", config, fonts)
+    internal DpsWindow(Configuration config, BridgeHost bridge, ScaledFonts fonts, MeterSettings? settings = null)
+        : base($"NyaaTriggers {MeterName(settings?.DpsStyle ?? config.DpsStyle)}###nyaaDps{settings?.DpsStyle ?? config.DpsStyle}", config, fonts)
     {
         this.bridge = bridge;
+        this.Meter = settings ?? config;
     }
+
+    internal MeterSettings Meter { get; }
+
+    internal DpsState CurrentDps => this.Meter.DpsHoldLast ? this.bridge.Dps : this.bridge.UnheldDps;
+
+    private static double? EncounterHps(DpsState state)
+        => state.EncHps > 0 ? state.EncHps
+            : state.Participants > state.Rows.Count ? null : state.Rows.Sum(row => row.Hps);
+
+    internal static string MeterName(DpsMeterStyle style) => style switch
+    {
+        DpsMeterStyle.HorizonOverlay => "Horizon",
+        DpsMeterStyle.Kagerou => "Kagerou",
+        _ => "LMeter",
+    };
 
     public override void PreDraw()
     {
         base.PreDraw();
+        if (this.Meter.DpsStyle == DpsMeterStyle.Kagerou && this.Meter.DpsKagerouInteractive)
+        {
+            this.Flags &= ~ImGuiWindowFlags.NoInputs;
+        }
 
-        if (this.Config.Locked && this.Config.DpsStyle == DpsMeterStyle.HorizonOverlay
+        if (this.Config.Locked && this.Meter.DpsStyle == DpsMeterStyle.HorizonOverlay
             && this.contentHeight > 1.0f)
         {
             this.Size = new Vector2(
@@ -72,7 +84,6 @@ internal sealed class DpsWindow : OverlayWindow
         }
         else if (!this.Config.Locked && this.wasLocked)
         {
-            // Restore placement before capturing geometry even if the style changed.
             this.SizeCondition = ImGuiCond.Always;
         }
 
@@ -81,69 +92,75 @@ internal sealed class DpsWindow : OverlayWindow
 
     protected override Vector2 StoredPosition
     {
-        get => this.Config.DpsPos;
-        set => this.Config.DpsPos = value;
+        get => this.Meter.DpsPos;
+        set => this.Meter.DpsPos = value;
     }
 
     protected override Vector2 StoredSize
     {
-        get => this.Config.DpsSize;
-        set => this.Config.DpsSize = value;
+        get => this.Meter.DpsSize;
+        set => this.Meter.DpsSize = value;
     }
 
     internal override void ResetGeometry()
     {
-        var fresh = new Configuration();
+        var fresh = MeterSettings.DefaultsFor(this.Meter.DpsStyle);
         this.StoredPosition = fresh.DpsPos;
         this.StoredSize = fresh.DpsSize;
         this.ForceGeometry();
     }
 
-    protected override float TextScale => this.Config.DpsTextScale;
+    protected override float TextScale => this.Meter.DpsTextScale;
 
-    protected override float BgOpacity => this.Config.DpsBgOpacity;
+    protected override float BgOpacity => this.Meter.DpsBgOpacity;
 
-    protected override float FadeOpacity => this.Config.DpsFade;
+    protected override float FadeOpacity => this.Meter.DpsFade;
 
-    protected override TextEffectStyle TextEffect => this.Config.DpsTextEffect;
+    protected override TextEffectStyle TextEffect => this.Meter.DpsTextEffect;
 
-    protected override int EffectThickness => this.Config.DpsEffectThickness;
+    protected override int EffectThickness => this.Meter.DpsEffectThickness;
 
-    protected override Vector4 EffectColor => this.Config.DpsEffectColor;
+    protected override Vector4 EffectColor => this.Meter.DpsEffectColor;
 
-    /// <summary>Use only final rows attached to this ending, even if no draw saw them
-    /// live.</summary>
+    /// <summary>Endings carry final rows even when no draw saw them live.</summary>
     internal bool HasHeldContent =>
-        this.Config.DpsHoldLast && !this.bridge.Dps.Show && this.bridge.Dps.Ended
-        && this.bridge.Dps.Rows.Count > 0;
+        (this.Meter.DpsStyle == DpsMeterStyle.Kagerou && this.kagerouHistory != null)
+        || (this.Meter.DpsHoldLast && !this.bridge.Dps.Show && this.bridge.Dps.Ended
+        && this.bridge.Dps.Rows.Count > 0);
 
     protected override void DrawContent()
     {
-        var dps = this.bridge.Dps;
-        if ((dps.Show && dps.Rows.Count > 0) || this.HasHeldContent)
+        var dps = this.CurrentDps;
+        if (this.Meter.DpsStyle == DpsMeterStyle.Kagerou)
         {
-            this.DrawMeter(dps.Title, dps.Duration, dps.EncDps, this.FilterRows(dps.Rows));
+            this.DrawKagerou(dps);
+        }
+        else if (this.Meter.DpsStyle == DpsMeterStyle.LMeter)
+        {
+            if ((dps.Show && dps.Rows.Count > 0) || this.HasHeldContent) this.DrawLMeter(dps);
+            else if (!this.Config.Locked) this.DrawLMeter(LMeterSample);
+        }
+        else if ((dps.Show && dps.Rows.Count > 0) || this.HasHeldContent)
+        {
+            this.DrawHorizonMeter(dps.Title, dps.Duration, dps.EncDps, this.FilterRows(dps.Rows));
         }
         else if (!this.Config.Locked)
         {
-            this.DrawMeter("Sample Encounter", "03:12", 81234.5, this.FilterRows(SampleRows));
+            this.DrawHorizonMeter("Sample Encounter", "03:12", 81234.5, this.FilterRows(SampleRows));
         }
 
-        // Use the measured height, including padding, for the next locked Horizon Overlay
-        // draw.
         this.contentHeight = ImGui.GetCursorScreenPos().Y - ImGui.GetWindowPos().Y
             + ImGui.GetStyle().WindowPadding.Y;
     }
 
-    /// <summary>Filter and sort while preserving original ranks. Pin the local player
-    /// before limiting row count. Return the input unchanged when no transformation is
-    /// needed.</summary>
+    /// <summary>Preserve DPS ranks and pin the local player before limiting rows.</summary>
     private IReadOnlyList<DpsRow> FilterRows(IReadOnlyList<DpsRow> rows)
     {
-        var max = Math.Clamp(this.Config.DpsMaxRows, 1, 24);
-        var sort = this.Config.DpsSortOrder;
+        var max = this.Meter.DpsStyle == DpsMeterStyle.Kagerou && this.Meter.DpsKagerouTab == KagerouTab.Alliance
+            ? 24 : Math.Clamp(this.Meter.DpsMaxRows, 1, 24);
+        var sort = this.Meter.DpsSortOrder;
         this.keptRanks.Clear();
-        if (!this.Config.DpsSoloOnly && !this.Config.DpsSelfFirst
+        if (!this.Meter.DpsSoloOnly && !this.Meter.DpsSelfFirst
             && sort == DpsSortOrder.ByDps && rows.Count <= max)
         {
             for (var i = 0; i < rows.Count; i++)
@@ -158,7 +175,7 @@ internal sealed class DpsWindow : OverlayWindow
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            if (this.Config.DpsSoloOnly && !row.IsSelf)
+            if (this.Meter.DpsSoloOnly && !row.IsSelf)
             {
                 continue;
             }
@@ -169,7 +186,6 @@ internal sealed class DpsWindow : OverlayWindow
 
         if (sort != DpsSortOrder.ByDps)
         {
-            // Move ranks with their rows and preserve original order for ties.
             var order = new int[kept.Count];
             for (var i = 0; i < order.Length; i++)
             {
@@ -191,7 +207,7 @@ internal sealed class DpsWindow : OverlayWindow
             this.keptRanks.AddRange(sortedRanks);
         }
 
-        if (this.Config.DpsSelfFirst)
+        if (this.Meter.DpsSelfFirst)
         {
             for (var i = 1; i < kept.Count; i++)
             {
@@ -200,8 +216,6 @@ internal sealed class DpsWindow : OverlayWindow
                     continue;
                 }
 
-                // The first slot places the pinned player at the left of the strip or top
-                // of a list.
                 var row = kept[i];
                 var rank = this.keptRanks[i];
                 kept.RemoveAt(i);
@@ -221,8 +235,6 @@ internal sealed class DpsWindow : OverlayWindow
         return kept;
     }
 
-    /// <summary>Sort using displayed names or role. Hidden names compare equally. Original
-    /// order breaks ties.</summary>
     private int CompareRows(DpsRow a, DpsRow b, int indexA, int indexB, DpsSortOrder sort)
     {
         var by = sort switch
@@ -246,10 +258,10 @@ internal sealed class DpsWindow : OverlayWindow
     {
         if (row.IsSelf)
         {
-            return this.Config.DpsSelfNameYou ? "YOU" : row.Name;
+            return this.Meter.DpsSelfNameYou ? "YOU" : row.Name;
         }
 
-        return this.Config.DpsNamePrivacy switch
+        return this.Meter.DpsNamePrivacy switch
         {
             NamePrivacyStyle.Initials => Initials(row.Name),
             NamePrivacyStyle.Hidden => string.Empty,
@@ -257,7 +269,6 @@ internal sealed class DpsWindow : OverlayWindow
         };
     }
 
-    /// <summary>Format names such as Y'shtola Rhul as Y. R.</summary>
     private static string Initials(string name)
     {
         var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -265,7 +276,6 @@ internal sealed class DpsWindow : OverlayWindow
         foreach (var part in parts)
         {
             builder.Append(char.ToUpperInvariant(part[0]));
-            // Keep a surrogate pair intact when taking an initial.
             if (part.Length > 1 && char.IsHighSurrogate(part[0]) && char.IsLowSurrogate(part[1]))
             {
                 builder.Append(part[1]);
@@ -278,54 +288,23 @@ internal sealed class DpsWindow : OverlayWindow
     }
 
     private string? DeathsMarker(DpsRow row)
-        => this.Config.DpsShowDeaths && row.Deaths > 0 ? $" x{row.Deaths}" : null;
+        => this.Meter.DpsShowDeaths && row.Deaths > 0 ? $" x{row.Deaths}" : null;
 
     private int RankOf(int i)
         => this.keptRanks.Count == 0 ? i + 1 : this.keptRanks[i];
 
-    private void DrawMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
+    private void DrawHorizonMeter(string title, string duration, double encDps, IReadOnlyList<DpsRow> rows)
     {
-        // Horizon Overlay places the encounter header below its strip.
-        if (this.Config.DpsStyle == DpsMeterStyle.HorizonOverlay)
-        {
-            this.DrawHorizonStrip(rows);
-            this.DrawHeader(
-                title, duration, encDps,
-                centered: true, chip: true, topGap: 5.0f * ClampTextScale(this.TextScale));
-            return;
-        }
-
-        this.DrawHeader(title, duration, encDps);
-        this.DrawRows(rows);
-    }
-
-    private void DrawRows(IReadOnlyList<DpsRow> rows)
-    {
-        switch (this.Config.DpsStyle)
-        {
-            case DpsMeterStyle.Kagerou:
-                for (var i = 0; i < rows.Count; i++)
-                {
-                    this.DrawKagerouRow(this.RankOf(i), i, rows[i]);
-                }
-
-                break;
-
-            default:
-                for (var i = 0; i < rows.Count; i++)
-                {
-                    this.DrawBarsRow(this.RankOf(i), i, rows[i]);
-                }
-
-                break;
-        }
+        this.DrawHorizonStrip(rows);
+        this.DrawHeader(title, duration, encDps,
+            centered: true, chip: true, topGap: 5.0f * ClampTextScale(this.TextScale));
     }
 
     private void DrawHeader(
         string title, string duration, double encDps,
         bool centered = false, bool chip = false, float topGap = 0.0f)
     {
-        if (!this.Config.DpsShowHeader)
+        if (!this.Meter.DpsShowHeader)
         {
             return;
         }
@@ -352,7 +331,6 @@ internal sealed class DpsWindow : OverlayWindow
 
         if (chip)
         {
-            // Fit the header background to its text and use the bar skew.
             var scale = ClampTextScale(this.TextScale);
             var chipTop = origin.Y - (2.0f * scale);
             var chipHeight = textSize.Y + (4.0f * scale);
@@ -366,19 +344,17 @@ internal sealed class DpsWindow : OverlayWindow
                 ToColor(HorizonChip));
         }
 
-        this.DrawStyledText(drawList, origin, this.Config.DpsTextColor, text);
+        this.DrawStyledText(drawList, origin, this.Meter.DpsTextColor, text);
 
-        // Reserve spacing after headers above rows. Horizon Overlay draws its header last.
+        // Horizon draws its header last, so it needs no gap below.
         ImGui.Dummy(new Vector2(
             Math.Max(ImGui.GetContentRegionAvail().X, 1.0f),
-            ImGui.GetTextLineHeight() + (chip ? 0.0f : Math.Max(this.Config.DpsBarSpacing, 0.0f))));
+            ImGui.GetTextLineHeight() + (chip ? 0.0f : Math.Max(this.Meter.DpsBarSpacing, 0.0f))));
     }
 
-    /// <summary>Collapse spaces left by omitted header tokens.</summary>
     private static readonly Regex HeaderSpaces = new(@"\s+", RegexOptions.Compiled);
 
-    /// <summary>Expand each template token once without treating its value as another
-    /// template.</summary>
+    /// <summary>Token values must not expand as nested templates.</summary>
     private static readonly Regex HeaderTokens = new(
         @"\{(?:title|duration|dps)\}", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -386,17 +362,15 @@ internal sealed class DpsWindow : OverlayWindow
     private static readonly Regex HeaderSepRuns = new(
         @"\s*[·•|/\-–—]\s*(\s*[·•|/\-–—]\s*)+", RegexOptions.Compiled);
 
-    /// <summary>Expand optional header tokens and remove separators left by omitted values.
-    /// An empty format uses dot separators.</summary>
     private string FormatHeaderLine(string title, string duration, double encDps)
     {
         var titleText = string.IsNullOrWhiteSpace(title) ? string.Empty : title;
-        var durationText = this.Config.DpsHeaderDuration && !string.IsNullOrWhiteSpace(duration)
+        var durationText = this.Meter.DpsHeaderDuration && !string.IsNullOrWhiteSpace(duration)
             ? duration
             : string.Empty;
-        var dpsText = this.Config.DpsHeaderTotalDps && encDps > 0.0 ? FormatDps(encDps) : string.Empty;
+        var dpsText = this.Meter.DpsHeaderTotalDps && encDps > 0.0 ? FormatDps(encDps) : string.Empty;
 
-        var format = this.Config.DpsHeaderFormat;
+        var format = this.Meter.DpsHeaderFormat;
         if (string.IsNullOrWhiteSpace(format))
         {
             var parts = new List<string>(3);
@@ -441,135 +415,6 @@ internal sealed class DpsWindow : OverlayWindow
         return " ";
     }
 
-    private void DrawBarsRow(int rank, int index, DpsRow row)
-    {
-        var drawList = ImGui.GetWindowDrawList();
-        var origin = ImGui.GetCursorScreenPos();
-        var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var height = Math.Max(this.Config.DpsBarHeight * ClampTextScale(this.TextScale), MathF.Ceiling(ImGui.GetTextLineHeight()));
-        var rounding = Math.Min(Math.Max(this.Config.DpsBarRounding, 0.0f), height * 0.5f);
-
-        drawList.AddRectFilled(
-            origin,
-            origin + new Vector2(width, height),
-            ToColor(WithAlpha(this.Config.DpsBarTrackColor, this.Config.DpsBarTrackOpacity)),
-            rounding);
-
-        var fillWidth = width * Math.Clamp((float)row.Share / 100.0f, 0.0f, 1.0f);
-        if (fillWidth > 0.0f)
-        {
-            var fillOrigin = this.Config.DpsBarRightToLeft
-                ? origin + new Vector2(width - fillWidth, 0.0f)
-                : origin;
-            // Local highlight takes priority over top rank, then job colour. Job fills
-            // retain the configured bar alpha.
-            var fill = this.Config.DpsBarSelfHighlight && row.IsSelf
-                ? this.Config.DpsBarSelfColor
-                : this.Config.DpsBarTopHighlight && rank == 1
-                    ? this.Config.DpsBarTopColor
-                    : this.Config.DpsBarJobColors
-                        ? WithAlpha(JobColors.Get(row.Job), Math.Clamp(this.Config.DpsBarColor.W, 0.0f, 1.0f))
-                        : this.Config.DpsBarColor;
-            AddBarFill(drawList, fillOrigin, fillOrigin + new Vector2(fillWidth, height),
-                fill, rounding);
-        }
-
-        // Draw stripes over the fill and track so the whole row lightens evenly.
-        if (this.Config.DpsRowStripes && (index & 1) == 1)
-        {
-            var stripe = Math.Clamp(this.Config.DpsRowStripeOpacity, 0.0f, 0.5f);
-            drawList.AddRectFilled(
-                origin,
-                origin + new Vector2(width, height),
-                ToColor(new Vector4(1.0f, 1.0f, 1.0f, stripe)),
-                rounding);
-        }
-
-        if (this.Config.DpsBarBorderThickness > 0.0f)
-        {
-            drawList.AddRect(
-                origin,
-                origin + new Vector2(width, height),
-                ToColor(this.Config.DpsBarBorderColor),
-                rounding,
-                ImDrawFlags.None,
-                this.Config.DpsBarBorderThickness);
-        }
-
-        var name = this.RowName(row);
-        var label = this.Config.DpsRowsShowRank ? $"{rank}  " : string.Empty;
-        if (name.Length > 0)
-        {
-            label += name;
-        }
-
-        if (!string.IsNullOrWhiteSpace(row.Job))
-        {
-            label += name.Length > 0 ? $" · {row.Job}" : row.Job;
-        }
-
-        var dpsText = this.Config.DpsBarsShowShare
-            ? $"{this.FormatRowNumber(row.Dps)} · {FormatShare(row.Share)}"
-            : this.FormatRowNumber(row.Dps);
-        if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
-        {
-            dpsText += $" · {this.FormatRowNumber(row.Hps)} hps";
-        }
-
-        var dpsWidth = ImGui.CalcTextSize(dpsText).X;
-        var deaths = this.DeathsMarker(row);
-        var deathsWidth = deaths == null ? 0.0f : ImGui.CalcTextSize(deaths).X;
-
-        // Reserve the icon slot even when no texture is available to keep labels aligned.
-        var textLeft = TextPadding;
-        if (this.Config.DpsRowsShowIcons)
-        {
-            // Shrink icons to fit short rows.
-            var iconSize = Math.Clamp(
-                ImGui.GetTextLineHeight() + 2.0f, 1.0f, Math.Max(height - 4.0f, 1.0f));
-            var icon = JobIcons.Get(row.Job);
-            if (icon != null)
-            {
-                var iconTop = origin.Y + ((height - iconSize) * 0.5f);
-                drawList.AddImage(
-                    icon.Handle,
-                    new Vector2(origin.X + TextPadding, iconTop),
-                    new Vector2(origin.X + TextPadding + iconSize, iconTop + iconSize),
-                    Vector2.Zero,
-                    Vector2.One,
-                    ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
-            }
-
-            textLeft = TextPadding + iconSize + TextPadding;
-        }
-
-        // Reserve DPS and death marker widths before fitting the name.
-        label = Elide(label, Math.Max(width - dpsWidth - textLeft - (TextPadding * 2.0f) - deathsWidth, 1.0f));
-        var textY = origin.Y + ((height - ImGui.CalcTextSize(label).Y) * 0.5f);
-
-        this.DrawStyledText(
-            drawList, new Vector2(origin.X + textLeft, textY), this.Config.DpsTextColor, label);
-
-        if (deaths != null)
-        {
-            var labelWidth = ImGui.CalcTextSize(label).X;
-            this.DrawStyledText(
-                drawList,
-                new Vector2(origin.X + textLeft + labelWidth, textY),
-                DeathsColor,
-                deaths);
-        }
-
-        this.DrawStyledText(
-            drawList,
-            new Vector2(origin.X + Math.Max(width - dpsWidth - TextPadding, TextPadding), textY),
-            this.Config.DpsTextColor,
-            dpsText);
-
-        // Draw list calls reserve no layout space, so advance past this row explicitly.
-        ImGui.Dummy(new Vector2(width, height + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
-    }
-
     private void DrawHorizonStrip(IReadOnlyList<DpsRow> rows)
     {
         if (rows.Count == 0)
@@ -593,23 +438,22 @@ internal sealed class DpsWindow : OverlayWindow
     {
         var lineHeight = ImGui.GetTextLineHeight();
 
-        // Center the group and shrink cells equally when the available width is limited.
-        var padding = Math.Max(this.Config.DpsHorizCellPadding, 0.0f) * scale;
-        var maxBarWidth = Math.Clamp(this.Config.DpsHorizMaxBarWidth, 40.0f, 400.0f) * scale;
+        var padding = Math.Max(this.Meter.DpsHorizCellPadding, 0.0f) * scale;
+        var maxBarWidth = Math.Clamp(this.Meter.DpsHorizMaxBarWidth, 40.0f, 400.0f) * scale;
         var cellWidth = Math.Min(width / rows.Count, maxBarWidth + (2.0f * padding));
         var stripLeft = origin.X + Math.Max((width - (cellWidth * rows.Count)) * 0.5f, 0.0f);
 
-        var showNames = this.Config.DpsHorizShowNames;
-        var showRank = this.Config.DpsHorizShowRank;
-        var showIcons = this.Config.DpsHorizShowIcons;
-        var showHps = this.Config.DpsHorizShowHps;
-        var showPercent = this.Config.DpsHorizShowPercent;
-        var twoTone = this.Config.DpsHorizHighlight
-            && this.Config.DpsHorizTheme != HorizonColorTheme.BlackWhite;
+        var showNames = this.Meter.DpsHorizShowNames;
+        var showRank = this.Meter.DpsHorizShowRank;
+        var showIcons = this.Meter.DpsHorizShowIcons;
+        var showHps = this.Meter.DpsHorizShowHps;
+        var showPercent = this.Meter.DpsHorizShowPercent;
+        var twoTone = this.Meter.DpsHorizHighlight
+            && this.Meter.DpsHorizTheme != HorizonColorTheme.BlackWhite;
 
-        var barHeight = Math.Max(Math.Clamp(this.Config.DpsHorizBarHeight, 10.0f, 60.0f) * scale, lineHeight + scale);
+        var barHeight = Math.Max(Math.Clamp(this.Meter.DpsHorizBarHeight, 10.0f, 60.0f) * scale, lineHeight + scale);
         var barSkew = this.HorizonSkew() * barHeight;
-        var iconSize = Math.Clamp(this.Config.DpsHorizIconSize, 8.0f, 64.0f) * scale;
+        var iconSize = Math.Clamp(this.Meter.DpsHorizIconSize, 8.0f, 64.0f) * scale;
 
         // Reserve the icon overhang when no name line provides that space.
         var iconOverhang = showIcons ? iconSize * 0.25f : 0.0f;
@@ -617,8 +461,7 @@ internal sealed class DpsWindow : OverlayWindow
         var barTop = origin.Y + Math.Max(nameBand, iconOverhang + scale);
         var stripHeight = Math.Max(2.0f * scale, 1.5f);
 
-        // Include the icon bottom in cell height so large icons cannot overlap the share
-        // strip or be clipped.
+        // Include the icon bottom to avoid clipping or overlapping the share strip.
         var iconBottom = showIcons ? barTop - iconOverhang + iconSize : barTop;
         var cellBottom = Math.Max(barTop + barHeight, iconBottom);
         var stripTop = cellBottom + scale;
@@ -635,8 +478,6 @@ internal sealed class DpsWindow : OverlayWindow
 
             var barColor = this.HorizonBarColor(row);
 
-            // Emphasize HPS for healers with HPS above DPS, otherwise DPS. Local and
-            // unknown job bars use a uniform tint.
             var role = JobColors.RoleOf(row.Job);
             if (!twoTone || row.IsSelf || role == null)
             {
@@ -659,7 +500,6 @@ internal sealed class DpsWindow : OverlayWindow
                     ToColor(barColor));
             }
 
-            // Omit text and icons when the cell is too narrow to fit them.
             if (barWidth < 36.0f * scale)
             {
                 continue;
@@ -679,10 +519,9 @@ internal sealed class DpsWindow : OverlayWindow
                 this.DrawStyledText(
                     drawList,
                     new Vector2(nameLeft, origin.Y),
-                    this.Config.DpsTextColor,
+                    this.Meter.DpsTextColor,
                     name);
 
-                // Center the name and death marker as a single group.
                 var deaths = this.DeathsMarker(row);
                 if (deaths != null)
                 {
@@ -714,8 +553,6 @@ internal sealed class DpsWindow : OverlayWindow
                 }
             }
 
-            // Keep HPS and DPS inside separate regions below the icon. Clip to the bar
-            // bounds and show the job acronym when HPS is disabled.
             var inset = 8.0f * scale;
             var middle = barLeft + (barWidth * 0.5f);
             var statBottom = barTop + barHeight - scale;
@@ -750,7 +587,6 @@ internal sealed class DpsWindow : OverlayWindow
                 continue;
             }
 
-            // Keep the shifted damage share strip inside the content area.
             var stripLeftEdge = Math.Max(barLeft - (8.0f * scale), origin.X);
             var stripSkew = this.HorizonSkew() * stripHeight;
             AddSkewedQuad(
@@ -771,16 +607,13 @@ internal sealed class DpsWindow : OverlayWindow
             var pctRight = barLeft + barWidth - (10.0f * scale);
             cellBottom = Math.Max(
                 cellBottom,
-                this.DrawSmallText(drawList, pct, pctRight, pctTop, this.Config.DpsTextColor) + (2.0f * scale));
+                this.DrawSmallText(drawList, pct, pctRight, pctTop, this.Meter.DpsTextColor) + (2.0f * scale));
         }
 
-        // The header adds its own gap after the strip.
         ImGui.Dummy(new Vector2(width, cellBottom - origin.Y));
     }
 
-    /// <summary>Fit a stat within its assigned region by dropping the unit label, trying
-    /// smaller fonts, then truncating. Local player stats use their own colour without a
-    /// text effect.</summary>
+    /// <summary>Drop the unit, shrink, then truncate. Local player stats skip text effects.</summary>
     private void DrawHorizonStat(
         ImDrawListPtr drawList, float zoneLeft, float zoneRight, float bottom,
         bool rightAligned, string number, string label, bool self)
@@ -793,14 +626,13 @@ internal sealed class DpsWindow : OverlayWindow
 
         var scale = ClampTextScale(this.TextScale);
         var gap = 1.0f * scale;
-        var color = self ? this.Config.DpsHorizSelfTextColor : this.Config.DpsTextColor;
+        var color = self ? this.Meter.DpsHorizSelfTextColor : this.Meter.DpsTextColor;
         var statPx = this.TextPx * this.HorizonStatScale();
         var withLabel = !string.IsNullOrEmpty(label);
 
         foreach (var ratio in StatFitRatios)
         {
-            // Reuse the current font at full size. Skip smaller sizes that are still
-            // loading.
+            // Skip smaller fonts that are still loading.
             var handle = ratio >= 1.0f ? null : this.Fonts.Get(statPx * ratio);
             if (ratio < 1.0f && handle is not { Available: true })
             {
@@ -835,7 +667,6 @@ internal sealed class DpsWindow : OverlayWindow
             }
         }
 
-        // Fall back to truncating at the current strip font size.
         var trimmed = Elide(number, maxWidth);
         this.PaintHorizonStat(
             drawList, zoneLeft, zoneRight, bottom, rightAligned,
@@ -843,8 +674,6 @@ internal sealed class DpsWindow : OverlayWindow
             gap, color, self);
     }
 
-    /// <summary>Use the current number font and align the unit label to its bottom
-    /// edge.</summary>
     private void PaintHorizonStat(
         ImDrawListPtr drawList, float zoneLeft, float zoneRight, float bottom,
         bool rightAligned, string number, string label, float labelPx,
@@ -885,8 +714,6 @@ internal sealed class DpsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Draw a caption aligned to the right and return its bottom edge for
-    /// layout.</summary>
     private float DrawSmallText(ImDrawListPtr drawList, string text, float right, float top, Vector4 color)
     {
         using (this.UseFont(this.TextPx * this.HorizonPercentScale()))
@@ -900,28 +727,25 @@ internal sealed class DpsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Local colour takes priority in both themes. Apply configured opacity to
-    /// role colours and use the dim colour for unknown jobs or the black &amp; white
-    /// theme.</summary>
     private Vector4 HorizonBarColor(DpsRow row)
     {
         if (row.IsSelf)
         {
-            return this.Config.DpsHorizSelfColor;
+            return this.Meter.DpsHorizSelfColor;
         }
 
-        if (this.Config.DpsHorizTheme == HorizonColorTheme.BlackWhite)
+        if (this.Meter.DpsHorizTheme == HorizonColorTheme.BlackWhite)
         {
-            return this.Config.DpsHorizDimColor;
+            return this.Meter.DpsHorizDimColor;
         }
 
-        var opacity = Math.Clamp(this.Config.DpsHorizBarOpacity, 0.05f, 1.0f);
+        var opacity = Math.Clamp(this.Meter.DpsHorizBarOpacity, 0.05f, 1.0f);
         return JobColors.RoleOf(row.Job) switch
         {
-            JobRole.Tank => WithAlpha(this.Config.DpsHorizTankColor, opacity),
-            JobRole.Healer => WithAlpha(this.Config.DpsHorizHealerColor, opacity),
-            JobRole.Dps => WithAlpha(this.Config.DpsHorizDpsColor, opacity),
-            _ => this.Config.DpsHorizDimColor,
+            JobRole.Tank => WithAlpha(this.Meter.DpsHorizTankColor, opacity),
+            JobRole.Healer => WithAlpha(this.Meter.DpsHorizHealerColor, opacity),
+            JobRole.Dps => WithAlpha(this.Meter.DpsHorizDpsColor, opacity),
+            _ => this.Meter.DpsHorizDimColor,
         };
     }
 
@@ -931,23 +755,21 @@ internal sealed class DpsWindow : OverlayWindow
         return new Vector4(barColor.X, barColor.Y, barColor.Z, alpha);
     }
 
-    /// <summary>Horizontal shift per pixel of bar height, derived from the skew
-    /// angle.</summary>
     private float HorizonSkew()
-        => (float)Math.Tan(Math.Clamp(this.Config.DpsHorizSkew, 0.0f, 45.0f) * Math.PI / 180.0);
+        => (float)Math.Tan(Math.Clamp(this.Meter.DpsHorizSkew, 0.0f, 45.0f) * Math.PI / 180.0);
 
-    private float HorizonStatScale() => Math.Clamp(this.Config.DpsHorizStatScale, 0.4f, 1.5f);
+    private float HorizonStatScale() => Math.Clamp(this.Meter.DpsHorizStatScale, 0.4f, 1.5f);
 
-    private float HorizonPercentScale() => Math.Clamp(this.Config.DpsHorizPercentScale, 0.4f, 1.5f);
+    private float HorizonPercentScale() => Math.Clamp(this.Meter.DpsHorizPercentScale, 0.4f, 1.5f);
 
     private string FormatRowDps(double dps)
     {
-        if (this.Config.DpsHorizCompact)
+        if (this.Meter.DpsHorizCompact)
         {
             return FormatDps(dps);
         }
 
-        return Math.Clamp(this.Config.DpsHorizDecimals, 0, 2) switch
+        return Math.Clamp(this.Meter.DpsHorizDecimals, 0, 2) switch
         {
             0 => dps.ToString("0", CultureInfo.InvariantCulture),
             1 => dps.ToString("0.0", CultureInfo.InvariantCulture),
@@ -955,7 +777,6 @@ internal sealed class DpsWindow : OverlayWindow
         };
     }
 
-    /// <summary>Draw a parallelogram whose bottom edge is shifted left by k.</summary>
     private static void AddSkewedQuad(ImDrawListPtr drawList, float x, float y, float w, float h, float k, uint color)
     {
         if (w <= 0.0f || h <= 0.0f)
@@ -971,110 +792,8 @@ internal sealed class DpsWindow : OverlayWindow
             color);
     }
 
-    private void DrawKagerouRow(int rank, int index, DpsRow row)
-    {
-        var drawList = ImGui.GetWindowDrawList();
-        var origin = ImGui.GetCursorScreenPos();
-        var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
-        var lineHeight = ImGui.GetTextLineHeight();
-
-        var underline = Math.Clamp(this.Config.DpsBarHeight * 0.15f, 2.0f, 4.0f);
-
-        // Draw stripes behind the text while preserving the underline colour.
-        if (this.Config.DpsRowStripes && (index & 1) == 1)
-        {
-            var stripe = Math.Clamp(this.Config.DpsRowStripeOpacity, 0.0f, 0.5f);
-            drawList.AddRectFilled(
-                origin,
-                origin + new Vector2(width, lineHeight),
-                ToColor(new Vector4(1.0f, 1.0f, 1.0f, stripe)));
-        }
-
-        var numbers = $"{this.FormatRowNumber(row.Dps)} · {FormatShare(row.Share)}";
-        if (this.Config.DpsRowsShowHps && row.Hps > 0.0)
-        {
-            numbers += $" · {this.FormatRowNumber(row.Hps)} hps";
-        }
-
-        var numbersWidth = ImGui.CalcTextSize(numbers).X;
-        var deaths = this.DeathsMarker(row);
-        var deathsWidth = deaths == null ? 0.0f : ImGui.CalcTextSize(deaths).X;
-        var leftBudget = origin.X +
-            Math.Max(width - numbersWidth - (TextPadding * 2.0f) - deathsWidth, 1.0f);
-
-        var x = origin.X;
-        if (this.Config.DpsRowsShowRank)
-        {
-            var rankText = $"{rank}.";
-            this.DrawStyledText(drawList, new Vector2(x, origin.Y), this.Config.DpsTextColor, rankText);
-            x += ImGui.CalcTextSize(rankText + " ").X;
-        }
-
-        if (this.Config.DpsRowsShowIcons)
-        {
-            var icon = JobIcons.Get(row.Job);
-            if (icon != null)
-            {
-                drawList.AddImage(
-                    icon.Handle,
-                    new Vector2(x, origin.Y),
-                    new Vector2(x + lineHeight, origin.Y + lineHeight),
-                    Vector2.Zero,
-                    Vector2.One,
-                    ToColor(new Vector4(1.0f, 1.0f, 1.0f, 1.0f)));
-            }
-
-            // Reserve missing icon space to keep rows aligned.
-            x += lineHeight + 4.0f;
-        }
-
-        if (!string.IsNullOrWhiteSpace(row.Job))
-        {
-            this.DrawStyledText(drawList, new Vector2(x, origin.Y), JobColors.Get(row.Job), row.Job);
-            x += ImGui.CalcTextSize($"{row.Job}  ").X;
-        }
-
-        var name = this.RowName(row);
-        if (name.Length > 0)
-        {
-            var elided = Elide(name, Math.Max(leftBudget - x, 1.0f));
-            this.DrawStyledText(drawList, new Vector2(x, origin.Y), this.Config.DpsTextColor, elided);
-            x += ImGui.CalcTextSize(elided).X;
-        }
-
-        if (deaths != null)
-        {
-            this.DrawStyledText(drawList, new Vector2(x, origin.Y), DeathsColor, deaths);
-        }
-
-        this.DrawStyledText(
-            drawList,
-            new Vector2(origin.X + Math.Max(width - numbersWidth - TextPadding, TextPadding), origin.Y),
-            this.Config.DpsTextColor,
-            numbers);
-
-        var underlineY = origin.Y + lineHeight + 1.0f;
-        var fillWidth = width * Math.Clamp((float)row.Share / 100.0f, 0.0f, 1.0f);
-        if (fillWidth > 0.0f)
-        {
-            drawList.AddRectFilled(
-                new Vector2(origin.X, underlineY),
-                new Vector2(origin.X + fillWidth, underlineY + underline),
-                ToColor(JobColors.Get(row.Job)));
-        }
-
-        ImGui.Dummy(new Vector2(
-            width,
-            lineHeight + 1.0f + underline + Math.Max(this.Config.DpsBarSpacing, 0.0f)));
-    }
-
     private static string FormatShare(double share)
         => share.ToString("0.0", CultureInfo.InvariantCulture) + "%";
-
-    private string FormatRowNumber(double value)
-        => this.Config.DpsRowsCompact
-            ? FormatDps(value)
-            : value.ToString("0.0", CultureInfo.InvariantCulture);
 
     private static string FormatDps(double dps)
     {

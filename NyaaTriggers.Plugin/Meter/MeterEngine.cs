@@ -5,17 +5,35 @@ using System.Linq;
 
 namespace NyaaTriggers.Plugin.Meter;
 
-// Combat log meter ported from NyaaTriggers dps_meter.py. Effect decoding follows cactbot's
-// LogGuide. Encounter totals follow ACT, with pet contributions assigned to their owners. A
-// separate display view resets after damage resumes beyond the idle timeout. The engine has
-// no game or UI dependencies so it can be tested without either.
+// Ported from NyaaTriggers dps_meter.py. Effect decoding follows cactbot LogGuide.
+// Encounter totals follow ACT. The display resets when damage resumes after idle.
 
-internal readonly record struct MeterRow(string Name, string Job, double EncDps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0);
+internal sealed record CombatStats
+{
+    internal double? Damage { get; init; }
+    internal double? Healed { get; init; }
+    internal double? HealShare { get; init; }
+    internal double? Crit { get; init; }
+    internal double? Direct { get; init; }
+    internal double? CritDirect { get; init; }
+    internal double? Taken { get; init; }
+    internal double? HealingTaken { get; init; }
+    internal double? Heals { get; init; }
+    internal double? Overheal { get; init; }
+    internal double? Hits { get; init; }
+}
 
-/// <summary>A new snapshot is created for each read so consumers never see partial
-/// updates.</summary>
+internal readonly record struct MeterRow(string Name, string Job, double EncDps, double Share, double Hps, bool IsSelf, int Deaths, int Rank = 0)
+{
+    internal CombatStats? Stats { get; init; }
+}
+
 internal sealed class OverlaySnapshot
 {
+    internal string Id { get; init; } = string.Empty;
+    internal string Zone { get; init; } = string.Empty;
+    internal double EncHps { get; init; }
+    internal int Participants { get; init; }
     internal required string Title { get; init; }
 
     internal required string Duration { get; init; }
@@ -27,23 +45,18 @@ internal sealed class OverlaySnapshot
     internal required IReadOnlyList<MeterRow> Rows { get; init; }
 }
 
-/// <summary>Parses combat log lines into meter snapshots, skipping malformed
-/// lines.</summary>
 internal sealed class MeterEngine
 {
     /// <summary>ActorControl, line 33, command for a wipe or reset.</summary>
     private const string WipeCommand = "4000000F";
 
-    /// <summary>Seconds without damage before the display pauses. The next hit starts a new
-    /// display segment without splitting encounter totals.</summary>
+    /// <summary>Seconds without damage before pausing the display. Encounter totals stay intact.</summary>
     private const double DefaultIdleTimeout = 120.0;
 
-    /// <summary>Top damage rows. Include the local player as an additional row if ranked
-    /// lower.</summary>
+    /// <summary>Include the local player even if ranked below the limit.</summary>
     private const int MaxOverlayRows = 24;
 
-    // Keep local and party records under pressure. Retired damage remains
-    // in the encounter total and the title marks reduced actor history.
+    // Keep local and party actors. Retired damage stays in totals with a reduced history marker.
     private const int MaxEncounterActors = 1024;
 
     private const int HealType = 0x04;
@@ -52,8 +65,6 @@ internal sealed class MeterEngine
     private static string BoundName(string name)
         => name.Length <= MaxNameChars ? name : name[..MaxNameChars];
 
-    // Map ClassJob IDs to acronyms. NPCs, crafting, gathering and unknown jobs use an empty
-    // label.
     private static readonly IReadOnlyDictionary<int, string> JobAcronyms = new Dictionary<int, string>
     {
         { 1, "GLA" }, { 2, "PGL" }, { 3, "MRD" }, { 4, "LNC" }, { 5, "ARC" }, { 6, "CNJ" }, { 7, "THM" },
@@ -84,20 +95,16 @@ internal sealed class MeterEngine
 
     private static double DefaultClock() => Environment.TickCount64 / 1000.0;
 
-    /// <summary>Called synchronously on encounter end with the final display snapshot,
-    /// including events after the last live push. Null when the display has no
-    /// rows.</summary>
+    /// <summary>Called synchronously with final display rows, or null for an empty display.</summary>
     internal Action<OverlaySnapshot?>? OnEncounterEnd { get; set; }
 
     internal bool HasLiveEncounter => this.current != null;
 
     internal bool HasLiveDamage => this.view?.LastDamage != null;
 
-    /// <summary>Lets the feed initialize a new engine from cached zone metadata without
-    /// treating a replay as a zone change.</summary>
+    /// <summary>Cached zone replay must initialize a new engine without clearing identity.</summary>
     internal bool HasZone => this.zone.Length > 0;
 
-    /// <summary>Install cached zone metadata without erasing cached identity.</summary>
     internal void SetInitialZone(string name)
     {
         if (this.HasZone) return;
@@ -109,8 +116,6 @@ internal sealed class MeterEngine
         }
     }
 
-    /// <summary>Set the display idle timeout in seconds. Invalid values are ignored and
-    /// encounter totals are unaffected.</summary>
     internal void SetIdleTimeout(double secs)
     {
         if (double.IsNaN(secs) || double.IsInfinity(secs))
@@ -122,8 +127,6 @@ internal sealed class MeterEngine
     }
 
 
-    /// <summary>Normalize hexadecimal IDs with a decimal fallback. Reject invalid IDs and
-    /// the no-target values 0 and E0000000.</summary>
     private static int? ActorInt(string? raw)
     {
         var s = raw?.Trim();
@@ -139,8 +142,7 @@ internal sealed class MeterEngine
             return null;
         }
 
-        // Reject values outside the wire's 32 bits. The cast preserves IDs with the high
-        // bit set.
+        // Preserve high bits when casting valid wire IDs.
         if (v <= 0 || v == 0xE0000000L || v > 0xFFFFFFFFL)
         {
             return null;
@@ -149,7 +151,6 @@ internal sealed class MeterEngine
         return unchecked((int)v);
     }
 
-    /// <summary>Update the job cache from roster events as well as spawn lines.</summary>
     internal void NoteJob(int aid, int job)
     {
         if (job <= 0 || (uint)aid >> 24 != 0x10)
@@ -159,8 +160,7 @@ internal sealed class MeterEngine
 
         this.jobs.Set(aid, job);
         if (this.rosterJobs.ContainsKey(aid)) this.rosterJobs[aid] = job;
-        // Update existing rows too. A pet may have created the owner's row before the
-        // roster arrived.
+        // Pet actions may create owner rows before the roster arrives.
         foreach (var enc in new[] { this.current, this.view })
         {
             if (enc != null && enc.Combatants.TryGetValue(aid, out var actor))
@@ -171,8 +171,6 @@ internal sealed class MeterEngine
         }
     }
 
-    /// <summary>Set local identity before the first 02 line. Invalid IDs leave it
-    /// unchanged.</summary>
     internal void SetMe(int aid)
     {
         if (aid <= 0)
@@ -218,13 +216,9 @@ internal sealed class MeterEngine
         => aid is int id && (id == this.meId || this.JobFor(id) != 0 ||
             (this.current?.ActorsLimited == true && (uint)id >> 24 == 0x10));
 
-    /// <summary>Credit player and pet damage dealt, and damage taken directly by players.
-    /// Damage to pets or unrelated actors must not advance display activity.</summary>
     private static bool CreditsPlayer(int? srcKey, int? tgtKey, int? tid)
         => srcKey != null || (tgtKey != null && tgtKey == tid);
 
-    /// <summary>Resolve players to their own ID and player pets to their owner. Return null
-    /// for other actors.</summary>
     private int? PlayerKey(int? aid)
     {
         if (aid is not int id)
@@ -257,6 +251,7 @@ internal sealed class MeterEngine
                 {
                     var retired = enc.Combatants[oldest.Value];
                     enc.RetiredDamage += retired.Damage;
+                    enc.RetiredHealing += retired.Healed;
                     enc.ActorsLimited = true;
                     enc.Combatants.Remove(oldest.Value);
                     enc.ActorOrder.Remove(oldest);
@@ -275,8 +270,7 @@ internal sealed class MeterEngine
             enc.ActorOrder.Remove(c.OrderNode!);
             enc.ActorOrder.AddLast(c.OrderNode!);
 
-            // A pet may create an unnamed owner row before a later line supplies the owner
-            // name.
+            // A pet action may create the owner row before its name arrives.
             if (c.Name.Length == 0)
             {
                 c.Name = name.Length > 0 ? name : this.names.Get(key) ?? string.Empty;
@@ -296,8 +290,7 @@ internal sealed class MeterEngine
     {
         if (this.current != null)
         {
-            // Finalize an idle encounter before starting a new pull. A late tick may have
-            // reopened it without a matching combat end.
+            // A late tick may reopen an idle encounter without a matching combat end.
             var enc = this.current;
             var last = enc.Last ?? enc.Start;
             if (this.clock() - last <= this.idleTimeout)
@@ -314,8 +307,7 @@ internal sealed class MeterEngine
         this.view = new Encounter(title, now);
     }
 
-    /// <summary>Capture final display values before clearing the encounter. Notify
-    /// listeners even for an empty encounter. Safe when no encounter is open.</summary>
+    /// <summary>Notify even for empty encounters, using rows captured before clearing.</summary>
     private void FinalizeEncounter(bool incomplete = false)
     {
         var enc = this.current;
@@ -337,8 +329,6 @@ internal sealed class MeterEngine
         }
     }
 
-    /// <summary>Reset the display segment if damage resumes after the idle timeout.
-    /// Encounter totals remain intact.</summary>
     private void NoteDamage(double now)
     {
         var view = this.view;
@@ -369,9 +359,7 @@ internal sealed class MeterEngine
         this.meId = null;
     }
 
-    /// <summary>Either combat flag can begin or end an encounter. ACT may keep its flag set
-    /// between pulls. Process a falling edge before a rising edge in the same message to
-    /// keep those pulls separate.</summary>
+    /// <summary>ACT can stay in combat between pulls. Process falling edges before rising ones.</summary>
     internal void SetInCombat(bool inAct, bool inGame)
     {
         if (this.current != null &&
@@ -389,7 +377,6 @@ internal sealed class MeterEngine
         this.inGame = inGame;
     }
 
-    /// <summary>Process a log line split on |. Ignore unrelated line types.</summary>
     internal void Process(IReadOnlyList<string> fields)
     {
         if (fields.Count == 0)
@@ -443,8 +430,7 @@ internal sealed class MeterEngine
             return;
         }
 
-        // Every zone line ends the encounter and clears actor identity because IDs can be
-        // reassigned, including on entry to the same instance.
+        // Actor IDs can be reassigned even on entry to the same instance.
         this.FinalizeEncounter();
         this.zone = BoundName(fields[3].Trim());
         this.inAct = false;
@@ -466,7 +452,6 @@ internal sealed class MeterEngine
         var aid = ActorInt(fields[2]);
         if (aid == null)
         {
-            // Keep the known identity until a valid replacement arrives.
             return;
         }
 
@@ -514,8 +499,6 @@ internal sealed class MeterEngine
             this.owners.Set(aid.Value, ownerId);
         }
 
-        // Update both encounter and display rows when a late spawn line supplies actor
-        // details.
         foreach (var enc in new[] { this.current, this.view })
         {
             if (enc != null && enc.Combatants.ContainsKey(aid.Value))
@@ -582,8 +565,7 @@ internal sealed class MeterEngine
             effects.Add(effect with { Reflected = reflected && effect.Kind == EffectKind.Damage });
         }
 
-        // Damage and misses can start an encounter. Healing and buffs before a pull must
-        // not start its clock.
+        // Prepull healing and buffs must not start the clock.
         if (this.current == null)
         {
             if ((srcKey == null && tgtKey == null) ||
@@ -631,7 +613,6 @@ internal sealed class MeterEngine
         Combatant? src = null;
         if (srcKey is int sk)
         {
-            // Use the owner name from the trailing fields, not the pet name.
             src = this.CombatantFor(enc, sk, srcKey == sid ? fields[3] : ownerName);
         }
 
@@ -654,12 +635,18 @@ internal sealed class MeterEngine
                 if (dealer != null)
                 {
                     dealer.Damage += e.Amount;
+                    if (e.Amount > 0)
+                    {
+                        dealer.Hits++;
+                        if (e.Crit) dealer.Crits++;
+                        if (e.Dh) dealer.Directs++;
+                        if (e.Crit && e.Dh) dealer.CritDirects++;
+                    }
                 }
 
                 if (victimKey is int tk && tk != dealerKey && tk == victimId)
                 {
                     // Match ACT by excluding self damage and pet targets from damage taken.
-                    // Enemies do not get meter rows.
                     this.CombatantFor(enc, tk, victimName).DamageTaken += e.Amount;
                 }
             }
@@ -668,6 +655,12 @@ internal sealed class MeterEngine
                 if (src != null)
                 {
                     src.Healed += e.Amount;
+                    if (e.Amount > 0) src.Heals++;
+                }
+
+                if (tgtKey is int receiver && tgtKey == tid)
+                {
+                    this.CombatantFor(enc, receiver, fields[7]).HealingTaken += e.Amount;
                 }
             }
         }
@@ -691,7 +684,6 @@ internal sealed class MeterEngine
 
         if (amount < 0 || amount > 0xFFFFFFFFL)
         {
-            // Reject negative amounts and values wider than the wire's 32 bits.
             amount = 0;
         }
 
@@ -700,7 +692,6 @@ internal sealed class MeterEngine
         var tgtKey = this.PlayerKey(tid);
         if (this.current == null)
         {
-            // Only a positive DoT involving a player can start an encounter here.
             if (which != "DoT" || amount <= 0 || (appKey == null && tgtKey == null))
             {
                 return;
@@ -737,7 +728,6 @@ internal sealed class MeterEngine
     {
         if (which is not ("DoT" or "HoT") || amount <= 0)
         {
-            // Unsupported or empty ticks must not advance the encounter clock.
             return;
         }
 
@@ -755,8 +745,6 @@ internal sealed class MeterEngine
 
             if (tgtKey is int tk && tk != appKey && tk == tid)
             {
-                // Exclude self damage and pet targets from damage taken, as in the ability
-                // path.
                 this.CombatantFor(enc, tk, fields[3]).DamageTaken += amount;
             }
         }
@@ -765,6 +753,11 @@ internal sealed class MeterEngine
             if (appKey is int ak)
             {
                 this.CombatantFor(enc, ak, appKey == appId ? fields[18] : string.Empty).Healed += amount;
+            }
+
+            if (tgtKey is int receiver && tgtKey == tid)
+            {
+                this.CombatantFor(enc, receiver, fields[3]).HealingTaken += amount;
             }
         }
     }
@@ -780,13 +773,11 @@ internal sealed class MeterEngine
         var key = this.PlayerKey(tid);
         if (key == null || key != tid)
         {
-            // Only player deaths count. Pet deaths do not count toward their owners.
             return;
         }
 
         if (this.current == null)
         {
-            // Deaths outside an encounter must not start a new one.
             return;
         }
 
@@ -804,9 +795,7 @@ internal sealed class MeterEngine
     }
 
 
-    /// <summary>Return the current display snapshot or null when no encounter is open.
-    /// Pause after damage inactivity, using encounter start as the fallback if only misses
-    /// occurred.</summary>
+    /// <summary>Pause on damage inactivity. Use encounter start when only misses occurred.</summary>
     internal OverlaySnapshot? LiveSnapshot() => this.Snapshot(final: false);
 
     private bool ViewPaused(double now)
@@ -827,9 +816,11 @@ internal sealed class MeterEngine
         var duration = Math.Max(0.0, spanEnd - enc.Start);
         var encPer = Math.Max(1.0, duration);
         long totalDamage = enc.RetiredDamage;
+        long totalHealing = enc.RetiredHealing;
         foreach (var c in enc.Combatants.Values)
         {
             totalDamage += c.Damage;
+            totalHealing += c.Healed;
         }
 
         var rows = new List<MeterRow>(enc.Combatants.Count);
@@ -843,7 +834,22 @@ internal sealed class MeterEngine
                 Math.Round(share, 1),
                 Math.Round(c.Healed / encPer, 1),
                 this.meId != null && c.Aid == this.meId,
-                c.Deaths));
+                c.Deaths)
+            {
+                Stats = new CombatStats
+                {
+                    Damage = c.Damage,
+                    Healed = c.Healed,
+                    HealShare = totalHealing > 0 ? c.Healed * 100.0 / totalHealing : 0,
+                    Crit = c.Hits > 0 ? c.Crits * 100.0 / c.Hits : 0,
+                    Direct = c.Hits > 0 ? c.Directs * 100.0 / c.Hits : 0,
+                    CritDirect = c.Hits > 0 ? c.CritDirects * 100.0 / c.Hits : 0,
+                    Taken = c.DamageTaken,
+                    HealingTaken = c.HealingTaken,
+                    Heals = c.Heals,
+                    Hits = c.Hits,
+                },
+            });
         }
 
         var sorted = rows.OrderByDescending(r => r.EncDps)
@@ -852,6 +858,10 @@ internal sealed class MeterEngine
             .ToList();
         return new OverlaySnapshot
         {
+            Id = enc.Id,
+            Zone = this.zone,
+            EncHps = Math.Round(totalHealing / encPer, 2),
+            Participants = enc.Combatants.Count,
             Title = enc.Title + (enc.ActorsLimited ? " [limited actors]" : string.Empty)
                 + (incomplete ? " [incomplete feed]" : string.Empty),
             Duration = MmSs(duration),
@@ -867,9 +877,7 @@ internal sealed class MeterEngine
         return $"{s / 60:D2}:{s % 60:D2}";
     }
 
-    /// <summary>Decode a [flags, damage] pair from a 21 or 22 line. Ignore combo and
-    /// positional bytes. Status effects and padding return none. Healing never counts as a
-    /// direct hit.</summary>
+    /// <summary>Decode 21/22 effects, ignoring combo and positional bytes.</summary>
     private static Effect UnpackEffect(string? flagsHex, string? dmgHex)
     {
         if (!long.TryParse(flagsHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var f))
@@ -892,7 +900,6 @@ internal sealed class MeterEngine
         if (!long.TryParse(dmgHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v) ||
             v < 0 || v > 0xFFFFFFFFL)
         {
-            // Reject values outside the wire's 32 bits.
             v = 0;
         }
 
@@ -930,11 +937,10 @@ internal sealed class MeterEngine
 
     private readonly record struct Effect(EffectKind Kind, int Amount, bool Crit, bool Dh, bool Reflected = false);
 
-    /// <summary>Encounter duration ends at the last combat activity, excluding time until
-    /// finalization. LastDamage is used only by the display view for idle
-    /// handling.</summary>
+    /// <summary>Duration ends at last activity. LastDamage controls only display idle handling.</summary>
     private sealed class Encounter
     {
+        internal string Id { get; } = Guid.NewGuid().ToString("N");
         internal Encounter(string title, double start)
         {
             this.Title = title;
@@ -952,10 +958,10 @@ internal sealed class MeterEngine
         internal Dictionary<int, Combatant> Combatants { get; } = new();
         internal LinkedList<int> ActorOrder { get; } = new();
         internal long RetiredDamage { get; set; }
+        internal long RetiredHealing { get; set; }
         internal bool ActorsLimited { get; set; }
     }
 
-    /// <summary>Player totals include contributions from owned pets.</summary>
     private sealed class Combatant
     {
         internal Combatant(int aid, string name, int job)
@@ -976,14 +982,18 @@ internal sealed class MeterEngine
         internal long Damage { get; set; }
 
         internal long Healed { get; set; }
+        internal long HealingTaken { get; set; }
+        internal long Heals { get; set; }
+        internal long Hits { get; set; }
+        internal long Crits { get; set; }
+        internal long Directs { get; set; }
+        internal long CritDirects { get; set; }
 
         internal long DamageTaken { get; set; }
 
         internal int Deaths { get; set; }
     }
 
-    /// <summary>Updating an actor moves it to the most recently seen position. Trim after
-    /// insertion so the map stays within its limit.</summary>
     private sealed class BoundedMap<T>
     {
         private const int Cap = 1024;

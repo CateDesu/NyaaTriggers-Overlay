@@ -4,10 +4,8 @@ using Dalamud.Interface.Textures.TextureWraps;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Load gold job icons from ui/icon/062000. Class IDs start at 062301 and job IDs
-/// are 062400 plus ClassJob.JobIndex. Request high resolution icons with the standard
-/// resolution as fallback. Dalamud owns the cached textures, so these handles need no
-/// disposal.</summary>
+/// <summary>Gold class icons start at 062301. Jobs use 062400 + ClassJob.JobIndex.
+/// Dalamud owns the cached textures.</summary>
 internal static class JobIcons
 {
     private static readonly Dictionary<string, uint> ByJob = new(System.StringComparer.OrdinalIgnoreCase)
@@ -48,14 +46,25 @@ internal static class JobIcons
 
     private static readonly Dictionary<uint, ISharedImmediateTexture> Cache = new();
 
-    /// <summary>Return null for unknown jobs. Textures may be unavailable while
-    /// loading.</summary>
-    internal static IDalamudTextureWrap? Get(string job)
+    private static readonly Dictionary<string, uint> ClassJobs = new(System.StringComparer.OrdinalIgnoreCase)
+    {
+        ["GLA"] = 1, ["PGL"] = 2, ["MRD"] = 3, ["LNC"] = 4, ["ARC"] = 5, ["CNJ"] = 6, ["THM"] = 7,
+        ["PLD"] = 19, ["MNK"] = 20, ["WAR"] = 21, ["DRG"] = 22, ["BRD"] = 23, ["WHM"] = 24,
+        ["BLM"] = 25, ["ACN"] = 26, ["SMN"] = 27, ["SCH"] = 28, ["ROG"] = 29, ["NIN"] = 30,
+        ["MCH"] = 31, ["DRK"] = 32, ["AST"] = 33, ["SAM"] = 34, ["RDM"] = 35, ["BLU"] = 36,
+        ["GNB"] = 37, ["DNC"] = 38, ["RPR"] = 39, ["SGE"] = 40, ["VPR"] = 41, ["PCT"] = 42,
+        ["BST"] = 43,
+    };
+
+    /// <summary>Textures may be unavailable while loading.</summary>
+    internal static IDalamudTextureWrap? Get(string job, bool lmeter = false)
     {
         if (string.IsNullOrWhiteSpace(job) || !ByJob.TryGetValue(job, out var iconId))
         {
             return null;
         }
+
+        if (lmeter && ClassJobs.TryGetValue(job, out var classJob)) iconId = 62000 + classJob;
 
         if (!Cache.TryGetValue(iconId, out var texture))
         {

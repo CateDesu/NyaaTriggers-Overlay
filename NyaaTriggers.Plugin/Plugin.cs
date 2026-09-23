@@ -43,6 +43,18 @@ public sealed class Plugin : IDalamudPlugin
             this.config.Save();
         }
 
+        if (this.config.Version < 6)
+        {
+            this.config.MigrateFromV5();
+            this.config.Save();
+        }
+
+        if (this.config.Version < 7)
+        {
+            this.config.MigrateFromV6();
+            this.config.Save();
+        }
+
         this.config.Sanitize();
         this.bridge = new BridgeHost(this.config);
         ScaledFonts? fonts = null;

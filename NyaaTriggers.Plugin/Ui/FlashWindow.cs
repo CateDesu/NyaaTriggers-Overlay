@@ -6,8 +6,7 @@ using Dalamud.Interface.Windowing;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Draw alarm flashes in a separate window so the alert window bounds do not clip
-/// them.</summary>
+/// <summary>Use a separate window so alert bounds do not clip the flash.</summary>
 internal sealed class FlashWindow : Window
 {
     private const ImGuiWindowFlags FlashFlags =
@@ -20,8 +19,6 @@ internal sealed class FlashWindow : Window
 
     private readonly Configuration config;
 
-    /// <summary>Strongest live alarm opacity, set each frame so the flash fades with its
-    /// callout.</summary>
     internal float AlarmAlpha { get; set; } = 1.0f;
 
     internal FlashWindow(Configuration config)
@@ -39,8 +36,7 @@ internal sealed class FlashWindow : Window
     {
         this.Flags = FlashFlags;
 
-        // Follow viewport changes. Divide size by GlobalScale because Dalamud scales Size
-        // but leaves Position unchanged.
+        // Dalamud scales Size but leaves Position unchanged.
         var viewport = ImGui.GetMainViewport();
         this.Position = viewport.Pos;
         this.PositionCondition = ImGuiCond.Always;
@@ -59,8 +55,6 @@ internal sealed class FlashWindow : Window
         var edge = ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, color.W * pulse));
         var clear = ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.0f));
 
-        // Clamp flash depth to half the shorter side to prevent overlapping bands and
-        // negative side heights.
         var share = Math.Clamp(this.config.AlarmScreenFlashSize, 0.02f, 0.50f);
         var shortest = Math.Min(size.X, size.Y);
         var depth = Math.Min(Math.Clamp(shortest * share, 60.0f, 220.0f), shortest * 0.5f);

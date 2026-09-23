@@ -13,6 +13,8 @@
     <Compile Include="$(SourceRoot)/Bridge/*.cs" />
     <Compile Include="$(SourceRoot)/Meter/*.cs" />
     <Compile Include="$(SourceRoot)/Ui/DpsWindow.cs" />
+    <Compile Include="$(SourceRoot)/Ui/DpsWindow.Kagerou.cs" />
+    <Compile Include="$(SourceRoot)/Ui/DpsWindow.LMeter.cs" />
     <Compile Include="$(SourceRoot)/Ui/OverlayWindow.cs" />
     <Compile Include="$(SourceRoot)/Ui/PluginUi.cs" />
     <Compile Include="$(SourceRoot)/Ui/JobColors.cs" />

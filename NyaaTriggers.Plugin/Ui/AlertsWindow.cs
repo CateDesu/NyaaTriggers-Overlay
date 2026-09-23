@@ -61,14 +61,11 @@ internal sealed class AlertsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Config.AlertsEffectColor;
 
-    /// <summary>Resolve line layout before drawing so a stack anchored at the bottom can be
-    /// positioned from its total height.</summary>
+    /// <summary>Measure before drawing to anchor the full stack at the bottom.</summary>
     private readonly record struct DrawItem(
         List<MeasuredLine> Lines, Vector4 Color, float Alpha, bool IsAlarm,
         float Scale, float LineHeight, float MeasuredHeight, float Life);
 
-    /// <summary>Reuse drawing storage each frame. Cache text layouts until the text or font
-    /// changes.</summary>
     private readonly List<DrawItem> items = new();
 
     protected override void DrawContent()
@@ -90,7 +87,6 @@ internal sealed class AlertsWindow : OverlayWindow
             }
         }
 
-        // Fade the alarm border with the callout.
         var alarmAlpha = 0.0f;
         foreach (var item in items)
         {
@@ -116,8 +112,6 @@ internal sealed class AlertsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Collect visible callouts in display order. Use samples when empty and
-    /// unlocked.</summary>
     private List<DrawItem> CollectItems()
     {
         var items = this.items;
@@ -134,8 +128,7 @@ internal sealed class AlertsWindow : OverlayWindow
             return items;
         }
 
-        // Take the newest visible alerts before applying display order. Filtered severities
-        // do not consume slots.
+        // Filtered severities must not consume slots.
         var max = Math.Clamp(this.Config.AlertsMaxVisible, 1, 8);
         for (var i = alerts.Count - 1; i >= 0 && items.Count < max; i--)
         {
@@ -201,8 +194,6 @@ internal sealed class AlertsWindow : OverlayWindow
         items.Add(this.MakeItem(text, color, alpha, alert.Severity == Severity.Alarm, scale, life));
     }
 
-    /// <summary>Measure wrapped or truncated lines using the alarm font size so layout
-    /// matches drawing.</summary>
     private DrawItem MakeItem(string text, Vector4 color, float alpha, bool isAlarm, float scale, float life)
     {
         var width = Math.Max(ImGui.GetContentRegionAvail().X, 1.0f);
@@ -238,7 +229,6 @@ internal sealed class AlertsWindow : OverlayWindow
         return new DrawItem(lines, color, alpha, isAlarm, scale, height, height, life);
     }
 
-    /// <summary>Include the remaining time strip and gap in the block height.</summary>
     private float BlockHeight(DrawItem item)
     {
         var height = item.Lines.Count * item.LineHeight;
@@ -279,7 +269,6 @@ internal sealed class AlertsWindow : OverlayWindow
             this.DrawAlertLines(drawList, item, origin, width);
         }
 
-        // Anchor the remaining time strip to the callout alignment.
         if (this.Config.AlertsLifeline)
         {
             var fillWidth = width * Math.Clamp(item.Life, 0.0f, 1.0f);
@@ -300,7 +289,6 @@ internal sealed class AlertsWindow : OverlayWindow
             }
         }
 
-        // Draw list calls reserve no layout space, so advance past this block explicitly.
         ImGui.Dummy(new Vector2(width, this.BlockHeight(item)));
     }
 
@@ -327,8 +315,7 @@ internal sealed class AlertsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Wrap at word boundaries using the current font. Words wider than the window
-    /// remain intact and are clipped.</summary>
+    /// <summary>Words wider than the window remain intact and are clipped.</summary>
     private static List<string> WrapLines(string text, float width)
     {
         var lines = new List<string>();

@@ -46,7 +46,7 @@ internal static class FixFollowupTests
             foreach (var global in new[] { 1f, 1.5f, 2f, 3f })
             foreach (var ready in new[] { false, true })
             {
-                var config = new Configuration { Locked = false, DpsStyle = DpsMeterStyle.Bars, DpsTextEffect = TextEffectStyle.Off };
+                var config = new Configuration { Locked = false, DpsStyle = DpsMeterStyle.LMeter, DpsTextEffect = TextEffectStyle.Off };
                 using var host = new BridgeHost(config);
                 using var fonts = new ScaledFonts { AvailableSize = pixels => ready ? MathF.Ceiling(pixels) : null };
                 var window = new DpsWindow(config, host, fonts);
@@ -252,8 +252,8 @@ internal static class FixFollowupTests
             {
                 var config = new Configuration
                 {
-                    Locked = false, DpsStyle = DpsMeterStyle.Bars, DpsTextEffect = TextEffectStyle.Off,
-                    DpsTextScale = scale, DpsBarHeight = height, DpsBarSpacing = spacing, DpsRowsShowIcons = true,
+                    Locked = false, DpsStyle = DpsMeterStyle.LMeter, DpsTextEffect = TextEffectStyle.Off,
+                    DpsTextScale = scale, DpsBarHeight = height, DpsBarSpacing = spacing, DpsRowsShowIcons = true, DpsShowHeader = false,
                 };
                 using var host = new BridgeHost(config);
                 var ready = false;

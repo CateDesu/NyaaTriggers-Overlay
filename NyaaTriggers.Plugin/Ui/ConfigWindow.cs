@@ -19,7 +19,7 @@ internal sealed class ConfigWindow : Window
     private static readonly string[] CountdownNames = { "Hidden", "Whole seconds", "Tenths" };
     private static readonly string[] OrderNames = { "Newest at top", "Oldest at top" };
     private static readonly string[] AlignNames = { "Left", "Center", "Right" };
-    private static readonly string[] DpsStyleNames = { "Bars", "Horizon Overlay", "Kagerou" };
+    private static readonly string[] KagerouViewNames = { "DPS", "Tank", "Heal", "24" };
     private static readonly string[] HorizonThemeNames = { "Color by role", "Black & white" };
     private static readonly string[] PrivacyNames = { "Shown", "Initials only", "Hidden" };
     private static readonly string[] DpsSortNames = { "By DPS", "Alphabetical", "Tanks, healers, DPS" };
@@ -28,12 +28,10 @@ internal sealed class ConfigWindow : Window
     private readonly BridgeHost bridge;
     private readonly PluginUi ui;
 
-    /// <summary>Keep edits separate so typing a port does not rebind the
-    /// listener.</summary>
+    /// <summary>Wait for Apply before rebinding.</summary>
     private int pendingPort;
 
-    /// <summary>Keep edits separate so typing an endpoint does not reconnect the
-    /// feed.</summary>
+    /// <summary>Wait for Apply before reconnecting.</summary>
     private string pendingEndpoint;
 
     private string profileName = string.Empty;
@@ -63,8 +61,7 @@ internal sealed class ConfigWindow : Window
 
     public override void Draw()
     {
-        // Scroll sections above a fixed footer so collapsed headers do not overlap the
-        // resize border.
+        // Keep the footer clear of collapsed headers and the resize border.
         if (ImGui.BeginChild("##sections", new Vector2(0.0f, -ImGui.GetFrameHeightWithSpacing())))
         {
             if (ImGui.CollapsingHeader("Link", ImGuiTreeNodeFlags.DefaultOpen))
@@ -91,17 +88,9 @@ internal sealed class ConfigWindow : Window
                 ImGui.Spacing();
             }
 
-            if (ImGui.CollapsingHeader("DPS meter"))
-            {
-                this.DrawDps();
-                ImGui.Spacing();
-            }
-
-            if (ImGui.CollapsingHeader("Horizon Overlay"))
-            {
-                this.DrawHorizon();
-                ImGui.Spacing();
-            }
+            this.DrawMeterSection(DpsMeterStyle.Kagerou);
+            this.DrawMeterSection(DpsMeterStyle.HorizonOverlay);
+            this.DrawMeterSection(DpsMeterStyle.LMeter);
 
             if (ImGui.CollapsingHeader("Profiles"))
             {
@@ -152,7 +141,6 @@ internal sealed class ConfigWindow : Window
         ImGui.SetNextItemWidth(120);
         ImGui.InputInt("Port", ref this.pendingPort);
 
-        // Clamp on Apply so the bound port matches the field after editing finishes.
         ImGui.SameLine();
         var outOfRange = this.pendingPort is < 1024 or > 65535;
         // Allow Apply to repair invalid stored ports or retry a failed bind.
@@ -210,7 +198,6 @@ internal sealed class ConfigWindow : Window
             ImGui.InputText("IINACT feed", ref this.pendingEndpoint, 256);
 
             var endpoint = this.pendingEndpoint.Trim();
-            // Use the same endpoint validation as the IINACT client.
             var valid = Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri) &&
                         (endpointUri.Scheme == Uri.UriSchemeWs || endpointUri.Scheme == Uri.UriSchemeWss) &&
                         endpointUri.Host.Length > 0;
@@ -258,8 +245,6 @@ internal sealed class ConfigWindow : Window
     {
         this.Check("Timeline bars", () => this.config.ShowTimeline, v => this.config.ShowTimeline = v);
         this.Check("Alert pop-ups", () => this.config.ShowAlerts, v => this.config.ShowAlerts = v);
-        // Use a distinct ID from the DPS meter section header.
-        this.Check("DPS meter##showDps", () => this.config.ShowDps, v => this.config.ShowDps = v);
 
         ImGui.Spacing();
 
@@ -270,9 +255,6 @@ internal sealed class ConfigWindow : Window
         this.VisibilityRow("Alerts",
             () => this.config.AlertsOnlyInDuty, v => this.config.AlertsOnlyInDuty = v,
             () => this.config.AlertsOnlyInCombat, v => this.config.AlertsOnlyInCombat = v);
-        this.VisibilityRow("DPS meter",
-            () => this.config.DpsOnlyInDuty, v => this.config.DpsOnlyInDuty = v,
-            () => this.config.DpsOnlyInCombat, v => this.config.DpsOnlyInCombat = v);
         ImGui.TextDisabled("Both ticked on one box means it shows only for a fight inside a duty.");
 
         ImGui.Spacing();
@@ -294,7 +276,6 @@ internal sealed class ConfigWindow : Window
             this.bridge.PushTestAlert(Severity.Alarm);
         }
 
-        // Explain when visibility settings hide the queued test alert.
         if (!this.config.ShowAlerts)
         {
             ImGui.SameLine();
@@ -315,7 +296,6 @@ internal sealed class ConfigWindow : Window
 
     private void DrawTimeline()
     {
-        // Scope repeated widget labels to this window section.
         ImGui.PushID("timeline");
 
         this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
@@ -498,183 +478,246 @@ internal sealed class ConfigWindow : Window
         ImGui.PopID();
     }
 
-    private void DrawDps()
+    private void DrawMeterSection(DpsMeterStyle style)
     {
-        ImGui.PushID("dps");
+        var name = DpsWindow.MeterName(style);
+        if (!ImGui.CollapsingHeader(name)) return;
+        var meter = this.config.GetMeter(style);
+        ImGui.PushID(name);
+        try
+        {
+            this.Check($"Enable {name}", () => meter.ShowDps, value => meter.ShowDps = value);
+            this.VisibilityRow("Show only",
+                () => meter.DpsOnlyInDuty, value => meter.DpsOnlyInDuty = value,
+                () => meter.DpsOnlyInCombat, value => meter.DpsOnlyInCombat = value);
+            ImGui.TextDisabled("Each meter keeps its own settings and placement. Multiple meters can be enabled.");
+            ImGui.Spacing();
+            if (ImGui.CollapsingHeader("Display")) this.DrawMeterCommon(meter);
+            if (ImGui.CollapsingHeader("Appearance"))
+            {
+                switch (style)
+                {
+                    case DpsMeterStyle.Kagerou: this.DrawKagerou(meter); break;
+                    case DpsMeterStyle.HorizonOverlay: this.DrawHorizon(meter); break;
+                    default: this.DrawLMeter(meter); break;
+                }
+            }
+            if (style == DpsMeterStyle.Kagerou && ImGui.CollapsingHeader("Column headings"))
+                DpsWindow.DrawKagerouHeadingOptions(meter, this.config.Save);
+        }
+        finally
+        {
+            ImGui.PopID();
+        }
+        ImGui.Spacing();
+    }
 
-        this.Combo("Style", DpsStyleNames, () => this.config.DpsStyle, v => this.config.DpsStyle = v);
-        ImGui.TextDisabled("The Horizon Overlay style has its own section below.");
+    private void DrawMeterCommon(MeterSettings meter)
+    {
         this.Slider("Text size", 0.5f, 6.0f, "%.2fx",
-            () => this.config.DpsTextScale, v => this.config.DpsTextScale = v);
+            () => meter.DpsTextScale, v => meter.DpsTextScale = v);
         this.PercentSlider("Background",
-            () => this.config.DpsBgOpacity, v => this.config.DpsBgOpacity = v);
+            () => meter.DpsBgOpacity, v => meter.DpsBgOpacity = v);
         this.PercentSlider("Window fade",
-            () => this.config.DpsFade, v => this.config.DpsFade = v, 5.0f, 100.0f);
+            () => meter.DpsFade, v => meter.DpsFade = v, 5.0f, 100.0f);
         ImGui.TextDisabled("The whole box's opacity, backdrop included.");
         this.Check("Only show yourself",
-            () => this.config.DpsSoloOnly, v => this.config.DpsSoloOnly = v);
+            () => meter.DpsSoloOnly, v => meter.DpsSoloOnly = v);
         this.Check("Your own row first",
-            () => this.config.DpsSelfFirst, v => this.config.DpsSelfFirst = v);
-        ImGui.TextDisabled("Top of the Bars and Kagerou lists, left end of the Horizon Overlay strip.");
+            () => meter.DpsSelfFirst, v => meter.DpsSelfFirst = v);
         this.Combo("Sort order", DpsSortNames,
-            () => this.config.DpsSortOrder, v => this.config.DpsSortOrder = v);
+            () => meter.DpsSortOrder, v => meter.DpsSortOrder = v);
         this.SliderInt("Max combatants", 1, 24,
-            () => this.config.DpsMaxRows, v => this.config.DpsMaxRows = v);
+            () => meter.DpsMaxRows, v => meter.DpsMaxRows = v);
 
         ImGui.Spacing();
 
-        this.Check("Rank numbers",
-            () => this.config.DpsRowsShowRank, v => this.config.DpsRowsShowRank = v);
-        this.Check("Job icons",
-            () => this.config.DpsRowsShowIcons, v => this.config.DpsRowsShowIcons = v);
-        ImGui.TextDisabled("Both apply to the Bars and Kagerou rows; the Horizon strip has its own toggles.");
         this.Combo("Other players' names", PrivacyNames,
-            () => this.config.DpsNamePrivacy, v => this.config.DpsNamePrivacy = v);
+            () => meter.DpsNamePrivacy, v => meter.DpsNamePrivacy = v);
         this.Check("Call yourself YOU",
-            () => this.config.DpsSelfNameYou, v => this.config.DpsSelfNameYou = v);
-        this.Check("Show deaths",
-            () => this.config.DpsShowDeaths, v => this.config.DpsShowDeaths = v);
-        ImGui.TextDisabled("A red count beside the name. The Horizon strip needs names shown.");
+            () => meter.DpsSelfNameYou, v => meter.DpsSelfNameYou = v);
         this.Check("Keep the last encounter on screen",
-            () => this.config.DpsHoldLast, v => this.config.DpsHoldLast = v);
+            () => meter.DpsHoldLast, v => meter.DpsHoldLast = v);
         ImGui.TextDisabled("The final meter stays up after a wipe until damage starts on the next pull or the zone changes.\nThis also keeps it visible outside combat.");
 
         ImGui.Spacing();
 
-        ImGui.TextDisabled("The encounter line, above the rows and under the strip.");
         this.Check("Encounter line",
-            () => this.config.DpsShowHeader, v => this.config.DpsShowHeader = v);
+            () => meter.DpsShowHeader, v => meter.DpsShowHeader = v);
         this.Check("Duration",
-            () => this.config.DpsHeaderDuration, v => this.config.DpsHeaderDuration = v);
+            () => meter.DpsHeaderDuration, v => meter.DpsHeaderDuration = v);
         this.Check("Total DPS",
-            () => this.config.DpsHeaderTotalDps, v => this.config.DpsHeaderTotalDps = v);
-        this.TextInput("Line format", "{title} · {duration} · {dps}",
-            () => this.config.DpsHeaderFormat, v => this.config.DpsHeaderFormat = v);
-        ImGui.TextDisabled("Empty joins the parts with a dot. Tokens reorder or reword them.");
+            () => meter.DpsHeaderTotalDps, v => meter.DpsHeaderTotalDps = v);
+        if (meter.DpsStyle == DpsMeterStyle.LMeter)
+        {
+            this.Check("Encounter name", () => meter.DpsLMeterHeaderTitle, v => meter.DpsLMeterHeaderTitle = v);
+            this.Check("Total HPS", () => meter.DpsLMeterHeaderHps, v => meter.DpsLMeterHeaderHps = v);
+            this.Check("Total deaths", () => meter.DpsLMeterHeaderDeaths, v => meter.DpsLMeterHeaderDeaths = v);
+        }
+        if (meter.DpsStyle != DpsMeterStyle.Kagerou)
+        {
+            this.TextInput("Line format", "{title} · {duration} · {dps}",
+                () => meter.DpsHeaderFormat, v => meter.DpsHeaderFormat = v);
+            ImGui.TextDisabled(meter.DpsStyle == DpsMeterStyle.LMeter
+                ? "Empty uses the LMeter header. A custom line replaces its colored sections."
+                : "Empty joins the parts with a dot. Tokens reorder or reword them.");
+        }
 
         ImGui.Spacing();
 
-        this.Slider("Bar height", 12.0f, 48.0f, "%.0f px",
-            () => this.config.DpsBarHeight, v => this.config.DpsBarHeight = v);
-        this.Slider("Bar spacing", 0.0f, 16.0f, "%.0f px",
-            () => this.config.DpsBarSpacing, v => this.config.DpsBarSpacing = v);
-        this.Slider("Corner rounding", 0.0f, 12.0f, "%.0f px",
-            () => this.config.DpsBarRounding, v => this.config.DpsBarRounding = v);
-        this.Slider("Border thickness", 0.0f, 4.0f, "%.0f px",
-            () => this.config.DpsBarBorderThickness, v => this.config.DpsBarBorderThickness = v);
-        this.PercentSlider("Track opacity",
-            () => this.config.DpsBarTrackOpacity, v => this.config.DpsBarTrackOpacity = v);
-        ImGui.TextDisabled("The full-length slot under the fill.");
-        this.Check("Anchor fill to the right",
-            () => this.config.DpsBarRightToLeft, v => this.config.DpsBarRightToLeft = v);
-        this.Check("Job colored bars",
-            () => this.config.DpsBarJobColors, v => this.config.DpsBarJobColors = v);
-        this.Check("Show damage share",
-            () => this.config.DpsBarsShowShare, v => this.config.DpsBarsShowShare = v);
-        this.Check("Highlight your own bar",
-            () => this.config.DpsBarSelfHighlight, v => this.config.DpsBarSelfHighlight = v);
-        this.Check("Highlight the top DPS bar",
-            () => this.config.DpsBarTopHighlight, v => this.config.DpsBarTopHighlight = v);
-        ImGui.TextDisabled("These apply to the Bars style only.");
-        this.Check("Show HPS",
-            () => this.config.DpsRowsShowHps, v => this.config.DpsRowsShowHps = v);
-        ImGui.TextDisabled("Bars and Kagerou rows: append the member's hps to the numbers.");
-        this.Check("Compact numbers",
-            () => this.config.DpsRowsCompact, v => this.config.DpsRowsCompact = v);
-        ImGui.TextDisabled("10.2k instead of 10234.5, on Bars and Kagerou rows. The Horizon Overlay has its own compact knob.");
-        this.Check("Alternate row tint",
-            () => this.config.DpsRowStripes, v => this.config.DpsRowStripes = v);
-        this.PercentSlider("Row tint strength",
-            () => this.config.DpsRowStripeOpacity, v => this.config.DpsRowStripeOpacity = v, 0.0f, 50.0f);
-        ImGui.TextDisabled("Bars and Kagerou: lighten every other row.");
-
-        ImGui.Spacing();
-
-        this.ColorRow("Bar", () => this.config.DpsBarColor, v => this.config.DpsBarColor = v);
-        this.ColorRow("Bar track",
-            () => this.config.DpsBarTrackColor, v => this.config.DpsBarTrackColor = v);
-        this.ColorRow("Bar border",
-            () => this.config.DpsBarBorderColor, v => this.config.DpsBarBorderColor = v);
-        this.ColorRow("Bar text", () => this.config.DpsTextColor, v => this.config.DpsTextColor = v);
-        this.ColorRow("Self bar",
-            () => this.config.DpsBarSelfColor, v => this.config.DpsBarSelfColor = v);
-        this.ColorRow("Top DPS bar",
-            () => this.config.DpsBarTopColor, v => this.config.DpsBarTopColor = v);
-        ImGui.TextDisabled("Bars style only; Horizon Overlay colours by role, Kagerou by job. Self bar needs Highlight your own bar, top DPS bar needs Highlight the top DPS bar.");
-
-        ImGui.Spacing();
-
+        this.ColorRow("Text color", () => meter.DpsTextColor, value => meter.DpsTextColor = value);
         this.EffectGroup(
-            () => this.config.DpsTextEffect, v => this.config.DpsTextEffect = v,
-            () => this.config.DpsEffectThickness, v => this.config.DpsEffectThickness = v,
-            () => this.config.DpsEffectColor, v => this.config.DpsEffectColor = v);
-
-        ImGui.PopID();
+            () => meter.DpsTextEffect, value => meter.DpsTextEffect = value,
+            () => meter.DpsEffectThickness, value => meter.DpsEffectThickness = value,
+            () => meter.DpsEffectColor, value => meter.DpsEffectColor = value);
     }
 
-    private void DrawHorizon()
+    private void DrawKagerou(MeterSettings meter)
+    {
+        this.Combo("View", KagerouViewNames,
+            () => meter.DpsKagerouTab, v => meter.DpsKagerouTab = v);
+        this.Check("Use meter controls while locked",
+            () => meter.DpsKagerouInteractive, v => meter.DpsKagerouInteractive = v);
+        ImGui.TextDisabled("Unlock the overlay or enable this to use its tabs and history menu.");
+        this.Check("Compact numbers",
+            () => meter.DpsKagerouCompact, v => meter.DpsKagerouCompact = v);
+        this.Check("Job icons",
+            () => meter.DpsKagerouIcons, v => meter.DpsKagerouIcons = v);
+        this.Check("Rank numbers",
+            () => meter.DpsKagerouRank, v => meter.DpsKagerouRank = v);
+        this.Check("DPS column: deaths",
+            () => meter.DpsKagerouDeaths, v => meter.DpsKagerouDeaths = v);
+        this.Check("DPS column: healing share",
+            () => meter.DpsKagerouHealingShare, v => meter.DpsKagerouHealingShare = v);
+        this.Check("DPS column: critical hits",
+            () => meter.DpsKagerouCrit, v => meter.DpsKagerouCrit = v);
+        this.Check("DPS column: direct hits",
+            () => meter.DpsKagerouDirect, v => meter.DpsKagerouDirect = v);
+        this.Check("DPS column: critical direct hits",
+            () => meter.DpsKagerouCritDirect, v => meter.DpsKagerouCritDirect = v);
+        ImGui.TextDisabled("Missing statistics display as unavailable. Overheal is not supplied by the raw feed.");
+        this.Check("Alternate row tint", () => meter.DpsRowStripes, value => meter.DpsRowStripes = value);
+        this.PercentSlider("Row tint strength", () => meter.DpsRowStripeOpacity, value => meter.DpsRowStripeOpacity = value, 0, 50);
+    }
+
+    private void DrawLMeter(MeterSettings meter)
+    {
+        ImGui.TextDisabled("Bars are sized relative to the highest DPS in the encounter.");
+        this.Check("Show DPS", () => meter.DpsLMeterShowDps, value => meter.DpsLMeterShowDps = value);
+        this.Check("Rank numbers", () => meter.DpsRowsShowRank, value => meter.DpsRowsShowRank = value);
+        this.Check("Job icons", () => meter.DpsRowsShowIcons, value => meter.DpsRowsShowIcons = value);
+        this.Check("Show deaths", () => meter.DpsShowDeaths, value => meter.DpsShowDeaths = value);
+        this.Slider("Bar height", 12.0f, 48.0f, "%.0f px",
+            () => meter.DpsBarHeight, v => meter.DpsBarHeight = v);
+        this.Slider("Bar spacing", 0.0f, 16.0f, "%.0f px",
+            () => meter.DpsBarSpacing, v => meter.DpsBarSpacing = v);
+        this.Slider("Corner rounding", 0.0f, 12.0f, "%.0f px",
+            () => meter.DpsBarRounding, v => meter.DpsBarRounding = v);
+        this.Slider("Border thickness", 0.0f, 4.0f, "%.0f px",
+            () => meter.DpsBarBorderThickness, v => meter.DpsBarBorderThickness = v);
+        this.PercentSlider("Track opacity",
+            () => meter.DpsBarTrackOpacity, v => meter.DpsBarTrackOpacity = v);
+        ImGui.TextDisabled("The full-length slot under the fill.");
+        this.Check("Anchor fill to the right",
+            () => meter.DpsBarRightToLeft, v => meter.DpsBarRightToLeft = v);
+        this.Check("Job colored bars",
+            () => meter.DpsBarJobColors, v => meter.DpsBarJobColors = v);
+        this.Check("Show damage share",
+            () => meter.DpsBarsShowShare, v => meter.DpsBarsShowShare = v);
+        this.Check("Highlight your own bar",
+            () => meter.DpsBarSelfHighlight, v => meter.DpsBarSelfHighlight = v);
+        this.Check("Highlight the top DPS bar",
+            () => meter.DpsBarTopHighlight, v => meter.DpsBarTopHighlight = v);
+        this.Check("Show HPS",
+            () => meter.DpsRowsShowHps, v => meter.DpsRowsShowHps = v);
+        this.Check("Compact numbers",
+            () => meter.DpsRowsCompact, v => meter.DpsRowsCompact = v);
+        this.Check("Alternate row tint",
+            () => meter.DpsRowStripes, v => meter.DpsRowStripes = v);
+        this.PercentSlider("Row tint strength",
+            () => meter.DpsRowStripeOpacity, v => meter.DpsRowStripeOpacity = v, 0.0f, 50.0f);
+
+        ImGui.Spacing();
+
+        this.ColorRow("Header background", () => meter.DpsLMeterHeaderColor, v => meter.DpsLMeterHeaderColor = v);
+        this.ColorRow("Duration color", () => meter.DpsLMeterDurationColor, v => meter.DpsLMeterDurationColor = v);
+        this.ColorRow("Encounter totals color", () => meter.DpsLMeterTotalsColor, v => meter.DpsLMeterTotalsColor = v);
+        this.ColorRow("Bar", () => meter.DpsBarColor, v => meter.DpsBarColor = v);
+        this.ColorRow("Bar track",
+            () => meter.DpsBarTrackColor, v => meter.DpsBarTrackColor = v);
+        this.ColorRow("Bar border",
+            () => meter.DpsBarBorderColor, v => meter.DpsBarBorderColor = v);
+        this.ColorRow("Self bar",
+            () => meter.DpsBarSelfColor, v => meter.DpsBarSelfColor = v);
+        this.ColorRow("Top DPS bar",
+            () => meter.DpsBarTopColor, v => meter.DpsBarTopColor = v);
+
+    }
+
+    private void DrawHorizon(MeterSettings meter)
     {
         ImGui.PushID("horizon");
+        this.Check("Show deaths", () => meter.DpsShowDeaths, value => meter.DpsShowDeaths = value);
 
         this.Combo("Colors", HorizonThemeNames,
-            () => this.config.DpsHorizTheme, v => this.config.DpsHorizTheme = v);
+            () => meter.DpsHorizTheme, v => meter.DpsHorizTheme = v);
 
         this.Check("Show names",
-            () => this.config.DpsHorizShowNames, v => this.config.DpsHorizShowNames = v);
+            () => meter.DpsHorizShowNames, v => meter.DpsHorizShowNames = v);
         this.Check("Rank numbers",
-            () => this.config.DpsHorizShowRank, v => this.config.DpsHorizShowRank = v);
+            () => meter.DpsHorizShowRank, v => meter.DpsHorizShowRank = v);
         this.Check("Job icons",
-            () => this.config.DpsHorizShowIcons, v => this.config.DpsHorizShowIcons = v);
+            () => meter.DpsHorizShowIcons, v => meter.DpsHorizShowIcons = v);
         this.Check("HPS",
-            () => this.config.DpsHorizShowHps, v => this.config.DpsHorizShowHps = v);
+            () => meter.DpsHorizShowHps, v => meter.DpsHorizShowHps = v);
         ImGui.TextDisabled("Off shows the job acronym in its slot.");
         this.Check("Two-tone highlight",
-            () => this.config.DpsHorizHighlight, v => this.config.DpsHorizHighlight = v);
+            () => meter.DpsHorizHighlight, v => meter.DpsHorizHighlight = v);
         this.Check("Damage %",
-            () => this.config.DpsHorizShowPercent, v => this.config.DpsHorizShowPercent = v);
+            () => meter.DpsHorizShowPercent, v => meter.DpsHorizShowPercent = v);
 
         ImGui.Spacing();
 
         this.Slider("Max bar width", 40.0f, 400.0f, "%.0f px",
-            () => this.config.DpsHorizMaxBarWidth, v => this.config.DpsHorizMaxBarWidth = v);
+            () => meter.DpsHorizMaxBarWidth, v => meter.DpsHorizMaxBarWidth = v);
         this.Slider("Bar height", 10.0f, 60.0f, "%.0f px",
-            () => this.config.DpsHorizBarHeight, v => this.config.DpsHorizBarHeight = v);
+            () => meter.DpsHorizBarHeight, v => meter.DpsHorizBarHeight = v);
         this.Slider("Skew", 0.0f, 45.0f, "%.0f°",
-            () => this.config.DpsHorizSkew, v => this.config.DpsHorizSkew = v);
+            () => meter.DpsHorizSkew, v => meter.DpsHorizSkew = v);
         this.Slider("Icon size", 8.0f, 64.0f, "%.0f px",
-            () => this.config.DpsHorizIconSize, v => this.config.DpsHorizIconSize = v);
+            () => meter.DpsHorizIconSize, v => meter.DpsHorizIconSize = v);
         this.Slider("Cell padding", 0.0f, 24.0f, "%.0f px",
-            () => this.config.DpsHorizCellPadding, v => this.config.DpsHorizCellPadding = v);
+            () => meter.DpsHorizCellPadding, v => meter.DpsHorizCellPadding = v);
         this.PercentSlider("Stat text size",
-            () => this.config.DpsHorizStatScale, v => this.config.DpsHorizStatScale = v,
+            () => meter.DpsHorizStatScale, v => meter.DpsHorizStatScale = v,
             40.0f, 150.0f);
         ImGui.TextDisabled("The hps and dps figures inside the bars, and the names above them.");
         this.PercentSlider("Percent text size",
-            () => this.config.DpsHorizPercentScale, v => this.config.DpsHorizPercentScale = v,
+            () => meter.DpsHorizPercentScale, v => meter.DpsHorizPercentScale = v,
             40.0f, 150.0f);
         ImGui.TextDisabled("The damage share figure under each bar.");
         this.SliderInt("DPS decimals", 0, 2,
-            () => this.config.DpsHorizDecimals, v => this.config.DpsHorizDecimals = v);
+            () => meter.DpsHorizDecimals, v => meter.DpsHorizDecimals = v);
         this.Check("Compact numbers",
-            () => this.config.DpsHorizCompact, v => this.config.DpsHorizCompact = v);
+            () => meter.DpsHorizCompact, v => meter.DpsHorizCompact = v);
         ImGui.TextDisabled("10.2k instead of 10234.50.");
         this.PercentSlider("Bar opacity",
-            () => this.config.DpsHorizBarOpacity, v => this.config.DpsHorizBarOpacity = v);
+            () => meter.DpsHorizBarOpacity, v => meter.DpsHorizBarOpacity = v);
 
         ImGui.Spacing();
 
         this.ColorRow("Self bar",
-            () => this.config.DpsHorizSelfColor, v => this.config.DpsHorizSelfColor = v);
+            () => meter.DpsHorizSelfColor, v => meter.DpsHorizSelfColor = v);
         this.ColorRow("Self bar text",
-            () => this.config.DpsHorizSelfTextColor, v => this.config.DpsHorizSelfTextColor = v);
+            () => meter.DpsHorizSelfTextColor, v => meter.DpsHorizSelfTextColor = v);
         this.ColorRow("DPS bars",
-            () => this.config.DpsHorizDpsColor, v => this.config.DpsHorizDpsColor = v);
+            () => meter.DpsHorizDpsColor, v => meter.DpsHorizDpsColor = v);
         this.ColorRow("Tank bars",
-            () => this.config.DpsHorizTankColor, v => this.config.DpsHorizTankColor = v);
+            () => meter.DpsHorizTankColor, v => meter.DpsHorizTankColor = v);
         this.ColorRow("Healer bars",
-            () => this.config.DpsHorizHealerColor, v => this.config.DpsHorizHealerColor = v);
+            () => meter.DpsHorizHealerColor, v => meter.DpsHorizHealerColor = v);
         this.ColorRow("Unknown jobs",
-            () => this.config.DpsHorizDimColor, v => this.config.DpsHorizDimColor = v);
+            () => meter.DpsHorizDimColor, v => meter.DpsHorizDimColor = v);
         ImGui.TextDisabled(
             "The role tints need the Color by role theme. Black & white uses " +
             "Self bar and Unknown jobs for everyone else.");
@@ -811,8 +854,6 @@ internal sealed class ConfigWindow : Window
         this.SaveIfDragEnded();
     }
 
-    /// <summary>Convert stored fractions to displayed percentages. Accept custom ranges for
-    /// scales above 100 percent.</summary>
     private void PercentSlider(
         string label, Func<float> get, Action<float> set, float min = 0.0f, float max = 100.0f)
     {
@@ -850,7 +891,6 @@ internal sealed class ConfigWindow : Window
     private void Combo<T>(string label, string[] names, Func<T> get, Action<T> set)
         where T : struct, Enum
     {
-        // Clamp enum values from edited or newer configs before indexing labels.
         var index = Math.Clamp(Convert.ToInt32(get()), 0, names.Length - 1);
         if (ImGui.Combo(label, ref index, names, names.Length))
         {

@@ -103,6 +103,19 @@ namespace Dalamud.Bindings.ImGui
         public static ImDrawListPtr GetWindowDrawList() => new();
         public static Vector2 GetContentRegionAvail() => new(1600, 900);
         public static Vector2 GetCursorScreenPos() => Cursor;
+        public static void SetCursorScreenPos(Vector2 value) => Cursor = value;
+        public static bool IsItemHovered() => false;
+        public static void SetTooltip(string value) { }
+        public static readonly HashSet<string> Popups = new();
+        public static void OpenPopup(string label) => Popups.Add(label);
+        public static bool BeginPopup(string label) => Popups.Contains(label);
+        public static void EndPopup() { }
+        public static bool InvisibleButton(string label, Vector2 size) => false;
+        public static bool Selectable(string label) => false;
+        public static bool Checkbox(string label, ref bool value) => false;
+        public static bool CollapsingHeader(string label) => true;
+        public static bool Combo(string label, ref int value, string[] names, int count) => false;
+
         public static Vector2 GetWindowPos() => Vector2.Zero;
         public static Vector2 GetWindowSize() => new(1600, 900);
         public static void Dummy(Vector2 size) => Cursor = new(Cursor.X, MathF.Truncate(Cursor.Y + size.Y + itemSpacing.Y));
@@ -117,6 +130,11 @@ namespace Dalamud.Bindings.ImGui
 
     public readonly struct ImDrawListPtr
     {
+        public void AddCircle(Vector2 center, float radius, uint color)
+            => ImGui.Commands.Add(new("circle", null, center - new Vector2(radius), center + new Vector2(radius)));
+        public void AddCircleFilled(Vector2 center, float radius, uint color)
+            => ImGui.Commands.Add(new("disc", null, center - new Vector2(radius), center + new Vector2(radius)));
+
         public void AddText(Vector2 position, uint color, string text)
             => ImGui.Commands.Add(new("text", text, position, position));
         public void AddRectFilled(Vector2 min, Vector2 max, uint color, float rounding = 0)
@@ -183,7 +201,7 @@ namespace NyaaTriggers.Plugin.Ui
     internal sealed class TestIcon { internal nint Handle => 1; }
     internal static class JobIcons
     {
-        internal static TestIcon? Get(string job) => null;
+        internal static TestIcon? Get(string job, bool lmeter = false) => null;
     }
     internal sealed class FlashWindow : Window
     {

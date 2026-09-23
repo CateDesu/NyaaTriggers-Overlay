@@ -170,10 +170,10 @@ internal static class DisplayAndFeedTests
             ImGui.Cursor = origin;
             window.Draw();
             var label = ImGui.Commands.Single(command => command.Text?.Contains("Player") == true);
-            var number = ImGui.Commands.Single(command => command.Text == "1.0k");
-            var deaths = ImGui.Commands.Single(command => command.Text == " x2");
+            var number = ImGui.Commands.Single(command => command.Text == "DPS:1.0k Deaths:2");
+            var deaths = number;
             Check(label.A.Y == number.A.Y && deaths.A.Y == number.A.Y,
-                "Moved Bars labels and death counts stay aligned with their DPS",
+                "Moved LMeter labels and death counts stay aligned with their DPS",
                 new { originY = origin.Y, labelY = label.A.Y, numberY = number.A.Y, deathsY = deaths.A.Y });
         }
     }

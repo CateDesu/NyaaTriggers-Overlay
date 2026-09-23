@@ -136,7 +136,8 @@ internal static class Program
         };
         using var host = new BridgeHost(config);
         using var ui = new PluginUi(config, host, new ScaledFonts());
-        var window = (DpsWindow)Field(ui, "dps");
+        var windows = (DpsWindow[])Field(ui, "meters");
+        var window = windows.Single(item => item.Meter.DpsStyle == DpsMeterStyle.LMeter);
         host.Start();
         Draw(ui);
         await feed.Accept();
@@ -175,17 +176,17 @@ internal static class Program
 
         foreach (var style in Enum.GetValues<DpsMeterStyle>())
         {
-            config.DpsStyle = style;
+            var styled = windows.Single(item => item.Meter.DpsStyle == style);
             ImGui.Reset();
-            window.PreDraw();
-            window.Draw();
+            styled.PreDraw();
+            styled.Draw();
             Capture("draw " + style, host);
-            Check(ImGui.Commands.Any(c => c.Text?.Contains("26.0k") == true), style + " emits the expected 26000 DPS text");
+            var expectedDps = style == DpsMeterStyle.Kagerou ? "26000.00" : style == DpsMeterStyle.LMeter ? "DPS:26,000" : "26.0k";
+            Check(ImGui.Commands.Any(c => c.Text?.Contains(expectedDps) == true), style + " emits the expected 26000 DPS text");
             Check(ImGui.Commands.Any(c => c.Kind != "text"), style + " emits meter geometry");
             Check(ImGui.Commands.All(c => float.IsFinite(c.A.X) && float.IsFinite(c.A.Y) && float.IsFinite(c.B.X) && float.IsFinite(c.B.Y)),
                 style + " emits finite draw coordinates");
         }
-        config.DpsStyle = DpsMeterStyle.Bars;
         var live = host.Dps;
         await Until(() => !ReferenceEquals(live, host.Dps), () => Draw(ui));
         Capture("live clock update", host);
@@ -195,15 +196,15 @@ internal static class Program
         Check(host.Dps.Ended && !host.Dps.Show && host.Dps.EncDps == 36000, "Final DPS removes the inactive combat tail");
         Check(window.HasHeldContent && window.IsOpen, "Hold last keeps the final rows visible");
 
-        config.DpsOnlyInCombat = true;
+        window.Meter.DpsOnlyInCombat = true;
         Services.Condition[ConditionFlag.InCombat] = false;
         Draw(ui);
         Check(window.IsOpen, "Held encounter survives the only in combat filter");
-        config.DpsHoldLast = false;
+        window.Meter.DpsHoldLast = false;
         Draw(ui);
         Check(!window.IsOpen && ImGui.Commands.Count == 0, "Disabling hold last hides an ended encounter");
-        config.DpsHoldLast = true;
-        config.DpsOnlyInDuty = true;
+        window.Meter.DpsHoldLast = true;
+        window.Meter.DpsOnlyInDuty = true;
         Draw(ui);
         Check(!window.IsOpen, "Duty filter still hides held content outside a duty");
         Services.Condition[ConditionFlag.BoundByDuty] = true;
@@ -213,7 +214,7 @@ internal static class Program
         Draw(ui);
         Check(!window.IsOpen, "Cutscenes suppress the DPS window");
         Services.Condition[ConditionFlag.WatchingCutscene] = false;
-        config.DpsOnlyInDuty = config.DpsOnlyInCombat = false;
+        window.Meter.DpsOnlyInDuty = window.Meter.DpsOnlyInCombat = false;
 
         await Burst(feed, host, ui, Zone);
         Check(host.Dps.Ended && window.IsOpen, "Same zone subscribe replay preserves held final rows");

@@ -7,30 +7,20 @@ using System.Threading.Tasks;
 
 namespace NyaaTriggers.Plugin.Meter;
 
-/// <summary>Connects to IINACT, subscribes to meter events and passes complete text
-/// messages to the owner for queued processing. Reconnects with backoff. Each instance can
-/// be started only once.</summary>
+/// <summary>Instances can start only once. Queue complete messages through the owner.</summary>
 internal sealed class IinactClient : IDisposable
 {
-    /// <summary>Bounds incoming message allocation.</summary>
     private const int MaxMessageBytes = 4 << 20;
 
-    /// <summary>Bounds connection and handshake time so an unresponsive host cannot stop
-    /// retries.</summary>
     private const int ConnectTimeoutSeconds = 10;
 
-    /// <summary>Maximum wait in milliseconds for the receive loop during
-    /// disposal.</summary>
     private const int StopWaitMs = 4000;
 
-    /// <summary>Subscribe to raw log and state events. The meter does not use CombatData
-    /// summaries.</summary>
     private const string Subscribe =
         "{\"call\":\"subscribe\",\"events\":[" +
         "\"LogLine\",\"ChangePrimaryPlayer\",\"ChangeZone\",\"PartyChanged\",\"InCombat\"]}";
 
-    /// <summary>Fetch jobs on connect because earlier spawn lines may no longer be
-    /// available.</summary>
+    /// <summary>Fetch jobs because earlier spawn lines may be unavailable.</summary>
     private const string GetCombatants = "{\"call\":\"getCombatants\"}";
 
     private readonly Uri endpoint;
@@ -54,8 +44,7 @@ internal sealed class IinactClient : IDisposable
         this.onSessionEnd = onSessionEnd ?? (() => { });
     }
 
-    /// <summary>Read without a lock by the config window. A delayed status update is
-    /// acceptable.</summary>
+    /// <summary>The config window accepts delayed status updates without locking.</summary>
     internal string Status => this.status;
 
     internal bool IsConnected => this.connected;
@@ -74,8 +63,7 @@ internal sealed class IinactClient : IDisposable
         }
     }
 
-    /// <summary>Cancel without blocking the caller. Dispose separately waits for the loop
-    /// with a deadline.</summary>
+    /// <summary>Cancel immediately. Dispose waits for cleanup.</summary>
     internal void Stop()
     {
         this.running = false;
@@ -144,8 +132,6 @@ internal sealed class IinactClient : IDisposable
         }
     }
 
-    /// <summary>Read complete text messages and discard binary messages. The outer loop
-    /// reconnects after both errors and clean closes.</summary>
     private async Task ReceiveLoop(ClientWebSocket ws)
     {
         var chunk = new byte[8192];
@@ -203,9 +189,7 @@ internal sealed class IinactClient : IDisposable
         {
             if (!loop.Wait(StopWaitMs))
             {
-                // Leave the token source alive while the loop may still read it.
-                // Cancellation is already requested, and the source can be collected when
-                // the loop exits.
+                // The loop may still read the token source. Leave it alive until collected.
                 Services.Log.Warning("an IINACT feed session did not stop in time");
                 return;
             }
