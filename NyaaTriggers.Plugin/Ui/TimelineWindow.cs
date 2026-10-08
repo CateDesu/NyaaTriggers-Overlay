@@ -62,7 +62,7 @@ internal sealed class TimelineWindow : OverlayWindow
         var clock = this.bridge.Clock;
         var height = Math.Max(Math.Max(this.Config.TimelineBarHeight, 1.0f) * ClampTextScale(this.TextScale), MathF.Ceiling(ImGui.GetTextLineHeight()));
 
-        // Measure the full stack before anchoring it at the bottom.
+        // Measure the stack before bottom anchoring.
         var rows = this.rows;
         rows.Clear();
         foreach (var entry in this.bridge.Timeline)

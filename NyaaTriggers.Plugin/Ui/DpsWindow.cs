@@ -13,8 +13,6 @@ namespace NyaaTriggers.Plugin.Ui;
 
 internal sealed partial class DpsWindow : OverlayWindow
 {
-    private const float TextPadding = 6.0f;
-
     private static readonly Vector4 HorizonChip = new(0.000f, 0.000f, 0.000f, 0.25f);
 
     private const float HorizonSeam = 0.49f;
@@ -122,7 +120,7 @@ internal sealed partial class DpsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Meter.DpsEffectColor;
 
-    /// <summary>Endings carry final rows even when no draw saw them live.</summary>
+    /// <summary>Final rows can arrive between draws.</summary>
     internal bool HasHeldContent =>
         (this.Meter.DpsStyle == DpsMeterStyle.Kagerou && this.kagerouHistory != null)
         || (this.Meter.DpsHoldLast && !this.bridge.Dps.Show && this.bridge.Dps.Ended
@@ -153,7 +151,7 @@ internal sealed partial class DpsWindow : OverlayWindow
             + ImGui.GetStyle().WindowPadding.Y;
     }
 
-    /// <summary>Preserve DPS ranks and pin the local player before limiting rows.</summary>
+    /// <summary>Pin self before truncating, retaining DPS ranks.</summary>
     private IReadOnlyList<DpsRow> FilterRows(IReadOnlyList<DpsRow> rows)
     {
         var max = this.Meter.DpsStyle == DpsMeterStyle.Kagerou && this.Meter.DpsKagerouTab == KagerouTab.Alliance
@@ -346,7 +344,7 @@ internal sealed partial class DpsWindow : OverlayWindow
 
         this.DrawStyledText(drawList, origin, this.Meter.DpsTextColor, text);
 
-        // Horizon draws its header last, so it needs no gap below.
+        // Horizon's trailing header needs no gap below.
         ImGui.Dummy(new Vector2(
             Math.Max(ImGui.GetContentRegionAvail().X, 1.0f),
             ImGui.GetTextLineHeight() + (chip ? 0.0f : Math.Max(this.Meter.DpsBarSpacing, 0.0f))));
@@ -354,11 +352,9 @@ internal sealed partial class DpsWindow : OverlayWindow
 
     private static readonly Regex HeaderSpaces = new(@"\s+", RegexOptions.Compiled);
 
-    /// <summary>Token values must not expand as nested templates.</summary>
     private static readonly Regex HeaderTokens = new(
         @"\{(?:title|duration|dps)\}", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    /// <summary>Collapse adjacent separators left by omitted header tokens.</summary>
     private static readonly Regex HeaderSepRuns = new(
         @"\s*[·•|/\-–—]\s*(\s*[·•|/\-–—]\s*)+", RegexOptions.Compiled);
 
@@ -392,14 +388,17 @@ internal sealed partial class DpsWindow : OverlayWindow
             return string.Join(" · ", parts);
         }
 
-        var text = HeaderTokens.Replace(format, match => match.Value.ToLowerInvariant() switch
+        string TokenText(Match match) => match.Value.ToLowerInvariant() switch
         {
             "{title}" => titleText,
             "{duration}" => durationText,
             _ => dpsText,
-        });
+        };
+        var text = HeaderTokens.Replace(format, match => TokenText(match).Length == 0 ? string.Empty : match.Value);
+        // Clean the template first so inserted values stay literal.
         text = HeaderSepRuns.Replace(HeaderSpaces.Replace(text, " "), FirstSeparator);
-        return text.Trim(' ', '·', '•', '|', '/', '-', '–', '—');
+        text = text.Trim(' ', '·', '•', '|', '/', '-', '–', '—');
+        return HeaderTokens.Replace(text, TokenText);
     }
 
     private static string FirstSeparator(Match match)
@@ -455,13 +454,13 @@ internal sealed partial class DpsWindow : OverlayWindow
         var barSkew = this.HorizonSkew() * barHeight;
         var iconSize = Math.Clamp(this.Meter.DpsHorizIconSize, 8.0f, 64.0f) * scale;
 
-        // Reserve the icon overhang when no name line provides that space.
+        // Leave room above the bar for icons.
         var iconOverhang = showIcons ? iconSize * 0.25f : 0.0f;
         var nameBand = showNames ? lineHeight + (3.0f * scale) : 0.0f;
         var barTop = origin.Y + Math.Max(nameBand, iconOverhang + scale);
         var stripHeight = Math.Max(2.0f * scale, 1.5f);
 
-        // Include the icon bottom to avoid clipping or overlapping the share strip.
+        // Keep the share strip below the icon.
         var iconBottom = showIcons ? barTop - iconOverhang + iconSize : barTop;
         var cellBottom = Math.Max(barTop + barHeight, iconBottom);
         var stripTop = cellBottom + scale;
@@ -510,7 +509,7 @@ internal sealed partial class DpsWindow : OverlayWindow
                 cellBottom = Math.Max(cellBottom, stripTop + stripHeight);
             }
 
-            // Allow names to extend into cell margins, matching the original overlay.
+            // Names may extend into cell margins.
             if (showNames)
             {
                 var name = showRank ? $"{this.RankOf(i)}. {this.RowName(row)}" : this.RowName(row);
@@ -533,7 +532,6 @@ internal sealed partial class DpsWindow : OverlayWindow
                 }
             }
 
-            // Reserve horizontal space for the icon only when it overlaps the stat line.
             var hasIcon = false;
             var iconLeft = barLeft + ((barWidth - iconSize) * 0.5f);
             if (showIcons)
@@ -613,7 +611,7 @@ internal sealed partial class DpsWindow : OverlayWindow
         ImGui.Dummy(new Vector2(width, cellBottom - origin.Y));
     }
 
-    /// <summary>Drop the unit, shrink, then truncate. Local player stats skip text effects.</summary>
+    /// <summary>Local player stats omit text effects.</summary>
     private void DrawHorizonStat(
         ImDrawListPtr drawList, float zoneLeft, float zoneRight, float bottom,
         bool rightAligned, string number, string label, bool self)
@@ -632,7 +630,6 @@ internal sealed partial class DpsWindow : OverlayWindow
 
         foreach (var ratio in StatFitRatios)
         {
-            // Skip smaller fonts that are still loading.
             var handle = ratio >= 1.0f ? null : this.Fonts.Get(statPx * ratio);
             if (ratio < 1.0f && handle is not { Available: true })
             {
@@ -739,7 +736,7 @@ internal sealed partial class DpsWindow : OverlayWindow
             return this.Meter.DpsHorizDimColor;
         }
 
-        var opacity = Math.Clamp(this.Meter.DpsHorizBarOpacity, 0.05f, 1.0f);
+        var opacity = Math.Clamp(this.Meter.DpsHorizBarOpacity, 0.0f, 1.0f);
         return JobColors.RoleOf(row.Job) switch
         {
             JobRole.Tank => WithAlpha(this.Meter.DpsHorizTankColor, opacity),
@@ -797,7 +794,7 @@ internal sealed partial class DpsWindow : OverlayWindow
 
     private static string FormatDps(double dps)
     {
-        // Switch units before rounding would produce 1000 in the smaller unit.
+        // Switch units before rounding reaches 1000.
         if (dps >= 999950.0)
         {
             return (dps / 1000000.0).ToString("0.0", CultureInfo.InvariantCulture) + "m";

@@ -42,7 +42,7 @@ internal sealed partial class DpsWindow
         if (!this.Meter.DpsShowHeader) return;
         if (!string.IsNullOrWhiteSpace(this.Meter.DpsHeaderFormat))
         {
-            this.DrawHeader(state.Title, state.Duration, state.EncDps);
+            this.DrawHeader(this.Meter.DpsLMeterHeaderTitle ? state.Title : string.Empty, state.Duration, state.EncDps);
             return;
         }
 

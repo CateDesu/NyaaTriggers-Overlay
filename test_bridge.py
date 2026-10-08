@@ -22,7 +22,7 @@ PROTOCOL_VERSION = 1
 
 HELLO_TIMEOUT = 5.0
 
-# Entries contain timeline seconds, label and cue kind.
+# Timeline: seconds, label, cue kind.
 SCHEDULE = [
     (8.0, "Wing of Ruin", "mechanic"),
     (16.0, "Akh Morn raidwide", "raidwide"),
@@ -32,7 +32,7 @@ SCHEDULE = [
     (52.0, "Enrage", "mechanic"),
 ]
 
-# Entries contain timeline seconds, text and severity.
+# Callouts: seconds, text, severity.
 CALLOUTS = [
     (6.0, "Wing of Ruin - move out", "info"),
     (14.0, "Akh Morn - stack for towers", "alert"),
@@ -41,7 +41,7 @@ CALLOUTS = [
     (39.0, "Soak your tower", "alert"),
 ]
 
-# Rows contain name, job, base DPS, base HPS, local player flag and deaths.
+# Party: name, job, base DPS, base HPS, is self, deaths.
 PARTY = [
     ("Alphinaud L", "SGE", 10234.5, 9123.4, False, 0),
     ("Beta Tester", "DRG", 9876.0, 0.0, True, 0),
@@ -55,7 +55,7 @@ PARTY = [
 
 TICK_SECONDS = 0.25
 
-# Match the program's meter update interval.
+# Match the program's meter cadence.
 DPS_SECONDS = 1.0
 DPS_FRAMES = 6
 
@@ -142,7 +142,7 @@ async def run_dps(port: int) -> None:
             await asyncio.sleep(DPS_SECONDS)
 
         await ws.send(json.dumps({"c": "dps", "show": False}))
-        print("encounter over, meter hidden")
+        print("encounter ended")
 
 
 def main() -> None:

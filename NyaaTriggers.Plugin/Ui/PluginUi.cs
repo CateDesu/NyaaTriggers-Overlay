@@ -7,7 +7,7 @@ namespace NyaaTriggers.Plugin.Ui;
 
 internal sealed class PluginUi : IDisposable
 {
-    // Match AlertsWindow timings so the screen flash and callout fade together.
+    // Match callout timing so the screen flash fades with it.
     private const float AlarmFadeSeconds = 0.6f;
     private const float AlarmRiseSeconds = 0.12f;
 
@@ -39,7 +39,7 @@ internal sealed class PluginUi : IDisposable
         };
         this.configWindow = new ConfigWindow(config, bridge, this);
 
-        // Draw the flash behind the other windows.
+        // Keep the flash behind other windows.
         this.windows.AddWindow(this.flash);
         this.windows.AddWindow(this.timeline);
         this.windows.AddWindow(this.alerts);
@@ -99,7 +99,7 @@ internal sealed class PluginUi : IDisposable
         this.timeline.IsOpen = this.ShouldShow(this.config.TimelineOnlyInDuty, this.config.TimelineOnlyInCombat)
             && this.config.ShowTimeline;
 
-        // Held rows bypass combat filtering but still obey duty and cutscene filters.
+        // Held rows bypass combat filters only.
         foreach (var window in this.meters)
         {
             var meter = window.Meter;

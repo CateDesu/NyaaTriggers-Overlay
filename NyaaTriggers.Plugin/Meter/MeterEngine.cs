@@ -6,7 +6,7 @@ using System.Linq;
 namespace NyaaTriggers.Plugin.Meter;
 
 // Ported from NyaaTriggers dps_meter.py. Effect decoding follows cactbot LogGuide.
-// Encounter totals follow ACT. The display resets when damage resumes after idle.
+// Encounter totals follow ACT.
 
 internal sealed record CombatStats
 {
@@ -50,13 +50,12 @@ internal sealed class MeterEngine
     /// <summary>ActorControl, line 33, command for a wipe or reset.</summary>
     private const string WipeCommand = "4000000F";
 
-    /// <summary>Seconds without damage before pausing the display. Encounter totals stay intact.</summary>
     private const double DefaultIdleTimeout = 120.0;
 
     /// <summary>Include the local player even if ranked below the limit.</summary>
     private const int MaxOverlayRows = 24;
 
-    // Keep local and party actors. Retired damage stays in totals with a reduced history marker.
+    // Keep local and party actors. Retired totals remain in the encounter.
     private const int MaxEncounterActors = 1024;
 
     private const int HealType = 0x04;
@@ -75,9 +74,9 @@ internal sealed class MeterEngine
     };
 
     private readonly Func<double> clock;
-    private readonly BoundedMap<int> jobs = new();      // Actor ID to ClassJob ID.
+    private readonly BoundedMap<int> jobs = new();
     private readonly Dictionary<int, int> rosterJobs = new();
-    private readonly BoundedMap<int> owners = new();    // Pet or summon ID to owner ID.
+    private readonly BoundedMap<int> owners = new();
     private readonly BoundedMap<string> names = new();
 
     private string zone = string.Empty;
@@ -85,7 +84,7 @@ internal sealed class MeterEngine
     private bool inAct;
     private bool inGame;
     private Encounter? current;
-    private Encounter? view;   // Display segment that resets when damage resumes after idle.
+    private Encounter? view;   // Damage after idle resets this segment while encounter totals stay intact.
     private double idleTimeout = DefaultIdleTimeout;
 
     internal MeterEngine(Func<double>? clock = null)
@@ -102,9 +101,9 @@ internal sealed class MeterEngine
 
     internal bool HasLiveDamage => this.view?.LastDamage != null;
 
-    /// <summary>Cached zone replay must initialize a new engine without clearing identity.</summary>
     internal bool HasZone => this.zone.Length > 0;
 
+    /// <summary>Initialize replayed zone metadata without clearing identity.</summary>
     internal void SetInitialZone(string name)
     {
         if (this.HasZone) return;
@@ -211,6 +210,14 @@ internal sealed class MeterEngine
         return 0;
     }
 
+    private string NameFor(int id)
+    {
+        var name = this.names.Get(id);
+        if (name != null) return name;
+        return this.current?.Combatants.TryGetValue(id, out var actor) == true
+            ? actor.Name : string.Empty;
+    }
+
     // Retired players can return after their job cache entry expires.
     private bool IsPlayer(int? aid)
         => aid is int id && (id == this.meId || this.JobFor(id) != 0 ||
@@ -260,7 +267,7 @@ internal sealed class MeterEngine
 
             c = new Combatant(
                 key,
-                name.Length > 0 ? name : this.names.Get(key) ?? string.Empty,
+                name.Length > 0 ? name : this.NameFor(key),
                 this.JobFor(key));
             enc.Combatants[key] = c;
             c.OrderNode = enc.ActorOrder.AddLast(key);
@@ -273,7 +280,7 @@ internal sealed class MeterEngine
             // A pet action may create the owner row before its name arrives.
             if (c.Name.Length == 0)
             {
-                c.Name = name.Length > 0 ? name : this.names.Get(key) ?? string.Empty;
+                c.Name = name.Length > 0 ? name : this.NameFor(key);
             }
 
             if (c.Job == 0 && this.JobFor(key) != 0)
@@ -307,11 +314,9 @@ internal sealed class MeterEngine
         this.view = new Encounter(title, now);
     }
 
-    /// <summary>Notify even for empty encounters, using rows captured before clearing.</summary>
     private void FinalizeEncounter(bool incomplete = false)
     {
-        var enc = this.current;
-        if (enc == null)
+        if (this.current == null)
         {
             return;
         }
@@ -337,7 +342,7 @@ internal sealed class MeterEngine
             return;
         }
 
-        if (view.LastDamage is double lastDamage && now - lastDamage > this.idleTimeout)
+        if (now - (view.LastDamage ?? view.Start) > this.idleTimeout)
         {
             this.view = view = new Encounter(view.Title, now);
         }
@@ -346,7 +351,7 @@ internal sealed class MeterEngine
     }
 
 
-    /// <summary>Close the feed session before replay can supply fresh identities.</summary>
+    /// <summary>Clear session identity before reconnect replay.</summary>
     internal void FeedLost(bool incomplete = false)
     {
         this.FinalizeEncounter(incomplete);
@@ -540,11 +545,6 @@ internal sealed class MeterEngine
         var reflected = false;
         for (var i = 8; i < 24; i += 2)
         {
-            if (i + 1 >= fields.Count)
-            {
-                break;
-            }
-
             if (string.IsNullOrEmpty(fields[i]) && string.IsNullOrEmpty(fields[i + 1]))
             {
                 continue;
@@ -561,7 +561,7 @@ internal sealed class MeterEngine
                 continue;
             }
 
-            var effect = UnpackEffect(fields[i], fields[i + 1]);
+            var effect = UnpackEffect(flags, fields[i + 1]);
             effects.Add(effect with { Reflected = reflected && effect.Kind == EffectKind.Damage });
         }
 
@@ -605,7 +605,9 @@ internal sealed class MeterEngine
         string ownerName)
     {
         if (effects.Any(e => e.Kind != EffectKind.None &&
-            (e.Reflected ? CreditsPlayer(tgtKey, srcKey, sid) : CreditsPlayer(srcKey, tgtKey, tid))))
+            (e.Reflected ? CreditsPlayer(tgtKey, srcKey, sid)
+                : e.Kind == EffectKind.Heal && e.AtSource ? srcKey != null
+                : CreditsPlayer(srcKey, tgtKey, tid))))
         {
             enc.Last = now;
         }
@@ -658,9 +660,12 @@ internal sealed class MeterEngine
                     if (e.Amount > 0) src.Heals++;
                 }
 
-                if (tgtKey is int receiver && tgtKey == tid)
+                var recipientKey = e.AtSource ? srcKey : tgtKey;
+                var recipientId = e.AtSource ? sid : tid;
+                var recipientName = e.AtSource ? fields[3] : fields[7];
+                if (recipientKey is int receiver && recipientKey == recipientId)
                 {
-                    this.CombatantFor(enc, receiver, fields[7]).HealingTaken += e.Amount;
+                    this.CombatantFor(enc, receiver, recipientName).HealingTaken += e.Amount;
                 }
             }
         }
@@ -731,7 +736,7 @@ internal sealed class MeterEngine
             return;
         }
 
-        if (appKey != null || (which == "DoT" && tgtKey != null && tgtKey == tid))
+        if (CreditsPlayer(appKey, tgtKey, tid))
         {
             enc.Last = now;
         }
@@ -878,15 +883,10 @@ internal sealed class MeterEngine
     }
 
     /// <summary>Decode 21/22 effects, ignoring combo and positional bytes.</summary>
-    private static Effect UnpackEffect(string? flagsHex, string? dmgHex)
+    private static Effect UnpackEffect(uint flags, string? dmgHex)
     {
-        if (!long.TryParse(flagsHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var f))
-        {
-            f = 0;
-        }
-
-        var etype = (int)(f & 0xFF);
-        var severity = (int)((f >> 8) & 0xFF);
+        var etype = (int)(flags & 0xFF);
+        var severity = (int)((flags >> 8) & 0xFF);
         var crit = (severity & 0x20) != 0;
         var dh = (severity & 0x40) != 0 && etype != HealType;
         var kind = etype switch
@@ -900,13 +900,14 @@ internal sealed class MeterEngine
         if (!long.TryParse(dmgHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v) ||
             v < 0 || v > 0xFFFFFFFFL)
         {
-            v = 0;
+            return kind == EffectKind.Miss ? new Effect(kind, 0, crit, dh) : default;
         }
 
+        var literalHeal = kind == EffectKind.Heal && v > 0 && v < 0x10000;
         long amount;
-        if (kind == EffectKind.Heal && v > 0 && v < 0x10000)
+        if (literalHeal)
         {
-            // Small literal heals such as Plenary are already unshifted.
+            // Small legacy heal values are literal amounts.
             amount = v;
         }
         else if (kind == EffectKind.Damage && (v & 0x0100) != 0)
@@ -916,7 +917,7 @@ internal sealed class MeterEngine
         }
         else if ((v & 0x4000) != 0)
         {
-            // For extended damage, the low byte becomes the high byte of the amount.
+            // Extended amounts use the low byte as their high byte.
             amount = ((v & 0xFF) << 16) | (v >> 16);
         }
         else
@@ -924,7 +925,7 @@ internal sealed class MeterEngine
             amount = v >> 16;
         }
 
-        return new Effect(kind, (int)amount, crit, dh);
+        return new Effect(kind, (int)amount, crit, dh, AtSource: !literalHeal && (v & 0x8000) != 0);
     }
 
     private enum EffectKind
@@ -935,7 +936,8 @@ internal sealed class MeterEngine
         Miss,
     }
 
-    private readonly record struct Effect(EffectKind Kind, int Amount, bool Crit, bool Dh, bool Reflected = false);
+    private readonly record struct Effect(
+        EffectKind Kind, int Amount, bool Crit, bool Dh, bool Reflected = false, bool AtSource = false);
 
     /// <summary>Duration ends at last activity. LastDamage controls only display idle handling.</summary>
     private sealed class Encounter

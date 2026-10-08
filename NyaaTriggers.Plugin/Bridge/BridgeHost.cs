@@ -132,11 +132,19 @@ internal sealed class BridgeHost : IDisposable
         {
             if (value.Ended && value.HasDamage && value.Rows.Count > 0)
             {
-                var previous = this.dpsHistory.Count > 0 ? this.dpsHistory[0] : null;
-                if (previous != null && ((!string.IsNullOrEmpty(value.Id) && previous.Id == value.Id)
-                    || (string.IsNullOrEmpty(value.Id) && this.dps.Ended)))
+                var previousIndex = -1;
+                if (!string.IsNullOrEmpty(value.Id))
                 {
-                    this.dpsHistory[0] = value;
+                    previousIndex = this.dpsHistory.FindIndex(previous => previous.Id == value.Id);
+                }
+                else if (this.dps.Ended && this.dpsHistory.Count > 0)
+                {
+                    previousIndex = 0;
+                }
+
+                if (previousIndex >= 0)
+                {
+                    this.dpsHistory[previousIndex] = value;
                 }
                 else
                 {
@@ -152,7 +160,7 @@ internal sealed class BridgeHost : IDisposable
 
     private DpsState? lastLocal;
 
-    /// <summary>Snapshot for legacy endings. Survives legacy wipe clears, but not explicit zone clears.</summary>
+    /// <summary>Legacy endings reuse this snapshot across wipe clears, but not zone clears.</summary>
     private DpsState? lastLive;
 
     internal double Clock => this.clockRunning
@@ -184,8 +192,7 @@ internal sealed class BridgeHost : IDisposable
             this.server = null;
         }
 
-        // The listener may have disconnected before its queued clear runs.
-        // Preserve only rows still owned by the independent standalone feed.
+        // Preserve standalone-owned rows even if the queued disconnect has not run.
         this.ClearState(resetDps: !ReferenceEquals(this.Dps, this.lastLocal));
         this.lastLive = null;
         // ClearState must keep queued frames because zone changes send a timeline after clear.
@@ -196,7 +203,7 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Keep disposal off the render thread. Unload waits, but a port rebind may need a retry.
+        // Dispose off the render thread. Rebinding may need a retry.
         var drain = Task.Run(old.Dispose);
         lock (this.serverLock)
         {
@@ -205,7 +212,6 @@ internal sealed class BridgeHost : IDisposable
         }
     }
 
-    /// <summary>Reject stale frames atomically with replacement and inbox clearing.</summary>
     private void Receive(WebSocketServer source, long sequence, string raw)
     {
         var overloaded = false;
@@ -267,7 +273,6 @@ internal sealed class BridgeHost : IDisposable
 
     private void OnConnectionChanged(WebSocketServer source, long sequence, bool connected)
     {
-        // An old disconnect must not clear state after Stop replaces the server.
         lock (this.serverLock)
         {
             if (!ReferenceEquals(source, this.server))
@@ -429,7 +434,6 @@ internal sealed class BridgeHost : IDisposable
 
         foreach (var entry in entries.EnumerateArray())
         {
-            // Timeline entries are [time, label, optional kind].
             if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 2)
             {
                 continue;
@@ -472,7 +476,6 @@ internal sealed class BridgeHost : IDisposable
             return;
         }
 
-        // Bound wrapping and layout work per frame.
         const int MaxAlertTextChars = 4096;
         var text = SanitizeText(textElement.GetString(), MaxAlertTextChars);
         if (string.IsNullOrWhiteSpace(text))
@@ -587,8 +590,7 @@ internal sealed class BridgeHost : IDisposable
         {
             foreach (var entry in rowsElement.EnumerateArray())
             {
-                // Rows are [name, job, encdps, share, hps, isSelf, deaths] in descending
-                // DPS order. Missing trailing fields from older senders use defaults.
+                // Older senders may omit trailing row fields.
                 if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() < 4)
                 {
                     continue;
@@ -656,7 +658,8 @@ internal sealed class BridgeHost : IDisposable
             Zone = zone,
             EncHps = Math.Max(0, encHps),
             Participants = Math.Max(participants, rows.Count),
-            HasDamage = hasDamage ?? (encDps > 0 || rows.Any(row => row.Dps > 0 || row.Share > 0)),
+            HasDamage = hasDamage ?? (encDps > 0 || rows.Any(row => row.Dps > 0 || row.Share > 0
+                || row.Stats?.Damage is > 0 || row.Stats?.Taken is > 0)),
             Rows = rows,
         };
 
@@ -687,7 +690,6 @@ internal sealed class BridgeHost : IDisposable
         };
     }
 
-    /// <summary>Standalone rows must survive server restarts.</summary>
     internal void ClearState(bool resetDps)
     {
         this.timeline.Clear();
@@ -701,7 +703,6 @@ internal sealed class BridgeHost : IDisposable
         this.clockRunning = false;
     }
 
-    /// <summary>Distinct severity text prevents samples from merging.</summary>
     internal void PushTestAlert(Severity severity)
     {
         var now = Environment.TickCount64;

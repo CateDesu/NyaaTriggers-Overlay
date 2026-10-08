@@ -5,13 +5,12 @@ using Dalamud.Interface.ManagedFontAtlas;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Rasterize just above the requested size to limit bitmap scaling. Disable global scaling.</summary>
+/// <summary>Round raster sizes up to limit bitmap scaling. Disable global scaling.</summary>
 internal sealed class ScaledFonts : IDisposable
 {
     /// <summary>Cover 16 px text at maximum text, alarm and UI scales.</summary>
     private const float MaxRequestPx = 16.0f * 6.0f * 2.0f * 3.0f;
 
-    /// <summary>Preserve existing size choices.</summary>
     private static readonly float[] ListedBuckets =
     {
         8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
@@ -35,7 +34,7 @@ internal sealed class ScaledFonts : IDisposable
             FontAtlasAutoRebuildMode.Async, false, "NyaaTriggers");
     }
 
-    /// <summary>Check IFontHandle.Available and use scaled text until ready.</summary>
+    /// <summary>Use scaled text until the font is ready.</summary>
     internal IFontHandle? Get(float sizePx)
     {
         var bucket = PickBucket(sizePx);

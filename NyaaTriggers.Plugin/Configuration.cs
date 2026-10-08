@@ -112,7 +112,7 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
             }
             catch (FileNotFoundException) when (!File.Exists(path) && !Directory.Exists(path))
             {
-                // The file disappeared after the failed read.
+                // Nothing remains to back up.
             }
             catch (Exception backupError)
             {
@@ -130,7 +130,8 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
         foreach (var property in typeof(Configuration).GetProperties())
         {
             var value = property.GetValue(this);
-            if (value is float number && !float.IsFinite(number))
+            if (value is float number && !float.IsFinite(number)
+                || value is Enum choice && !Enum.IsDefined(property.PropertyType, choice))
             {
                 property.SetValue(this, property.GetValue(defaults));
             }
@@ -195,10 +196,10 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
     private static float ColorPart(float value, float fallback)
         => float.IsFinite(value) ? Math.Clamp(value, 0.0f, 1.0f) : fallback;
 
-    /// <summary>Migrate when stored meanings change. Enums serialize as integers, so preserve their order.</summary>
+    /// <summary>Preserve numeric enum values or migrate changed meanings.</summary>
     public int Version { get; set; } = 7;
 
-    // Keep the saved Bars key for existing settings and profiles.
+    // Keep BarsMeter for saved settings and profiles.
     public MeterSettings? BarsMeter { get; set; }
     public MeterSettings? HorizonMeter { get; set; }
     public MeterSettings? KagerouMeter { get; set; }
@@ -251,7 +252,6 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
         this.Version = 7;
     }
 
-    // Connection
     public int Port { get; set; } = 27080;
 
     /// <summary>Read IINACT while the program is disconnected.</summary>
@@ -259,7 +259,6 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public string IinactEndpoint { get; set; } = "ws://127.0.0.1:10501/ws";
 
-    // Displayed windows
     public bool ShowTimeline { get; set; } = true;
     public bool ShowAlerts { get; set; } = true;
     public bool Locked { get; set; }
@@ -268,23 +267,22 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
     public bool TimelineOnlyInCombat { get; set; }
     public bool AlertsOnlyInDuty { get; set; }
     public bool AlertsOnlyInCombat { get; set; }
-    // Store geometry in screen pixels. ImGui persistence is disabled.
+    // Save screen pixels with ImGui persistence disabled.
     public Vector2 TimelinePos { get; set; } = new(80, 200);
     public Vector2 TimelineSize { get; set; } = new(320, 220);
     public Vector2 AlertsPos { get; set; } = new(80, 440);
     public Vector2 AlertsSize { get; set; } = new(420, 160);
-    // Timeline appearance
-    // Text scale also scales row heights.
+    // Also scales row heights.
     public float TimelineTextScale { get; set; } = 1.0f;
 
     public float TimelineBgOpacity { get; set; }
 
-    /// <summary>Includes the backdrop, as do AlertsFade and DpsFade.</summary>
+    /// <summary>Window fades include their backdrops.</summary>
     public float TimelineFade { get; set; } = 1.0f;
 
     public TextEffectStyle TimelineTextEffect { get; set; } = TextEffectStyle.Outline;
 
-    /// <summary>Outline radius or glow spread in pixels, as for alerts and DPS.</summary>
+    /// <summary>Outline radius or glow spread in pixels.</summary>
     public int TimelineEffectThickness { get; set; } = 1;
 
     public Vector4 TimelineEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
@@ -308,7 +306,6 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public Vector4 TimelineBarBorderColor { get; set; } = new(0.00f, 0.00f, 0.00f, 0.80f);
 
-    // Timeline behavior
     public BarFillMode BarFill { get; set; } = BarFillMode.Deplete;
 
     public bool BarRightToLeft { get; set; }
@@ -323,7 +320,7 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public bool CountdownSplit { get; set; }
 
-    /// <summary>Seconds ahead of the fight clock to show timeline entries.</summary>
+    /// <summary>Timeline lookahead in seconds.</summary>
     public float TimelineWindow { get; set; } = 45.0f;
 
     public int TimelineRows { get; set; } = 6;
@@ -348,7 +345,6 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public Vector4 TimelineMechanicColor { get; set; } = new(0.55f, 0.44f, 0.78f, 0.85f);
 
-    // Alert appearance
     public float AlertsTextScale { get; set; } = 1.0f;
 
     public float AlertsBgOpacity { get; set; }
@@ -361,7 +357,7 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public Vector4 AlertsEffectColor { get; set; } = new(0.0f, 0.0f, 0.0f, 0.9f);
 
-    /// <summary>Default info duration without a ttl. Keep this serialized name for older configs.</summary>
+    /// <summary>Info duration without ttl. Keep the key for older settings.</summary>
     public float AlertSeconds { get; set; } = 4.0f;
 
     public float AlertSecondsAlert { get; set; } = 4.0f;
@@ -378,7 +374,7 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public float AlertsAlarmScale { get; set; } = 1.0f;
 
-    /// <summary>Show remaining callout time as a strip below the text.</summary>
+    /// <summary>Remaining time strip below each callout.</summary>
     public bool AlertsLifeline { get; set; }
 
     public bool AlertsShowInfo { get; set; } = true;
@@ -399,21 +395,20 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
 
     public bool AlarmScreenFlash { get; set; }
 
-    /// <summary>Flash depth as a fraction of the shorter screen dimension.</summary>
+    /// <summary>Flash depth relative to the shorter screen dimension.</summary>
     public float AlarmScreenFlashSize { get; set; } = 0.15f;
 
     public Vector4 ColorInfo { get; set; } = new(0.89f, 0.74f, 0.42f, 1.00f);
     public Vector4 ColorAlert { get; set; } = new(0.98f, 0.62f, 0.35f, 1.00f);
     public Vector4 ColorAlarm { get; set; } = new(0.95f, 0.30f, 0.30f, 1.00f);
 
-    // Appearance profiles store JSON snapshots.
     public Dictionary<string, string> AppearanceProfiles
     {
         get;
         set => field = value ?? new();
     } = new();
 
-    /// <summary>Include Vector4 fields so profile colours survive serialization.</summary>
+    /// <summary>Vector4 colours need field serialization.</summary>
     private static readonly JsonSerializerOptions ProfileOptions = new()
     {
         IncludeFields = true,
@@ -526,7 +521,7 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
         Version = 2;
     }
 
-    /// <summary>Map the retired shadow effect to outline. Leave track opacity at its new default.</summary>
+    /// <summary>Retired shadows become outlines. Keep default track opacity.</summary>
     public void MigrateFromV2()
     {
         var effect = TextEffect == TextEffectStyle.Off ? TextEffectStyle.Off : TextEffectStyle.Outline;
@@ -783,7 +778,6 @@ internal class MeterSettings
     public Vector2 DpsPos { get; set; } = new(80, 620);
     public Vector2 DpsSize { get; set; } = new(320, 240);
 
-    // DPS appearance
     public float DpsTextScale { get; set; } = 1.0f;
 
     public float DpsBgOpacity { get; set; }
@@ -858,7 +852,7 @@ internal class MeterSettings
         get;
         set
         {
-            // Imported formats use the same length limit as the text editor.
+            // Match the text editor's length limit.
             var text = value ?? string.Empty;
             var length = Math.Min(text.Length, 128);
             if (length < text.Length && char.IsHighSurrogate(text[length - 1]) && char.IsLowSurrogate(text[length]))
@@ -903,7 +897,7 @@ internal class MeterSettings
 
     public Vector4 DpsBarSelfColor { get; set; } = new(1.00f, 1.00f, 1.00f, 0.85f);
 
-    // Horizon Overlay settings retain their serialized Horiz names for compatibility.
+    // Keep serialized Horiz names for older settings.
 
     public bool DpsHorizShowNames { get; set; } = true;
 
@@ -917,7 +911,7 @@ internal class MeterSettings
 
     public bool DpsHorizShowPercent { get; set; } = true;
 
-    /// <summary>Maximum cell width before text scaling.</summary>
+    /// <summary>Maximum bar width before text scaling.</summary>
     public float DpsHorizMaxBarWidth { get; set; } = 140.0f;
 
     /// <summary>Minimum bar height before text scaling.</summary>
@@ -955,7 +949,6 @@ internal class MeterSettings
 
     public Vector4 DpsHorizDimColor { get; set; } = new(0.000f, 0.000f, 0.000f, 0.30f);
 
-    // Encounter header
     public bool DpsShowHeader { get; set; } = true;
 
     public bool DpsHeaderDuration { get; set; } = true;

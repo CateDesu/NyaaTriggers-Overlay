@@ -1,7 +1,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
 
   <PropertyGroup>
-    <!-- Must match the manifest InternalName so Dalamud can locate the DLL. -->
+    <!-- Match the manifest InternalName so Dalamud finds the DLL. -->
     <AssemblyName>NyaaTriggers</AssemblyName>
     <RootNamespace>NyaaTriggers.Plugin</RootNamespace>
     <Version>0.2.0.0</Version>

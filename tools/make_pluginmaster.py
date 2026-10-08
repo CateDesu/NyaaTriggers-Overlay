@@ -6,15 +6,6 @@ import sys
 import time
 from pathlib import Path
 
-# Regenerated listing fields that are excluded from manifest comparisons.
-GENERATED_KEYS = (
-    "DownloadLinkInstall",
-    "DownloadLinkUpdate",
-    "DownloadLinkTesting",
-    "LastUpdate",
-    "IsHide",
-)
-
 
 def build_entry(manifest: dict, repo: str, tag: str, changelog: str) -> dict:
     version = manifest.get("AssemblyVersion")

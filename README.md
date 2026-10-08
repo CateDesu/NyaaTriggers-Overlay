@@ -1,42 +1,11 @@
 # NyaaTriggers Overlay
 
-This is a companion plugin for [NyaaTriggers](https://github.com/CateDesu/NyaaTriggers). It draws the
-timeline bars, callouts, and three independent meter windows in the game: [LMeter](https://github.com/lichie567/LMeter),
-Horizon, and [Kagerou](https://github.com/hibiyasleep/kagerou). The callouts and timeline come from the
-program, so for those you need both. If all you want is the DPS meter, the plugin can instead read
-the combat feed straight from [IINACT](https://github.com/marzent/IINACT) with no program running:
-tick **Standalone meter** in its settings.
+A companion plugin for [NyaaTriggers](https://github.com/CateDesu/NyaaTriggers) that displays
+timelines, callouts, and three independent DPS meters in game: [LMeter](https://github.com/lichie567/LMeter),
+Horizon, and [Kagerou](https://github.com/hibiyasleep/kagerou).
 
-Open each meter's section in `/nyaa` and tick its **Enable** checkbox. Each window
-keeps its own position, size, appearance and visibility settings. You can enable
-several at once or switch between them without losing your settings. Horizon's
-options are inside its own section, as are LMeter and Kagerou. Existing settings
-carry over to the meter you were using; the other windows start disabled.
-
-After a wipe, each meter can keep the last pull visible until damage starts on the next pull.
-Healing and entering combat leave the final numbers in place. Changing zones clears them.
-
-LMeter replaces the old Bars style. It has a compact encounter header, job icons,
-flat job-colored bars and DPS, HPS and death counts on the right. The highest DPS
-fills its row and the other bars scale against it. Its settings can hide individual
-metrics, change colors and spacing, or show compact numbers. Bars placement and
-visibility carry over. Kagerou and Horizon keep their own settings.
-
-The Kagerou view includes DPS, Tank, Heal and 24 tabs, job icons, column headings,
-an encounter header and a footer with your rank and the party total. Tank sorts by
-damage received and Heal sorts by healing. The clock opens the last 20 finished
-encounters, the arrow collapses the table, and the menu has quick display options.
-History lasts until the plugin reloads.
-
-Unlock the overlay to use these controls, or enable **Use meter controls while locked**
-under **Kagerou → Appearance**. That section also selects the view and optional DPS columns.
-Under **Kagerou → Column headings**, choose **Dead**, **Deaths**, **D**, or **No letters**
-for the death heading. Death counts can align **Left**, **Center**, or **Right**, with
-**Center** as the default. Name, DPS, D%, H% and Crit headings can each be hidden
-without hiding their values. You can also hide the whole heading row. These options
-are available from the Kagerou window's menu too.
-Unknown statistics display as a dash. Overheal is unavailable from the raw feed;
-older NyaaTriggers versions also omit the new critical hit and healing totals.
+Timelines and callouts need the program running. For meters alone, tick **Standalone meter**
+to read combat data directly from [IINACT](https://github.com/marzent/IINACT).
 
 ## Installing
 
@@ -51,17 +20,36 @@ older NyaaTriggers versions also omit the new critical hit and healing totals.
    https://raw.githubusercontent.com/CateDesu/NyaaTriggers-Overlay/main/pluginmaster.json
    ```
 
-5. Click the "Save" button.
+5. Click **+** to add the repository, check that it is enabled, then click **Save**.
 6. Type `/xlplugins`, find **NyaaTriggers**, and install it.
 
-Then type `/nyaa` in game chat to set it up. The boxes start unlocked so you can drag them where you
-want. Tick **Lock** when you are happy and clicks pass through to the game again.
+## Setup
+
+Type `/nyaa` to open settings. Enable timelines and callouts under **Boxes**, and tick **Enable**
+in each meter's section to show it. Each meter keeps its own position, size and appearance.
+You can show several meters at once.
+
+Drag and resize the unlocked windows, then tick **Lock** to let clicks pass through.
+`/nyaa lock` toggles the lock. Kagerou can keep its controls clickable with
+**Kagerou → Appearance → Use meter controls while locked**.
+
+For timelines and callouts, run the NyaaTriggers program. It connects automatically when the
+ports match; the default is **27080**. Check **Settings → In-Game Overlay** in the program and
+**Link** in the plugin for connection status.
+
+For meters without the program, [install and enable IINACT](https://www.iinact.com/installation/)
+and tick **Standalone meter** under **Link**. The default feed is `ws://127.0.0.1:10501/ws`.
+A connected NyaaTriggers program takes priority over this feed.
+
+Under each meter's **Display** section, **Keep the last encounter on screen** keeps final results
+until the next pull deals or takes damage.
+Healing and entering combat leave those results in place. Changing zones clears them.
 
 ## Notes
 
-This is a custom repository and will never be on the official plugin list. Dalamud's rules do not
-allow plugins that bridge to ACT, which is what NyaaTriggers is on the other end. IINACT ships from
-its own repository for the same reason.
+The plugin is distributed through this custom repository. Dalamud's
+[plugin guidelines](https://dalamud.dev/plugin-publishing/restrictions/) exclude parsing and DPS meters
+from its official repository.
 
 Building it, running it from source, and the protocol it speaks to the program are in
 [docs/DEVELOPING.md](docs/DEVELOPING.md).

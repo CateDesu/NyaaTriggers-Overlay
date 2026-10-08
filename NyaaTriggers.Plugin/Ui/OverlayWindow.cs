@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ManagedFontAtlas;
@@ -22,7 +23,7 @@ internal abstract class OverlayWindow : Window
         ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings |
         ImGuiWindowFlags.NoDocking;
 
-    /// <summary>Ignore small geometry changes caused by rendering jitter.</summary>
+    /// <summary>Ignore geometry jitter.</summary>
     private const float GeometryEpsilon = 0.5f;
 
     /// <summary>Defer geometry resets until the next visible frame.</summary>
@@ -34,7 +35,7 @@ internal abstract class OverlayWindow : Window
         this.Config = config;
         this.Fonts = fonts;
 
-        // Settings own visibility, so closing the window would be undone next frame.
+        // Settings would reopen a closed overlay.
         this.RespectCloseHotkey = false;
         this.ShowCloseButton = false;
         this.DisableWindowSounds = true;
@@ -56,7 +57,7 @@ internal abstract class OverlayWindow : Window
 
     protected virtual float FadeOpacity => 1.0f;
 
-    /// <summary>Keep the window visible for placement.</summary>
+    /// <summary>Match the opacity slider's visible minimum.</summary>
     private float Fade => Math.Clamp(this.FadeOpacity, 0.05f, 1.0f);
 
     protected abstract int EffectThickness { get; }
@@ -97,7 +98,7 @@ internal abstract class OverlayWindow : Window
 
         using (this.UseFont(targetPx))
         {
-            // Each window reserves its own spacing.
+            // Rows provide their own spacing.
             ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, Vector2.Zero);
             try
             {
@@ -118,7 +119,7 @@ internal abstract class OverlayWindow : Window
 
     protected abstract void DrawContent();
 
-    /// <summary>Keep pixel sizes stable while fonts load and restore scale after nested text.</summary>
+    /// <summary>Keep sizes stable during font loading and restore nested scales.</summary>
     protected FontScope UseFont(float pixels) => new(this.Fonts.Get(pixels), pixels);
 
     private static float FontBasePixels()
@@ -170,7 +171,7 @@ internal abstract class OverlayWindow : Window
             3.0f);
     }
 
-    /// <summary>Save on lock or unload, avoiding disk writes while dragging.</summary>
+    /// <summary>Defer saving drag geometry until lock or unload.</summary>
     private void CaptureGeometry()
     {
         var position = ImGui.GetWindowPos();
@@ -202,7 +203,7 @@ internal abstract class OverlayWindow : Window
             rgba.W);
     }
 
-    /// <summary>Rounded bars use a flat fill because this gradient cannot be rounded.</summary>
+    /// <summary>This gradient cannot follow rounded corners.</summary>
     protected void AddBarFill(
         ImDrawListPtr drawList, Vector2 min, Vector2 max, Vector4 fill, float rounding)
     {
@@ -245,15 +246,16 @@ internal abstract class OverlayWindow : Window
             }
         }
 
-        if (fits > 0 && char.IsHighSurrogate(text[fits - 1]) && char.IsLowSurrogate(text[fits]))
+        if (fits > 0)
         {
-            fits--;
+            var starts = StringInfo.ParseCombiningCharacters(text);
+            var boundary = Array.BinarySearch(starts, fits);
+            if (boundary < 0) fits = starts[~boundary - 1];
         }
 
         return string.Concat(text.AsSpan(0, fits), Ellipsis);
     }
 
-    /// <summary>Fade the text and its effect together.</summary>
     protected void DrawStyledText(ImDrawListPtr drawList, Vector2 pos, Vector4 color, string text)
     {
         var alpha = Math.Clamp(color.W, 0.0f, 1.0f);
@@ -265,7 +267,7 @@ internal abstract class OverlayWindow : Window
         {
             switch (this.TextEffect)
             {
-                // Use circular stamps to keep outline corners rounded.
+                // Circular stamps keep outline corners rounded.
                 case TextEffectStyle.Outline:
                 {
                     var ink = ImGui.GetColorU32(new Vector4(effect.X, effect.Y, effect.Z, effectAlpha));
@@ -295,7 +297,7 @@ internal abstract class OverlayWindow : Window
         drawList.AddText(pos, ToColor(color), text);
     }
 
-    /// <summary>Increase stamp count with radius to avoid gaps in the ring.</summary>
+    /// <summary>More stamps prevent gaps in larger rings.</summary>
     private static void StampRing(ImDrawListPtr drawList, Vector2 pos, string text, uint color, int radius)
     {
         var steps = Math.Max(8, radius * 8);

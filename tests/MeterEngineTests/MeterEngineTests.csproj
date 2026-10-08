@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Compile the source directly to access internals without Dalamud dependencies. -->
+    <!-- Link source to test internals without Dalamud. -->
     <Compile Include="..\..\NyaaTriggers.Plugin\Meter\MeterEngine.cs" Link="MeterEngine.cs" />
   </ItemGroup>
 

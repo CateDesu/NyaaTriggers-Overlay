@@ -27,7 +27,7 @@ internal sealed class IinactClient : IDisposable
     private readonly Action<string> onMessage;
     private readonly Action onSessionEnd;
 
-    /// <summary>Makes loop task registration atomic with Stop.</summary>
+    /// <summary>Keep task registration atomic with Dispose.</summary>
     private readonly object gate = new();
 
     private readonly CancellationTokenSource stop = new();
@@ -44,7 +44,7 @@ internal sealed class IinactClient : IDisposable
         this.onSessionEnd = onSessionEnd ?? (() => { });
     }
 
-    /// <summary>The config window accepts delayed status updates without locking.</summary>
+    /// <summary>The config window tolerates delayed updates.</summary>
     internal string Status => this.status;
 
     internal bool IsConnected => this.connected;
@@ -86,7 +86,7 @@ internal sealed class IinactClient : IDisposable
                 await ws.ConnectAsync(this.endpoint, timeout.Token).ConfigureAwait(false);
                 this.connected = true;
                 this.status = "Connected to IINACT.";
-                backoffMs = 5000;   // Reset retry delay after a successful connection.
+                backoffMs = 5000;
                 await ws.SendAsync(
                     Encoding.UTF8.GetBytes(Subscribe), WebSocketMessageType.Text, true, this.stop.Token)
                     .ConfigureAwait(false);
@@ -144,6 +144,7 @@ internal sealed class IinactClient : IDisposable
                 result = await ws.ReceiveAsync(chunk, this.stop.Token).ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
+                    this.status = "IINACT feed closed the connection.";
                     return;
                 }
 
@@ -152,8 +153,8 @@ internal sealed class IinactClient : IDisposable
                     message.Write(chunk, 0, result.Count);
                     if (message.Length > MaxMessageBytes)
                     {
-                        // Abort oversized messages without waiting for the peer to read a
-                        // close frame.
+                        this.status = "IINACT message exceeded the size limit.";
+                        // Abort without waiting for the peer to read a close frame.
                         ws.Abort();
                         return;
                     }
@@ -189,7 +190,7 @@ internal sealed class IinactClient : IDisposable
         {
             if (!loop.Wait(StopWaitMs))
             {
-                // The loop may still read the token source. Leave it alive until collected.
+                // Keep the token source alive while the loop may still read it.
                 Services.Log.Warning("an IINACT feed session did not stop in time");
                 return;
             }

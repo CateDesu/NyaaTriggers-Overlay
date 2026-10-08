@@ -13,7 +13,6 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly Configuration config;
     private readonly BridgeHost bridge;
-    private readonly ScaledFonts fonts;
     private readonly PluginUi ui;
     private readonly bool commandRegistered;
 
@@ -61,8 +60,8 @@ public sealed class Plugin : IDalamudPlugin
         PluginUi? ui = null;
         try
         {
-            this.fonts = fonts = new ScaledFonts();
-            this.ui = ui = new PluginUi(this.config, this.bridge, this.fonts);
+            fonts = new ScaledFonts();
+            this.ui = ui = new PluginUi(this.config, this.bridge, fonts);
             this.bridge.Start();
             this.commandRegistered = Services.Commands.AddHandler(CommandName, new CommandInfo(this.OnCommand)
             {
@@ -159,7 +158,6 @@ public sealed class Plugin : IDalamudPlugin
             this.bridge.Dispose();
         }
 
-        // Save the last window placement, which is tracked in memory while unlocked.
         this.config.Save();
     }
 }

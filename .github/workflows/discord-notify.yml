@@ -1,4 +1,3 @@
-# Set the DISCORD_WEBHOOK repository secret to the destination webhook URL.
 name: Discord notify
 
 on:
@@ -12,7 +11,7 @@ jobs:
     steps:
       - name: Post push to Discord
         env:
-          # Pass commit text through the environment so it cannot become shell code.
+          # Keep commit text out of shell source.
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}

@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using NyaaTriggers.Plugin.Bridge;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Wrap callouts manually so each line can use the configured alignment.</summary>
+/// <summary>Wrap manually for per-line alignment.</summary>
 internal sealed class AlertsWindow : OverlayWindow
 {
     private const float FadeSeconds = 0.6f;
@@ -61,7 +62,7 @@ internal sealed class AlertsWindow : OverlayWindow
 
     protected override Vector4 EffectColor => this.Config.AlertsEffectColor;
 
-    /// <summary>Measure before drawing to anchor the full stack at the bottom.</summary>
+    /// <summary>Measure the stack before bottom anchoring.</summary>
     private readonly record struct DrawItem(
         List<MeasuredLine> Lines, Vector4 Color, float Alpha, bool IsAlarm,
         float Scale, float LineHeight, float MeasuredHeight, float Life);
@@ -175,7 +176,7 @@ internal sealed class AlertsWindow : OverlayWindow
                 age >= RiseSeconds ? 1.0f : Math.Max(age, 0.0f) / RiseSeconds);
         }
 
-        // A merged repeat resets both timestamps, refilling the remaining time strip.
+        // Merged repeats reset timestamps and refill the lifeline.
         var span = alert.ExpiresAt - alert.ShownAt;
         var life = span > 0
             ? Math.Clamp((alert.ExpiresAt - now) / (float)span, 0.0f, 1.0f)
@@ -315,29 +316,39 @@ internal sealed class AlertsWindow : OverlayWindow
         }
     }
 
-    /// <summary>Words wider than the window remain intact and are clipped.</summary>
     private static List<string> WrapLines(string text, float width)
     {
         var lines = new List<string>();
         var current = string.Empty;
         foreach (var word in text.Split(' '))
         {
-            if (current.Length == 0)
+            if (current.Length > 0)
             {
-                current = word;
-                continue;
+                var candidate = current + " " + word;
+                if (ImGui.CalcTextSize(candidate).X <= width)
+                {
+                    current = candidate;
+                    continue;
+                }
+                lines.Add(current);
             }
 
-            var candidate = current + " " + word;
-            if (ImGui.CalcTextSize(candidate).X > width)
+            current = word;
+            if (ImGui.CalcTextSize(word).X <= width) continue;
+
+            // Keep combining marks and joined emoji intact.
+            var starts = StringInfo.ParseCombiningCharacters(word);
+            var first = 0;
+            for (var next = 1; next <= starts.Length; next++)
             {
-                lines.Add(current);
-                current = word;
+                var end = next < starts.Length ? starts[next] : word.Length;
+                if (next > first + 1 && ImGui.CalcTextSize(word[starts[first]..end]).X > width)
+                {
+                    lines.Add(word[starts[first]..starts[next - 1]]);
+                    first = next - 1;
+                }
             }
-            else
-            {
-                current = candidate;
-            }
+            current = word[starts[first]..];
         }
 
         if (current.Length > 0 || lines.Count == 0)

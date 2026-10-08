@@ -30,9 +30,6 @@ internal sealed class MessageInbox
         }
     }
 
-    internal bool TryDequeue(ref int budget, bool first, out string? raw)
-        => this.TryDequeue(ref budget, first, out raw, out _);
-
     internal bool TryDequeue(ref int budget, bool first, out string? raw, out long receivedAt)
     {
         lock (this.gate)

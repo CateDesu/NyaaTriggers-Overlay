@@ -23,11 +23,10 @@ internal sealed class WebSocketServer : IDisposable
 
     private const int MaxHandshakeBytes = 8 << 10;
 
-    /// <summary>RFC 6455 caps control frame payloads at 125 bytes.</summary>
+    /// <summary>Control frame limit from RFC 6455.</summary>
     private const int MaxControlPayload = 125;
 
-    /// <summary>Allows reconnects to overlap older sessions while bounding open
-    /// sockets.</summary>
+    /// <summary>Allow reconnects to overlap older sessions.</summary>
     private const int MaxSessions = 4;
 
     private const int HandshakeTimeoutMs = 5000;
@@ -241,12 +240,9 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // Disposal is marked before any operation that can throw, so the slot is
-                // available.
+                // The slot is free once disposal is marked, even if cleanup throws.
                 Services.Log.Debug($"eviction failed: {ex.Message}");
             }
-
-            // The session removes itself from the dictionary when its task finishes.
         }
     }
 
@@ -266,8 +262,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (SocketException)
             {
-                // Keep the default keepalive settings if the platform rejects custom probe
-                // timing.
+                // Unsupported probe options must not reject the connection.
             }
             session = new Session(client, this.gate);
         }
@@ -338,7 +333,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (Exception ex)
             {
-                // Contain callback errors so session cleanup still runs.
+                // Callback errors must not end the session.
                 Services.Log.Warning($"connect handler threw: {ex.Message}");
             }
 
@@ -478,7 +473,7 @@ internal sealed class WebSocketServer : IDisposable
             return (Encoding.Latin1.GetString(buffer, 0, end), true);
         }
 
-        return (null, true);   // Request headers exceeded the size limit.
+        return (null, true);
     }
 
     private static bool HasToken(string? value, string token)
@@ -637,7 +632,7 @@ internal sealed class WebSocketServer : IDisposable
                 case 0xA:   // pong
                     continue;
 
-                default:    // binary or reserved: not part of this protocol
+                default:    // Binary messages are unsupported.
                     await CloseAsync(session, 1003).ConfigureAwait(false);
                     return;
             }
@@ -654,7 +649,7 @@ internal sealed class WebSocketServer : IDisposable
             }
             catch (DecoderFallbackException)
             {
-                // RFC 6455 requires close code 1007 for invalid UTF-8.
+                // Invalid UTF-8 requires close code 1007.
                 await CloseAsync(session, 1007).ConfigureAwait(false);
                 return;
             }
@@ -727,7 +722,7 @@ internal sealed class WebSocketServer : IDisposable
         session?.Dispose();
     }
 
-    /// <summary>Queue without blocking drawing. Preserve retained frame order and never throw.</summary>
+    /// <summary>Queue without blocking drawing.</summary>
     internal void Send(string text)
         => Volatile.Read(ref this.peer)?.Enqueue(BuildFrame(0x1, Encoding.UTF8.GetBytes(text)));
 
@@ -745,7 +740,7 @@ internal sealed class WebSocketServer : IDisposable
         }
         catch (TimeoutException)
         {
-            // Close the socket if the peer does not read the close frame in time.
+            // Continue shutdown if the close frame stalls.
         }
         catch (Exception ex)
         {
@@ -792,7 +787,7 @@ internal sealed class WebSocketServer : IDisposable
 
     private static byte[] BuildFrame(int opcode, byte[] payload)
     {
-        // Server frames are never masked. One frame per message, FIN always set.
+        // Server frames are unmasked and contain complete messages.
         int headerLength;
         if (payload.Length <= 125)
         {
@@ -837,7 +832,6 @@ internal sealed class WebSocketServer : IDisposable
                                .ConfigureAwait(false))
             {
                 await session.Stream.WriteAsync(frame, session.Token).ConfigureAwait(false);
-                await session.Stream.FlushAsync(session.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -899,7 +893,6 @@ internal sealed class WebSocketServer : IDisposable
         }
 
         this.listeners.Clear();
-        // Unblock pending reads even if closing one socket fails.
         foreach (var session in open)
         {
             try
@@ -1005,7 +998,7 @@ internal sealed class WebSocketServer : IDisposable
                 Services.Log.Debug($"session cancel failed: {ex.Message}");
             }
 
-            // Closing the socket is what unblocks a read already in flight.
+            // Close the socket to unblock pending reads.
             try
             {
                 this.client.Close();

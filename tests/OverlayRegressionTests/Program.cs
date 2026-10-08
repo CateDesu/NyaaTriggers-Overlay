@@ -426,6 +426,42 @@ internal static class Program
 
     private static void AdversarialProfiles()
     {
+        var enumProperties = typeof(Configuration).GetProperties()
+            .Where(property => property.DeclaringType == typeof(Configuration) && property.PropertyType.IsEnum).ToArray();
+        var defaults = new Configuration();
+        foreach (var invalid in new[] { -1, 999 })
+        {
+            var malformed = new Configuration();
+            foreach (var property in enumProperties)
+                property.SetValue(malformed, Enum.ToObject(property.PropertyType, invalid));
+            var malformedJson = JsonSerializer.Serialize(malformed);
+            var loaded = Configuration.Load(() => malformed, "unused-config-path");
+            Check(enumProperties.All(property => Equals(property.GetValue(loaded), property.GetValue(defaults))),
+                "Loading malformed timeline and callout choices restores their defaults", invalid);
+            var imported = new Configuration();
+            var blob = Configuration.ValidateProfileBlob(malformedJson);
+            Check(blob != null && imported.ApplyAppearanceProfile(blob)
+                  && enumProperties.All(property => Equals(property.GetValue(imported), property.GetValue(defaults))),
+                "Malformed enum choices recover through appearance profile validation and import", invalid);
+        }
+        var valid = new Configuration();
+        foreach (var property in enumProperties)
+            property.SetValue(valid, Enum.GetValues(property.PropertyType).GetValue(0));
+        valid.Sanitize();
+        Check(enumProperties.All(property => Equals(property.GetValue(valid), Enum.GetValues(property.PropertyType).GetValue(0))),
+            "Sanitizing preserves supported timeline and callout choices");
+        var malformedText = new Configuration { TimelineTextEffect = (TextEffectStyle)999, Countdown = CountdownStyle.Hidden };
+        malformedText.Sanitize();
+        using (var malformedHost = new BridgeHost(malformedText))
+        using (var fonts = new ScaledFonts())
+        {
+            ImGui.Reset();
+            var timeline = new TimelineWindow(malformedText, malformedHost, fonts);
+            Call(timeline, "DrawBarText", ImGui.GetWindowDrawList(), "Recovered outline", 10f, Vector2.Zero, 300f, 24f);
+            Check(ImGui.Commands.Count(command => command.Kind == "text" && command.Text == "Recovered outline") == 9,
+                "A malformed saved text effect renders the default outline after recovery");
+        }
+
         var config = new Configuration { Port = Port(), IinactEndpoint = "wss://example/ws?token=PRIVATE_TEST_TOKEN" };
         var oldBlob = JsonSerializer.Serialize(config, new JsonSerializerOptions { IncludeFields = true });
         config.AppearanceProfiles["Old saved profile"] = oldBlob;
@@ -636,6 +672,7 @@ internal static class Program
             ("kagerou", KagerouTests.Run),
             ("meter-windows", MeterWindowsTests.Run),
             ("lmeter", LMeterTests.Run),
+            ("ui-review", UiReviewTests.Run),
             ("subscription", SubscriptionOrder), ("npc", NpcRoster), ("hidden-ui", HiddenUi),
             ("delayed-fight", DelayedFight), ("endpoint", EndpointRestart),
             ("retained-meter", () => { RetainedMeterMigration(); return Task.CompletedTask; }),

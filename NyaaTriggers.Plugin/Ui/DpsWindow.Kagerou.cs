@@ -45,6 +45,8 @@ internal sealed partial class DpsWindow
 
     private void DrawKagerou(DpsState live)
     {
+        if (this.kagerouHistory is { } selected && !string.IsNullOrEmpty(selected.Id))
+            this.kagerouHistory = this.bridge.DpsHistory.FirstOrDefault(encounter => encounter.Id == selected.Id) ?? selected;
         var state = this.kagerouHistory ?? live;
         if (state.Rows.Count == 0 && !this.Config.Locked) state = KagerouSample();
         if (state.Rows.Count == 0) return;
@@ -59,7 +61,7 @@ internal sealed partial class DpsWindow
         var width = Math.Max(1, ImGui.GetContentRegionAvail().X);
         var line = ImGui.GetTextLineHeight();
         if (this.Meter.DpsShowHeader) this.DrawKagerouHeader(state, width, line);
-        if (!this.kagerouCollapsed)
+        if (!this.kagerouCollapsed || !this.Meter.DpsShowHeader)
         {
             if (tab == KagerouTab.Alliance)
             {

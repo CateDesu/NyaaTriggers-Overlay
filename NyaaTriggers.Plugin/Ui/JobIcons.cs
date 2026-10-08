@@ -44,8 +44,6 @@ internal static class JobIcons
         ["BST"] = 062423,
     };
 
-    private static readonly Dictionary<uint, ISharedImmediateTexture> Cache = new();
-
     private static readonly Dictionary<string, uint> ClassJobs = new(System.StringComparer.OrdinalIgnoreCase)
     {
         ["GLA"] = 1, ["PGL"] = 2, ["MRD"] = 3, ["LNC"] = 4, ["ARC"] = 5, ["CNJ"] = 6, ["THM"] = 7,
@@ -56,7 +54,6 @@ internal static class JobIcons
         ["BST"] = 43,
     };
 
-    /// <summary>Textures may be unavailable while loading.</summary>
     internal static IDalamudTextureWrap? Get(string job, bool lmeter = false)
     {
         if (string.IsNullOrWhiteSpace(job) || !ByJob.TryGetValue(job, out var iconId))
@@ -66,12 +63,7 @@ internal static class JobIcons
 
         if (lmeter && ClassJobs.TryGetValue(job, out var classJob)) iconId = 62000 + classJob;
 
-        if (!Cache.TryGetValue(iconId, out var texture))
-        {
-            texture = Services.Textures.GetFromGameIcon(new GameIconLookup { IconId = iconId, HiRes = true });
-            Cache[iconId] = texture;
-        }
-
+        var texture = Services.Textures.GetFromGameIcon(new GameIconLookup { IconId = iconId, HiRes = true });
         return texture.GetWrapOrEmpty();
     }
 }
