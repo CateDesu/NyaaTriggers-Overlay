@@ -52,14 +52,13 @@ static string Damage(string flags = "0003")
 const string Party = "{\"type\":\"PartyChanged\",\"party\":[{\"id\":\"10000001\",\"job\":31}]}";
 const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameCombat\":true}";
 
-// Counts, retained bytes and frame budgets all apply to the same queue.
 {
     var queue = new MessageInbox();
     var large = new string('x', 1 << 20);
     Check(queue.TryEnqueue(large) && queue.TryEnqueue(large), "two MiB strings fit the four MiB byte budget");
     Check(!queue.TryEnqueue("x"), "byte limit refuses the next character");
     var budget = MessageInbox.FrameBytes;
-    Check(queue.TryDequeue(ref budget, true, out _) && !queue.TryDequeue(ref budget, false, out _), "large messages drain across frames");
+    Check(queue.TryDequeue(ref budget, true, out _, out _) && !queue.TryDequeue(ref budget, false, out _, out _), "large messages drain across frames");
     queue.Clear();
     Check(Enumerable.Range(0, 512).All(_ => queue.TryEnqueue(null)), "control marker admission stays bounded");
     Check(!queue.TryEnqueue(null), "control markers cannot bypass the count limit");
@@ -68,7 +67,6 @@ const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameComba
     Check(queue.TryEnqueue("fresh"), "clear restores the byte budget");
 }
 
-// Recovery preserves damaged file bytes and sanitizes settings to finite values.
 {
     var folder = Path.Combine(Path.GetTempPath(), "nyaa-config-test-" + Guid.NewGuid());
     Directory.CreateDirectory(folder);
@@ -91,9 +89,15 @@ const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameComba
         Check(config.DpsTextScale == 1.7f, "valid setting preserved");
         Check(config.ApplyAppearanceProfile("{\"AlertsFade\":1e50}"), "overflowing profile number accepted for sanitation");
         Check(float.IsFinite(config.AlertsFade), "profile cannot introduce infinity");
+        var saves = Services.PluginInterface.Saves;
+        var savesBefore = saves.Count;
+        config.Save();
+        Check(saves.Count == savesBefore + 1 && ReferenceEquals(saves[^1], config),
+            "recovered configuration reaches storage after successful quarantine");
         Directory.CreateDirectory(path);
         var blocked = Configuration.Load(() => throw new IOException("unreadable config"), path);
-        Check((bool)Field(blocked, "saveDisabled"), "failed quarantine leaves saving disabled");
+        blocked.Save();
+        Check(saves.Count == savesBefore + 1, "failed quarantine never reaches configuration storage");
     }
     finally { Directory.Delete(folder, true); }
 }
@@ -105,7 +109,112 @@ foreach (var port in new[] { 0, -1, 65536 })
     Check(server.LastError != null && !server.IsConnected, "invalid port fails visibly");
 }
 
-// An older handshake completing late cannot replace the healthy newer session.
+{
+    var port = FreePort();
+    var config = new Configuration { Port = port };
+    var meter = config.GetMeter(DpsMeterStyle.LMeter);
+    meter.ShowDps = true;
+    meter.DpsHoldLast = true;
+    using var host = new BridgeHost(config);
+    host.Start();
+    using var client = new ClientWebSocket();
+    await client.ConnectAsync(new Uri($"ws://127.0.0.1:{port}"), CancellationToken.None);
+    await Until(() => (long)Field(host, "currentSession") > 0);
+    foreach (var (id, title) in new[] { ("A", "Original A"), ("B", "Original B"), ("A", "Corrected A") })
+    {
+        var raw = JsonSerializer.Serialize(new
+        {
+            c = "dps", show = false,
+            enc = new { id, t = title, d = "00:10", dps = 1000, hasDamage = true },
+            rows = new object[] { new object[] { "Player", "MCH", 1000, 100, 0, true, 0 } },
+        });
+        await client.SendAsync(Encoding.UTF8.GetBytes(raw), WebSocketMessageType.Text, true, CancellationToken.None);
+        await Until(() => host.Dps.Title == title, host.Update);
+    }
+
+    Check(host.DpsHistory.Count == 2 && host.DpsHistory[0].Id == "B"
+        && host.DpsHistory[1].Title == "Corrected A",
+        "a repeated final updates its existing history entry without changing encounter order");
+
+    foreach (var statistic in new[] { "damage", "taken" })
+    {
+        foreach (var ended in new[] { false, true })
+        {
+            var raw = JsonSerializer.Serialize(new
+            {
+                c = "dps", show = !ended,
+                enc = new { id = statistic, t = statistic, d = "00:10", dps = 0 },
+                rows = new object[]
+                {
+                    new object[] { "Player", "MCH", 0, 0, 0, true, 0,
+                        new Dictionary<string, double> { [statistic] = 100 } },
+                },
+            });
+            await client.SendAsync(Encoding.UTF8.GetBytes(raw), WebSocketMessageType.Text, true, CancellationToken.None);
+            await Until(() => host.UnheldDps.Id == statistic && host.UnheldDps.Ended == ended, host.Update);
+            Check(host.Dps.Id == statistic && host.Dps.HasDamage && host.Dps.Ended == ended,
+                "damage statistics release held results when the optional damage flag is absent");
+        }
+
+        Check(host.DpsHistory[0].Id == statistic,
+            "an ending with damage statistics enters encounter history without the optional damage flag");
+    }
+
+    var held = host.Dps;
+    foreach (var (id, statistics, hps, explicitFlag) in new[]
+    {
+        ("explicit false", "{\"damage\":100,\"taken\":100}", 0, true),
+        ("healing", "{\"healed\":500,\"heals\":1}", 500, false),
+        ("misses", "{\"damage\":0,\"taken\":0,\"hits\":10}", 0, false),
+        ("negative", "{\"damage\":-100,\"taken\":-100}", 0, false),
+        ("nonfinite", "{\"damage\":1e999,\"taken\":1e999}", 0, false),
+        ("NaN strings", "{\"damage\":\"NaN\",\"taken\":\"NaN\"}", 0, false),
+    })
+    {
+        using var stats = JsonDocument.Parse(statistics);
+        var encounter = new Dictionary<string, object> { ["id"] = id, ["dps"] = 0 };
+        if (explicitFlag) encounter["hasDamage"] = false;
+        var raw = JsonSerializer.Serialize(new
+        {
+            c = "dps", show = true, enc = encounter,
+            rows = new object[] { new object[] { "Player", "MCH", 0, 0, hps, true, 0, stats.RootElement } },
+        });
+        await client.SendAsync(Encoding.UTF8.GetBytes(raw), WebSocketMessageType.Text, true, CancellationToken.None);
+        await Until(() => host.UnheldDps.Id == id, host.Update);
+        Check(ReferenceEquals(host.Dps, held) && !host.UnheldDps.HasDamage,
+            $"{id} does not release held results");
+    }
+    client.Abort();
+}
+
+foreach (var oversized in new[] { false, true })
+{
+    var port = FreePort();
+    using var server = new WebSocketServer(port, (_, _) => { }, (_, _) => { }, () => null);
+    server.Start();
+    var delivered = 0;
+    var endings = 0;
+    using var feed = new IinactClient(new Uri($"ws://127.0.0.1:{port}"),
+        _ => Interlocked.Increment(ref delivered), () => Interlocked.Increment(ref endings));
+    feed.Start();
+    await Until(() => server.IsConnected && feed.IsConnected);
+    using var replacement = new ClientWebSocket();
+    if (oversized)
+    {
+        server.Send(new string('x', (4 << 20) + 1));
+    }
+    else
+    {
+        await replacement.ConnectAsync(new Uri($"ws://127.0.0.1:{port}"), CancellationToken.None);
+    }
+
+    await Until(() => Volatile.Read(ref endings) > 0 && feed.Status.Contains("Retrying"));
+    Check(!feed.IsConnected && delivered == 0
+        && feed.Status.Contains(oversized ? "exceeded" : "closed"),
+        "feed retry status explains a clean close or oversized message without claiming it is connected");
+    replacement.Abort();
+}
+
 {
     var port = FreePort();
     using var server = new WebSocketServer(port, (_, _) => { }, (_, _) => { }, () => "hello");
@@ -131,7 +240,6 @@ foreach (var port in new[] { 0, -1, 65536 })
     Check(tasks.All(t => t.IsCompleted), "accept loops drain during disposal");
 }
 
-// An overloaded program session reconnects to resend its complete schedule.
 {
     var port = FreePort();
     using var host = new BridgeHost(new Configuration { Port = port });
@@ -141,11 +249,24 @@ foreach (var port in new[] { 0, -1, 65536 })
     await Until(() => (long)Field(host, "currentSession") > 0);
     var server = (WebSocketServer)Field(host, "server");
     var sequence = (long)Field(host, "currentSession");
+    foreach (var raw in new[]
+    {
+        "{\"c\":\"timeline\",\"v\":[[10,\"Old\",\"mechanic\"]]}",
+        "{\"c\":\"tick\",\"t\":1}",
+        "{\"c\":\"alert\",\"text\":\"Old alert\",\"ttl\":30}",
+        "{\"c\":\"dps\",\"show\":true,\"enc\":{\"dps\":100},\"rows\":[[\"Player\",\"MCH\",100,100]]}",
+    })
+    {
+        await client.SendAsync(Encoding.UTF8.GetBytes(raw), WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+    await Until(() => host.Timeline.Count == 1 && host.ClockRunning && host.Alerts.Count == 1
+        && host.Dps.Show && host.Dps.Rows.Count == 1, host.Update);
     var receive = typeof(BridgeHost).GetMethod("Receive", Private)!;
     for (var i = 0; i < 3; i++) receive.Invoke(host, new object[] { server, sequence, new string('x', 1 << 20) });
     await Until(() => !host.IsConnected);
     host.Update();
-    Check(host.Timeline.Count == 0 && !host.ClockRunning, "overflow retires the old program state");
+    Check(host.Timeline.Count == 0 && !host.ClockRunning && host.Alerts.Count == 0 && host.Dps.Rows.Count == 0,
+        "overflow retires the old schedule, clock, alerts and DPS");
     using var replacement = new ClientWebSocket();
     await replacement.ConnectAsync(new Uri($"ws://127.0.0.1:{port}"), CancellationToken.None);
     await Until(() => (long)Field(host, "currentSession") > sequence);
@@ -157,7 +278,6 @@ foreach (var port in new[] { 0, -1, 65536 })
     client.Abort();
 }
 
-// Feed loss closes the engine on Update. Replayed combat edges start a fresh encounter.
 {
     var port = FreePort();
     using var server = new WebSocketServer(port, (_, _) => { }, (_, _) => { }, () => null);
@@ -187,8 +307,6 @@ foreach (var port in new[] { 0, -1, 65536 })
     Check(Field(meter, "client") == null, "overflow retry waits instead of reconnecting every frame");
 }
 
-// Reject JSON values that are not objects and preserve endings across disconnects and
-// missed attacks.
 {
     var port = FreePort();
     using var server = new WebSocketServer(port, (_, _) => { }, (_, _) => { }, () => null);

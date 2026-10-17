@@ -426,15 +426,57 @@ internal static class Program
 
     private static void AdversarialProfiles()
     {
-        var config = new Configuration { Port = Port(), IinactEndpoint = "wss://example/ws?token=PRIVATE_TEST_TOKEN" };
+        var enumProperties = typeof(Configuration).GetProperties()
+            .Where(property => property.DeclaringType == typeof(Configuration) && property.PropertyType.IsEnum).ToArray();
+        var defaults = new Configuration();
+        foreach (var invalid in new[] { -1, 999 })
+        {
+            var malformed = new Configuration();
+            foreach (var property in enumProperties)
+                property.SetValue(malformed, Enum.ToObject(property.PropertyType, invalid));
+            var malformedJson = JsonSerializer.Serialize(malformed);
+            var loaded = Configuration.Load(() => malformed, "unused-config-path");
+            Check(enumProperties.All(property => Equals(property.GetValue(loaded), property.GetValue(defaults))),
+                "Loading malformed timeline and callout choices restores their defaults", invalid);
+            var imported = new Configuration();
+            var blob = Configuration.ValidateProfileBlob(malformedJson);
+            Check(blob != null && imported.ApplyAppearanceProfile(blob)
+                  && enumProperties.All(property => Equals(property.GetValue(imported), property.GetValue(defaults))),
+                "Malformed enum choices recover through appearance profile validation and import", invalid);
+        }
+        var valid = new Configuration();
+        foreach (var property in enumProperties)
+            property.SetValue(valid, Enum.GetValues(property.PropertyType).GetValue(0));
+        valid.Sanitize();
+        Check(enumProperties.All(property => Equals(property.GetValue(valid), Enum.GetValues(property.PropertyType).GetValue(0))),
+            "Sanitizing preserves supported timeline and callout choices");
+        var malformedText = new Configuration { TimelineTextEffect = (TextEffectStyle)999, Countdown = CountdownStyle.Hidden };
+        malformedText.Sanitize();
+        using (var malformedHost = new BridgeHost(malformedText))
+        using (var fonts = new ScaledFonts())
+        {
+            ImGui.Reset();
+            var timeline = new TimelineWindow(malformedText, malformedHost, fonts);
+            Call(timeline, "DrawBarText", ImGui.GetWindowDrawList(), "Recovered outline", 10f, Vector2.Zero, 300f, 24f);
+            Check(ImGui.Commands.Count(command => command.Kind == "text" && command.Text == "Recovered outline") == 9,
+                "A malformed saved text effect renders the default outline after recovery");
+        }
+
+        var config = new Configuration
+        {
+            Port = Port(), IinactEndpoint = "wss://example/ws?token=PRIVATE_TEST_TOKEN", TimelineTextScale = 1.7f
+        };
         var oldBlob = JsonSerializer.Serialize(config, new JsonSerializerOptions { IncludeFields = true });
         config.AppearanceProfiles["Old saved profile"] = oldBlob;
         using var host = new BridgeHost(config);
         using var ui = new PluginUi(config, host, new ScaledFonts());
         var settings = new ConfigWindow(config, host, ui);
+        ImGui.Clipboard = "Copy was not invoked";
         ImGui.ClickLabel = "Copy";
         Call(settings, "DrawProfiles");
-        Check(!ImGui.Clipboard.Contains("PRIVATE_TEST_TOKEN") && !ImGui.Clipboard.Contains("IinactEndpoint"),
+        using var copiedProfile = JsonDocument.Parse(ImGui.Clipboard);
+        Check(copiedProfile.RootElement.TryGetProperty("TimelineTextScale", out var copiedScale) && copiedScale.GetSingle() == 1.7f
+            && !ImGui.Clipboard.Contains("PRIVATE_TEST_TOKEN") && !ImGui.Clipboard.Contains("IinactEndpoint"),
             "Copy sanitizes profiles saved before appearance export was restricted");
         var source = new Configuration
         {
@@ -448,23 +490,36 @@ internal static class Program
             "Appearance round trip preserves colors and supported settings");
         Check(target.Port == 32000 && target.DpsPos == new Vector2(700, 800) && target.DpsOnlyInDuty && !target.Locked,
             "Appearance round trip preserves destination connection placement and visibility");
+        var meters = (DpsWindow[])Field(ui, "meters");
         foreach (var extreme in new[] { float.MaxValue, -float.MaxValue, float.NaN, float.PositiveInfinity })
         {
             foreach (var property in typeof(Configuration).GetProperties().Where(property => property.PropertyType == typeof(float)))
                 property.SetValue(config, extreme);
+            foreach (var window in meters)
+            foreach (var property in typeof(MeterSettings).GetProperties().Where(property => property.PropertyType == typeof(float)))
+                property.SetValue(window.Meter, extreme);
             config.Sanitize();
             config.Locked = true;
             Call(host, "Apply", Dps());
             Call(host, "Apply", "{\"c\":\"timeline\",\"v\":[[10,\"Mechanic\"]]}");
             Call(host, "Apply", "{\"c\":\"tick\",\"t\":0}");
             Call(host, "Apply", "{\"c\":\"alert\",\"text\":\"Alarm\",\"sev\":\"alarm\",\"ttl\":10}");
+            foreach (var window in meters) window.Meter.ShowDps = false;
+            config.ShowTimeline = config.ShowAlerts = true;
+            ImGui.Reset();
+            ui.Draw();
+            Check(ImGui.Commands.Count > 0 && ImGui.Commands.All(c => float.IsFinite(c.A.X) && float.IsFinite(c.A.Y) && float.IsFinite(c.B.X) && float.IsFinite(c.B.Y)),
+                $"Timeline and callouts emit finite coordinates with {extreme} settings");
+            config.ShowTimeline = config.ShowAlerts = false;
             foreach (var style in Enum.GetValues<DpsMeterStyle>())
             {
-                config.DpsStyle = style;
+                foreach (var window in meters) window.Meter.ShowDps = window.Meter.DpsStyle == style;
                 ImGui.Reset();
                 ui.Draw();
-                Check(ImGui.Commands.Count > 0 && ImGui.Commands.All(c => float.IsFinite(c.A.X) && float.IsFinite(c.A.Y) && float.IsFinite(c.B.X) && float.IsFinite(c.B.Y)),
-                    $"All windows emit finite coordinates with {extreme} settings and {style}");
+                Check(meters.Single(window => window.Meter.DpsStyle == style).IsOpen
+                    && meters.Count(window => window.IsOpen) == 1 && ImGui.Commands.Count > 0
+                    && ImGui.Commands.All(c => float.IsFinite(c.A.X) && float.IsFinite(c.A.Y) && float.IsFinite(c.B.X) && float.IsFinite(c.B.Y)),
+                    $"The {style} window emits finite coordinates with its own {extreme} settings");
             }
         }
     }
@@ -629,13 +684,12 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
-        Check(Environment.GetEnvironmentVariable("DISPLAY") == null && Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") == null,
-            "Headless environment");
         var cases = new (string Name, Func<Task> Run)[]
         {
             ("kagerou", KagerouTests.Run),
             ("meter-windows", MeterWindowsTests.Run),
             ("lmeter", LMeterTests.Run),
+            ("ui-review", UiReviewTests.Run),
             ("subscription", SubscriptionOrder), ("npc", NpcRoster), ("hidden-ui", HiddenUi),
             ("delayed-fight", DelayedFight), ("endpoint", EndpointRestart),
             ("retained-meter", () => { RetainedMeterMigration(); return Task.CompletedTask; }),
@@ -669,6 +723,16 @@ internal static class Program
             ("followup-boundaries", FixFollowupTests.Boundaries),
             ("followup-anchored-stacks", FixFollowupTests.AnchoredStacks)
         };
+        var unknown = args.Except(cases.Select(test => test.Name), StringComparer.Ordinal).ToArray();
+        if (unknown.Length > 0)
+        {
+            Console.Error.WriteLine("Unknown test case: " + string.Join(", ", unknown));
+            Console.Error.WriteLine("Available cases: " + string.Join(", ", cases.Select(test => test.Name)));
+            return 2;
+        }
+
+        Check(Environment.GetEnvironmentVariable("DISPLAY") == null && Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") == null,
+            "Headless environment");
         foreach (var test in cases.Where(test => args.Length == 0 || args.Contains(test.Name)))
         {
             Console.WriteLine("CASE " + test.Name);

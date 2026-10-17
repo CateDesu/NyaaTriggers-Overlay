@@ -22,6 +22,7 @@ namespace NyaaTriggers.Plugin
 
     internal sealed class TestConfigStore
     {
-        internal void SavePluginConfig(Configuration value) { }
+        internal readonly List<Configuration> Saves = new();
+        internal void SavePluginConfig(Configuration value) => this.Saves.Add(value);
     }
 }

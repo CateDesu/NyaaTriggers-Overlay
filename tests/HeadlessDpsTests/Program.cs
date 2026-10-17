@@ -415,6 +415,36 @@ internal static class Program
         program.Abort();
     }
 
+    private static async Task PetReuseScenario()
+    {
+        using var feed = new Feed();
+        var config = new Configuration
+        {
+            StandaloneMeter = true, IinactEndpoint = feed.Endpoint,
+            Locked = true, ShowTimeline = false, ShowAlerts = false
+        };
+        using var host = new BridgeHost(config);
+        using var ui = new PluginUi(config, host, new ScaledFonts());
+        Draw(ui);
+        await feed.Accept();
+        await Burst(feed, host, ui, Zone, Me, Party, Roster, Combat,
+            "03|ts|40000050|Pet|00|100|10000001",
+            Log(Hit("40000050", "Pet", "00640000")));
+        Check(host.Dps.Rows.Single() is { IsSelf: true, Stats.Damage: 100 },
+            "A pet's original damage reaches its owner through the live feed");
+        await Burst(feed, host, ui,
+            "04|ts|40000050|Pet",
+            "03|ts|40000050|Reused Enemy|00|100|0",
+            Log(Hit("40000050", "Reused Enemy", "00C80000", target: "10000002")),
+            Log(Hit("40000050", "Reused Enemy", "01F40000", "0004", "10000002")), End);
+        var formerOwner = host.Dps.Rows.Single(row => row.IsSelf);
+        var target = host.Dps.Rows.Single(row => !row.IsSelf);
+        Check(host.Dps.Ended && formerOwner.Stats?.Damage == 100 && formerOwner.Stats?.Healed == 0,
+            "Reused NPC IDs cannot add damage or healing to a former pet owner");
+        Check(target.Stats?.Taken == 200 && target.Stats?.HealingTaken == 500,
+            "Reused NPC effects retain incoming statistics through the feed and final encounter state");
+    }
+
     private static async Task<int> Main(string[] args)
     {
         Console.WriteLine("Headless DPS tests using production source and a recording UI adapter");
@@ -438,6 +468,7 @@ internal static class Program
                 await TakeoverScenario();
                 await TakeoverScenario(endsOnArrival: true);
                 await TakeoverScenario(idle: true);
+                await PetReuseScenario();
             }
         }
         catch (Exception ex)

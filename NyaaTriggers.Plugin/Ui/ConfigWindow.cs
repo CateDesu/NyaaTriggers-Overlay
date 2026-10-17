@@ -28,10 +28,8 @@ internal sealed class ConfigWindow : Window
     private readonly BridgeHost bridge;
     private readonly PluginUi ui;
 
-    /// <summary>Wait for Apply before rebinding.</summary>
     private int pendingPort;
 
-    /// <summary>Wait for Apply before reconnecting.</summary>
     private string pendingEndpoint;
 
     private string profileName = string.Empty;
@@ -61,7 +59,7 @@ internal sealed class ConfigWindow : Window
 
     public override void Draw()
     {
-        // Keep the footer clear of collapsed headers and the resize border.
+        // Keep the footer clear of headers and the resize border.
         if (ImGui.BeginChild("##sections", new Vector2(0.0f, -ImGui.GetFrameHeightWithSpacing())))
         {
             if (ImGui.CollapsingHeader("Link", ImGuiTreeNodeFlags.DefaultOpen))
@@ -143,7 +141,7 @@ internal sealed class ConfigWindow : Window
 
         ImGui.SameLine();
         var outOfRange = this.pendingPort is < 1024 or > 65535;
-        // Allow Apply to repair invalid stored ports or retry a failed bind.
+        // Allow port repairs and bind retries without a port change.
         var canApply = this.pendingPort != this.config.Port || outOfRange || this.bridge.LastError != null;
         if (!canApply)
         {
@@ -463,7 +461,7 @@ internal sealed class ConfigWindow : Window
 
         ImGui.Spacing();
 
-        // Keep colour picker IDs separate from the severity checkboxes.
+        // Avoid IDs shared with the severity checkboxes.
         this.ColorRow("Info##sevColor", () => this.config.ColorInfo, v => this.config.ColorInfo = v);
         this.ColorRow("Alert##sevColor", () => this.config.ColorAlert, v => this.config.ColorAlert = v);
         this.ColorRow("Alarm##sevColor", () => this.config.ColorAlarm, v => this.config.ColorAlarm = v);
@@ -772,7 +770,7 @@ internal sealed class ConfigWindow : Window
             ImGui.TextDisabled(this.importNote);
         }
 
-        // Copy entries before iteration because profile actions may change the dictionary.
+        // Profile actions can change the dictionary.
         ImGui.PushID("AppearanceProfiles");
         var rowId = 0;
         foreach (var (savedName, blob) in this.config.AppearanceProfiles.ToList())
@@ -876,7 +874,7 @@ internal sealed class ConfigWindow : Window
         }
     }
 
-    /// <summary>Apply text edits live but save only when editing ends.</summary>
+    /// <summary>Apply live. Save when editing ends.</summary>
     private void TextInput(string label, string hint, Func<string> get, Action<string> set)
     {
         var value = get();

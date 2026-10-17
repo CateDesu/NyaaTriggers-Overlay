@@ -145,7 +145,8 @@ internal static class WebSocketValidationTests
         await stream.WriteAsync(Frame(9, new byte[125]));
         await stream.WriteAsync(Frame(0, Array.Empty<byte>()));
         var fullPong = new byte[127];
-        await stream.ReadExactlyAsync(fullPong, timeout.Token);
+        using var fullPongTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await stream.ReadExactlyAsync(fullPong, fullPongTimeout.Token);
         await Until(() => messages.Count == 1);
         Check(fullPong[0] == 0x8a && fullPong[1] == 125 && messages.TryDequeue(out text) && text.Length == 1 << 20,
             "A full message allows an interleaved maximum ping and empty final continuation");

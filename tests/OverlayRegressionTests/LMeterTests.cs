@@ -123,7 +123,8 @@ internal static class LMeterTests
             "Older feeds recover total healing from a complete roster");
         Apply(host, zero: true);
         Draw(window);
-        Check(Fills(meter).Length == 0 && Text().Contains("DPS:0 HPS:777 Deaths:1")
+        Check(!host.Dps.HasDamage && host.Dps.Rows.All(row => row.Share == 0)
+            && Fills(meter).Length == 0 && Text().Contains("DPS:0 HPS:777 Deaths:1")
             && ImGui.Commands.All(c => float.IsFinite(c.A.X) && float.IsFinite(c.B.X)),
             "Healing only encounters draw zero DPS without a division by zero");
         Apply(host);
@@ -159,11 +160,11 @@ internal static class LMeterTests
     private static void Apply(BridgeHost host, int participants = 2, double hps = 777, bool zero = false)
         => Call(host, "Apply", JsonSerializer.Serialize(new
         {
-            c = "dps", show = true, hasDamage = !zero,
-            enc = new { id = "lmeter", t = "Preview", d = "00:30", dps = zero ? 0 : 10561, hps, participants },
+            c = "dps", show = true,
+            enc = new { id = "lmeter", t = "Preview", d = "00:30", dps = zero ? 0 : 10561, hps, participants, hasDamage = !zero },
             rows = new object[][] {
-                new object[] { "Leader", "GNB", zero ? 0 : 7041, 66.67, 777, false, 1 },
-                new object[] { "Player", "MNK", zero ? 0 : 3520, 33.33, 0, true, 0 },
+                new object[] { "Leader", "GNB", zero ? 0 : 7041, zero ? 0 : 66.67, 777, false, 1 },
+                new object[] { "Player", "MNK", zero ? 0 : 3520, zero ? 0 : 33.33, 0, true, 0 },
             },
         }));
 

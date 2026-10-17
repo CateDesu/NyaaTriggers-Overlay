@@ -261,7 +261,7 @@ internal sealed class StandaloneMeter : IDisposable
             return;
         }
 
-        // Unload waits for background cleanup.
+        // Move cleanup off the UI thread.
         old.Stop();
         var drain = Task.Run(old.Dispose);
         lock (this.gate)
@@ -271,7 +271,6 @@ internal sealed class StandaloneMeter : IDisposable
         }
     }
 
-    /// <summary>Reject stale frames atomically with client replacement.</summary>
     private void Receive(IinactClient source, string? raw)
     {
         lock (this.gate)
@@ -380,7 +379,6 @@ internal sealed class StandaloneMeter : IDisposable
                     }
                     else if (zoneName.Length > 0 && !this.engine.HasZone)
                     {
-                        // The new engine still needs zone metadata after replay deduplication.
                         this.engine.SetInitialZone(zoneName);
                         this.nextPush = 0;
                     }
@@ -439,7 +437,7 @@ internal sealed class StandaloneMeter : IDisposable
                     break;
 
                 default:
-                    // Reply type casing varies, so identify combatants by their list.
+                    // Accept combatant lists regardless of reply type.
                     if (root.TryGetProperty("combatants", out var list) && list.ValueKind == JsonValueKind.Array)
                     {
                         this.HandleCombatants(root);

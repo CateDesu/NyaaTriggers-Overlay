@@ -6,7 +6,7 @@ using Dalamud.Interface.Windowing;
 
 namespace NyaaTriggers.Plugin.Ui;
 
-/// <summary>Use a separate window so alert bounds do not clip the flash.</summary>
+/// <summary>A separate window avoids clipping to the alerts box.</summary>
 internal sealed class FlashWindow : Window
 {
     private const ImGuiWindowFlags FlashFlags =
@@ -26,7 +26,6 @@ internal sealed class FlashWindow : Window
     {
         this.config = config;
 
-        // Overlay visibility is controlled by settings, so Escape must not close it.
         this.RespectCloseHotkey = false;
         this.ShowCloseButton = false;
         this.DisableWindowSounds = true;
@@ -59,7 +58,7 @@ internal sealed class FlashWindow : Window
         var shortest = Math.Min(size.X, size.Y);
         var depth = Math.Min(Math.Clamp(shortest * share, 60.0f, 220.0f), shortest * 0.5f);
 
-        // Draw sides between the top and bottom bands to avoid doubling corner opacity.
+        // Keep side bands clear of corners to avoid double opacity.
         drawList.AddRectFilledMultiColor(pos, pos + new Vector2(size.X, depth), edge, edge, clear, clear);
         drawList.AddRectFilledMultiColor(
             pos + new Vector2(0.0f, size.Y - depth), pos + size, clear, clear, edge, edge);

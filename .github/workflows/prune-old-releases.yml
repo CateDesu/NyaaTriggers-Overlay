@@ -1,6 +1,6 @@
 name: Prune old releases
 
-# Manual cleanup preserves the published version and any pending newer release.
+# Keep the published release and newer versions.
 on:
   workflow_dispatch:
     inputs:

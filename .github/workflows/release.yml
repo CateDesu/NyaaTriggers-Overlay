@@ -1,6 +1,3 @@
-# Main builds use the csproj base version with the workflow run number.
-# Tag builds must match the csproj version. Older releases can be pruned
-# after the new package and listing are published.
 name: Release
 
 on:
@@ -12,8 +9,7 @@ on:
 permissions:
   contents: read
 
-# Release creation, listing publication and pruning share one queue across refs.
-# Pending runs can be reordered, so publication also refuses a version downgrade.
+# Share one queue across refs. Reject stale runs because pending runs can reorder.
 concurrency:
   group: release-publication
   cancel-in-progress: false
@@ -45,7 +41,7 @@ jobs:
           if [ "$REF_TYPE" = "tag" ]; then
             TAG="$REF_NAME"
             VER="${TAG#v}"
-            # Check before overriding the build version so mismatches remain visible.
+            # Check the tag before overriding the csproj version.
             if [ "$VER" != "$CS" ]; then
               echo "::error::tag $TAG disagrees with csproj <Version> $CS"; exit 1
             fi
@@ -86,7 +82,7 @@ jobs:
 
       - name: Fetch the Dalamud assemblies
         run: |
-          # Use downloaded assemblies because CI has no XIVLauncher installation.
+          # CI has no XIVLauncher assemblies.
           mkdir -p "$HOME/dalamud"
           curl -fsSL "$DALAMUD_DISTRIB" -o /tmp/dalamud.zip
           unzip -q /tmp/dalamud.zip -d "$HOME/dalamud"
@@ -94,7 +90,6 @@ jobs:
             echo "::error::Dalamud.dll missing from the distrib zip"; exit 1; }
           echo "DALAMUD_HOME=$HOME/dalamud" >> "$GITHUB_ENV"
 
-      # Set the assembly and packaged manifest to the same resolved version.
       - name: Build
         env:
           VERSION: ${{ needs.meta.outputs.version }}
@@ -128,7 +123,6 @@ jobs:
       - name: Refuse a tag that is not on main
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          # Published tags must contain code already included in main.
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
             echo "::error::tag ${GITHUB_REF_NAME} is not an ancestor of main"; exit 1; }
 
@@ -141,7 +135,7 @@ jobs:
           git show origin/main:pluginmaster.json > /tmp/current-pluginmaster.json
           python3 tools/check_publish_version.py /tmp/current-pluginmaster.json "$VERSION" >> "$GITHUB_OUTPUT"
 
-      # Upload the package before publishing its download URL in the listing.
+      # Publish the package before its listing URL.
       - name: Publish the release
         if: steps.fresh.outputs.publish == 'true'
         env:
@@ -170,13 +164,11 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pluginmaster.json
-          # Prevent the listing commit from starting another release build.
           git commit -m "Publish ${TAG} to the plugin repository [skip ci]"
           git pull --rebase origin main
           git push origin main
 
-  # Cleanup starts only after the new package and listing are available.
-  # Newer pending releases and unpublished channels are preserved.
+  # Keep newer releases, drafts and prereleases.
   prune-rolling:
     needs: [meta, build]
     if: needs.meta.outputs.rolling == 'true' && needs.build.outputs.published == 'true'
