@@ -1,5 +1,7 @@
 # NyaaTriggers Overlay
 
+[Discord](https://discord.com/invite/TQJrbZcgKF)
+
 A companion plugin for [NyaaTriggers](https://github.com/CateDesu/NyaaTriggers) that displays
 timelines, callouts, and three independent DPS meters in game: [LMeter](https://github.com/lichie567/LMeter),
 Horizon, and [Kagerou](https://github.com/hibiyasleep/kagerou).
