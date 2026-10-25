@@ -1,13 +1,15 @@
 """Refuse an older queued run before it changes the release channel."""
 import json
-import re
 import sys
 
 
 def version_parts(value: str) -> tuple[int, ...]:
-    if not re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", value):
+    if not isinstance(value, str):
+        raise TypeError("Release version must be a string")
+    fields = value.split(".", 4)
+    if len(fields) not in (3, 4) or not all(field.isdecimal() for field in fields):
         raise ValueError(f"Invalid release version: {value!r}")
-    parts = tuple(map(int, value.split(".")))
+    parts = tuple(map(int, fields))
     return parts + (0,) * (4 - len(parts))
 
 
