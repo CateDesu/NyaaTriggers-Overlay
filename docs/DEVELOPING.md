@@ -2,7 +2,7 @@
 
 ## Build
 
-Requires the .NET 10 SDK and Dalamud API 15 assemblies. The SDK uses
+Requires .NET SDK 10.0.114 or a later patch and Dalamud API 15 assemblies. The SDK uses
 `~/.xlcore/dalamud/Hooks/dev/` on Linux, or set `DALAMUD_HOME` to the assemblies directory.
 
 ```sh
@@ -11,6 +11,10 @@ dotnet build NyaaTriggers.Plugin/NyaaTriggers.Plugin.csproj -c Release
 
 Output: `NyaaTriggers.Plugin/bin/Release/NyaaTriggers.dll` and `NyaaTriggers/latest.zip`
 inside the same release directory.
+
+Dalamud uses its own .NET runtime. Keep XIVLauncher and Dalamud updated to
+receive runtime security fixes. The minimum patched runtime is 10.0.14.
+Building the plugin does not replace that runtime.
 
 ## Run locally
 
