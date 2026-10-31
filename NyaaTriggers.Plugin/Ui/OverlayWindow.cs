@@ -229,7 +229,9 @@ internal abstract class OverlayWindow : Window
         }
 
         const string Ellipsis = "…";
-        var budget = Math.Max(maxWidth - ImGui.CalcTextSize(Ellipsis).X, 0.0f);
+        var ellipsisWidth = ImGui.CalcTextSize(Ellipsis).X;
+        if (ellipsisWidth > maxWidth) return string.Empty;
+        var budget = maxWidth - ellipsisWidth;
 
         var fits = 0;
         var tooLong = text.Length;

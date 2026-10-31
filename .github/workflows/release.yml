@@ -102,6 +102,7 @@ jobs:
           env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/HeadlessDpsTests
           python3 tests/test_release_version.py
           python3 tests/test_release_channel.py
+          python3 tests/test_discord_notification.py
           env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/OverlayRegressionTests
 
       - name: Check the package came out

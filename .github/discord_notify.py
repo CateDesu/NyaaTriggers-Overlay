@@ -85,7 +85,8 @@ def notification(repo, ref, actor, message, commit_url, has_image):
     # Suppress the automatic unfurl when the original card is attached explicitly.
     link = f"<{commit_url}>" if has_image else commit_url
     content = header + shorten(message, 2000 - len(header) - len(link) - 1) + "\n" + link
-    payload = {"content": content, "username": repo.rsplit("/", 1)[-1].replace("-", " ")}
+    payload = {"content": content, "username": repo.rsplit("/", 1)[-1].replace("-", " "),
+               "allowed_mentions": {"parse": []}}
     if has_image:
         payload["embeds"] = [{
             "title": shorten(message.splitlines()[0] if message.strip() else repo, 256),

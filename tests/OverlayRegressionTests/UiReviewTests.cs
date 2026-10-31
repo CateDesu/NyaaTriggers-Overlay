@@ -115,7 +115,7 @@ internal static class UiReviewTests
     private static void UnicodeEllipsis()
     {
         foreach (var text in new[] { "👩‍💻abc", "e\u0301abc", "A👩‍💻bc" })
-        foreach (var width in new[] { 7f, 14f, 21f, 28f, 42f })
+        foreach (var width in new[] { 1f, 6f, 7f, 14f, 21f, 28f, 42f })
         {
             ImGui.Reset();
             var trimmed = (string)typeof(OverlayWindow).GetMethod("Elide", System.Reflection.BindingFlags.Static
