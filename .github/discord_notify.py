@@ -97,21 +97,22 @@ def notification(repo, ref, actor, message, commit_url, has_image):
     return payload
 
 
-def prepare(env, output):
+def prepare(env):
     repo = env["REPO"]
     sha = env["COMMIT_SHA"]
     commit_url = env.get("COMMIT_URL") or f"https://github.com/{repo}/commit/{sha}"
     message = env.get("COMMIT_MSG") or subprocess.check_output(
-        ["git", "show", "-s", "--format=%B", sha], text=True
+        ["git", "-C", str(Path(__file__).resolve().parents[1]), "show", "-s", "--format=%B", sha],
+        text=True,
     ).strip()
-    image_path = output / "discord-preview.png"
+    image_path = Path("discord-preview.png")
     image_path.unlink(missing_ok=True)
     image = fetch_preview(commit_url)
     if image is not None:
         image_path.write_bytes(image)
     payload = notification(repo, env["REF"], env["ACTOR"], message, commit_url, image is not None)
-    (output / "discord-notification.json").write_text(json.dumps(payload), encoding="utf-8")
+    Path("discord-notification.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 if __name__ == "__main__":
-    prepare(os.environ, Path(os.environ["RUNNER_TEMP"]))
+    prepare(os.environ)

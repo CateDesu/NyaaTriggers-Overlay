@@ -19,6 +19,7 @@ jobs:
           persist-credentials: false
 
       - name: Post push to Discord
+        working-directory: ${{ runner.temp }}
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           REPO: ${{ github.repository }}
@@ -32,7 +33,7 @@ jobs:
             echo "DISCORD_WEBHOOK secret not set — skipping."
             exit 0
           fi
-          python3 .github/discord_notify.py
+          python3 "$GITHUB_WORKSPACE/.github/discord_notify.py"
           form=(--form "payload_json=<${RUNNER_TEMP}/discord-notification.json;type=application/json")
           if [ -f "$RUNNER_TEMP/discord-preview.png" ]; then
             form+=(--form "files[0]=@${RUNNER_TEMP}/discord-preview.png;type=image/png")
