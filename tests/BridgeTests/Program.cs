@@ -10,6 +10,12 @@ using NyaaTriggers.Plugin;
 using NyaaTriggers.Plugin.Bridge;
 using NyaaTriggers.Plugin.Meter;
 
+if (args.Contains("--wire-recovery-only"))
+{
+    await RecoveryTests.Run();
+    return;
+}
+
 var checks = 0;
 void Check(bool condition, string description)
 {
@@ -101,6 +107,41 @@ const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameComba
     }
     finally { Directory.Delete(folder, true); }
 }
+
+{
+    using var host = new BridgeHost(new Configuration { ShowDps = true, DpsHoldLast = true });
+    void Apply(string raw) => typeof(BridgeHost).GetMethod("Apply", Private)!.Invoke(host, new object[] { raw });
+    const string damage = """{"c":"dps","show":true,"enc":{"id":"damage","dps":100},"rows":[["Player","MCH",100,100]]}""";
+    const string ending = """{"c":"dps","show":false}""";
+    Apply(damage);
+    Apply("""{"c":"clear","keepDps":true}""");
+    Apply(ending);
+    Check(host.Dps.Ended && host.Dps.Id == "damage", "legacy ending retains the live snapshot across a wipe clear");
+    var held = host.Dps;
+    Apply("""{"c":"dps","show":true,"enc":{"id":"healing","hasDamage":false},"rows":[["Healer","WHM",0,0,100]]}""");
+    Check(ReferenceEquals(host.Dps, held) && host.UnheldDps.Id == "healing", "healing stays available to meters without retention");
+    Apply(ending);
+    Check(host.UnheldDps.Ended && host.UnheldDps.Id == "healing" && !host.UnheldDps.HasDamage,
+        "legacy ending finishes the latest unheld encounter");
+    Check(ReferenceEquals(host.Dps, held) && host.DpsHistory.Count == 1,
+        "legacy healing ending preserves held results and history");
+    Apply("""{"c":"clear","keepDps":false}""");
+    Apply(ending);
+    Check(host.Dps.Ended && host.Dps.Rows.Count == 0 && host.UnheldDps.Rows.Count == 0,
+        "legacy ending cannot restore rows after a full clear");
+    Apply(damage);
+    Apply(ending);
+    Check(host.Dps.Ended && host.UnheldDps.Ended && host.Dps.Id == "damage",
+        "new damage resumes normal legacy endings");
+}
+
+if (args.Contains("--legacy-endings-only"))
+{
+    Console.WriteLine($"{checks} focused bridge and configuration checks passed");
+    return;
+}
+
+await RecoveryTests.Run();
 
 foreach (var port in new[] { 0, -1, 65536 })
 {

@@ -138,6 +138,10 @@ internal sealed class BridgeHost : IDisposable
                 {
                     previousIndex = this.dpsHistory.FindIndex(previous => previous.Id == value.Id);
                 }
+                else if (value.HistoryKey != null)
+                {
+                    previousIndex = this.dpsHistory.FindIndex(previous => ReferenceEquals(previous.HistoryKey, value.HistoryKey));
+                }
                 else if (this.dps.Ended && this.dpsHistory.Count > 0)
                 {
                     previousIndex = 0;
@@ -150,7 +154,7 @@ internal sealed class BridgeHost : IDisposable
                 }
                 else
                 {
-                    value.HistoryKey = new object();
+                    value.HistoryKey ??= new object();
                     this.dpsHistory.Insert(0, value);
                     if (this.dpsHistory.Count > 20) this.dpsHistory.RemoveAt(20);
                 }
@@ -163,8 +167,9 @@ internal sealed class BridgeHost : IDisposable
 
     private DpsState? lastLocal;
 
-    /// <summary>Legacy endings reuse this snapshot across wipe clears, but not zone clears.</summary>
+    /// <summary>Legacy wipe endings restore retained rows separately from the latest unheld frame.</summary>
     private DpsState? lastLive;
+    private DpsState? lastUnheld;
 
     internal double Clock => this.clockRunning
         ? this.clockBase + ((Environment.TickCount64 - this.clockStamp) / 1000.0)
@@ -198,6 +203,7 @@ internal sealed class BridgeHost : IDisposable
         // Preserve standalone-owned rows even if the queued disconnect has not run.
         this.ClearState(resetDps: !ReferenceEquals(this.Dps, this.lastLocal));
         this.lastLive = null;
+        this.lastUnheld = null;
         // ClearState must keep queued frames because zone changes send a timeline after clear.
         this.inbox.Clear();
 
@@ -331,6 +337,7 @@ internal sealed class BridgeHost : IDisposable
                 if (raw == null)
                 {
                     this.lastLive = null;
+                    this.lastUnheld = null;
                     this.ClearState(resetDps: true);
                 }
                 else
@@ -412,7 +419,11 @@ internal sealed class BridgeHost : IDisposable
                 var hasKeepDps = root.TryGetProperty("keepDps", out var keep);
                 if (hasKeepDps && keep.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) break;
                 var keepDps = hasKeepDps && keep.ValueKind == JsonValueKind.True;
-                if (hasKeepDps && !keepDps) this.lastLive = null;
+                if (hasKeepDps && !keepDps)
+                {
+                    this.lastLive = null;
+                    this.lastUnheld = null;
+                }
                 this.ClearState(resetDps: !keepDps);
                 break;
 
@@ -535,23 +546,10 @@ internal sealed class BridgeHost : IDisposable
         // Older programs send an ending without its own snapshot.
         if (ended && !root.TryGetProperty("enc", out _) && !root.TryGetProperty("rows", out _))
         {
-            var last = this.lastLive;
-            this.Dps = last == null
-                ? new DpsState { Ended = true }
-                : new DpsState
-                {
-                    Ended = true,
-                    Id = last.Id,
-                    Zone = last.Zone,
-                    EncHps = last.EncHps,
-                    Participants = last.Participants,
-                    Title = last.Title,
-                    Duration = last.Duration,
-                    EncDps = last.EncDps,
-                    HasDamage = last.HasDamage,
-                    Rows = last.Rows,
-                };
-
+            var final = EndDps(this.lastUnheld);
+            if (!this.KeepFinalDps(final)) this.Dps = EndDps(this.lastLive);
+            // Dps also updates the unheld view.
+            this.UnheldDps = final;
             return;
         }
 
@@ -666,6 +664,7 @@ internal sealed class BridgeHost : IDisposable
             Rows = rows,
         };
 
+        this.lastUnheld = state;
         this.UnheldDps = state;
         // Combat flags, healing and misses must not replace the previous pull.
         if (this.KeepFinalDps(state)) return;
@@ -673,6 +672,22 @@ internal sealed class BridgeHost : IDisposable
         this.lastLive = state;
         this.Dps = state;
     }
+
+    private static DpsState EndDps(DpsState? last)
+        => last == null ? new DpsState { Ended = true } : last.Ended ? last : new DpsState
+        {
+            Ended = true,
+            Id = last.Id,
+            HistoryKey = last.HistoryKey ??= new object(),
+            Zone = last.Zone,
+            EncHps = last.EncHps,
+            Participants = last.Participants,
+            Title = last.Title,
+            Duration = last.Duration,
+            EncDps = last.EncDps,
+            HasDamage = last.HasDamage,
+            Rows = last.Rows,
+        };
 
     private static CombatStats? ReadCombatStats(JsonElement element)
     {

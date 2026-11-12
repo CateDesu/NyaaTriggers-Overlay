@@ -12,7 +12,7 @@ using NyaaTriggers.Plugin.Bridge;
 using NyaaTriggers.Plugin.Meter;
 using NyaaTriggers.Plugin.Ui;
 
-internal static class Program
+internal static partial class Program
 {
     private static int passes;
     private static int failures;
@@ -452,7 +452,12 @@ internal static class Program
             "DISPLAY and WAYLAND_DISPLAY are unset");
         try
         {
-            if (args.Contains("--takeover-only"))
+            if (args.Contains("--legacy-endings-only"))
+            {
+                await LegacyEndingsScenario();
+                await LegacyHistoryScenario();
+            }
+            else if (args.Contains("--takeover-only"))
             {
                 for (var i = 0; i < 3; i++)
                 {
@@ -464,6 +469,8 @@ internal static class Program
             }
             else
             {
+                await LegacyEndingsScenario();
+                await LegacyHistoryScenario();
                 await MainScenario();
                 await TakeoverScenario();
                 await TakeoverScenario(endsOnArrival: true);

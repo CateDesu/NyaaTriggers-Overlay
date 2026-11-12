@@ -98,6 +98,7 @@ jobs:
       - name: Run regression tests
         run: |
           dotnet run --project tests/MeterEngineTests
+          dotnet run --project tests/MeterEngineTests/Interruptions
           dotnet run --project tests/BridgeTests
           env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/HeadlessDpsTests
           python3 tests/test_release_version.py

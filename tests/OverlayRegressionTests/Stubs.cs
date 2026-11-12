@@ -3,6 +3,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Interface.ManagedFontAtlas;
 using Dalamud.Interface.Windowing;
+using Newtonsoft.Json;
 using NyaaTriggers.Plugin.Bridge;
 
 namespace Dalamud.Configuration
@@ -44,10 +45,16 @@ namespace NyaaTriggers.Plugin
     internal sealed class TestConfigStore : Dalamud.Plugin.IDalamudPluginInterface
     {
         internal Configuration Config = new();
-        public FileInfo ConfigFile => new(Path.Combine(Path.GetTempPath(), "overlay-test-config.json"));
+        internal string? FilePath { get; init; }
+        public FileInfo ConfigFile => new(this.FilePath ?? Path.Combine(Path.GetTempPath(), "overlay-test-config.json"));
         public TestUiBuilder UiBuilder { get; } = new();
-        public object GetPluginConfig() => this.Config;
-        internal void SavePluginConfig(Configuration value) { }
+        public object GetPluginConfig() => this.FilePath == null ? this.Config
+            : JsonConvert.DeserializeObject<Configuration>(File.ReadAllText(this.FilePath))!;
+        internal void SavePluginConfig(Configuration value)
+        {
+            if (this.FilePath != null)
+                File.WriteAllText(this.FilePath, JsonConvert.SerializeObject(value));
+        }
     }
 
     public sealed class TestUiBuilder

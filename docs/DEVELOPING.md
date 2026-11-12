@@ -32,6 +32,7 @@ Run from the repository root:
 
 ```sh
 dotnet run --project tests/MeterEngineTests
+dotnet run --project tests/MeterEngineTests/Interruptions
 dotnet run --project tests/BridgeTests
 env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/HeadlessDpsTests
 env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/OverlayRegressionTests
