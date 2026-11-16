@@ -4,13 +4,17 @@ import io
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from release_channel import validate_package
 
 MOCK = r'''#!/usr/bin/env python3
 import base64, json, os, sys
@@ -79,12 +83,21 @@ elif a[:2] in (["release", "upload"], ["release", "delete-asset"]):
         release["package"] = base64.b64encode(payload).decode()
 elif a[:2] == ["release", "download"]:
     release = next(r for r in s["releases"] if r["tag_name"] == a[2])
+    if s.pop("fail_download", False):
+        path.write_text(json.dumps(s))
+        print("download interrupted", file=sys.stderr)
+        sys.exit(1)
     name = a[a.index("--pattern") + 1]
     assert any(asset["name"] == name and asset["state"] == "uploaded" for asset in release["assets"])
     folder = Path(a[a.index("--dir") + 1])
     (folder / name).write_bytes(base64.b64decode(release["package"]))
 elif a[:2] == ["release", "delete"]:
     assert any(r["tag_name"] == a[2] for r in s["releases"])
+    if s.get("fail_delete") == a[2]:
+        s.pop("fail_delete")
+        path.write_text(json.dumps(s))
+        print("delete interrupted", file=sys.stderr)
+        sys.exit(1)
     s["deleted"].append(a[2])
     s["releases"] = [r for r in s["releases"] if r["tag_name"] != a[2]]
 else:
@@ -96,12 +109,25 @@ sys.exit(code)
 '''
 
 
-def package_bytes(version):
+def package_bytes(version, *, compression=zipfile.ZIP_STORED,
+                  assembly=b"recording test assembly", extra_files=()):
     stream = io.BytesIO()
-    with zipfile.ZipFile(stream, "w") as archive:
+    with zipfile.ZipFile(stream, "w", compression=compression) as archive:
         archive.writestr("NyaaTriggers.json", json.dumps({"AssemblyVersion": version}))
-        archive.writestr("NyaaTriggers.dll", b"recording test assembly")
+        archive.writestr("NyaaTriggers.dll", assembly)
+        for name, data in extra_files:
+            archive.writestr(name, data)
     return stream.getvalue()
+
+
+def corrupt_member(payload, name):
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        member = next(info for info in archive.infolist() if info.filename == name)
+    name_size, extra_size = struct.unpack_from("<HH", payload, member.header_offset + 26)
+    offset = member.header_offset + 30 + name_size + extra_size
+    damaged = bytearray(payload)
+    damaged[offset + member.compress_size // 2] ^= 1
+    return bytes(damaged)
 
 
 def release(tag, asset_version=None, **changes):
@@ -183,6 +209,29 @@ class ReleaseChannelTests(unittest.TestCase):
         self.run_channel("prune", error="The published release package must exist before cleanup")
         self.assertEqual(self.state["deleted"], [])
 
+    def test_wrong_published_package_preserves_fallback_release(self):
+        self.state["releases"] = [release("v0.2.0.21"),
+                                  release("v0.2.0.22", asset_version="0.2.0.20")]
+        self.run_channel("prune", error="Published package does not match the release version")
+        self.assertEqual(self.state["deleted"], [])
+
+    def test_unreadable_published_package_preserves_fallback_release(self):
+        for payload, error in [(b"broken zip", "BadZipFile"),
+                               (self.package_without_assembly(), "KeyError")]:
+            with self.subTest(payload=payload[:12]):
+                current = release("v0.2.0.22")
+                current["package"] = base64.b64encode(payload).decode()
+                self.state["releases"] = [release("v0.2.0.21"), current]
+                self.run_channel("prune", error=error)
+                self.assertEqual(self.state["deleted"], [])
+
+    @staticmethod
+    def package_without_assembly():
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("NyaaTriggers.json", json.dumps({"AssemblyVersion": "0.2.0.22"}))
+        return stream.getvalue()
+
     def test_other_run_is_refused(self):
         self.state["releases"] = [release("v0.2.0.23", body="some other run")]
         self.run_channel("publish", error="Existing release does not belong to this publication")
@@ -208,6 +257,95 @@ class ReleaseChannelTests(unittest.TestCase):
         self.state["releases"] = [release("v0.2.0.23", asset_version="0.2.0.22")]
         self.run_channel("publish", error="Published package does not match the release version")
         self.assertEqual(self.mutations(), [])
+
+    def assert_corrupt_package_rejected(self, payload, member_name):
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            self.assertEqual(json.loads(archive.read("NyaaTriggers.json"))["AssemblyVersion"], "0.2.0.23")
+            self.assertGreater(archive.getinfo("NyaaTriggers.dll").file_size, 0)
+            member = next(info for info in archive.infolist() if info.filename == member_name)
+            with self.assertRaisesRegex(zipfile.BadZipFile, "Bad CRC-32"):
+                archive.read(member)
+        for command in ["publish", "prune"]:
+            with self.subTest(command=command):
+                self.state.update(calls=[], deleted=[], releases=[release("v0.2.0.22"),
+                    release("v0.2.0.23", package=base64.b64encode(payload).decode())])
+                self.state["listing"][0]["AssemblyVersion"] = "0.2.0.23"
+                result = self.run_channel(command, error="Bad CRC-32")
+                self.assertNotIn("ready for listing publication", result.stdout)
+                self.assertEqual(self.mutations(), [])
+                self.assertEqual([r["tag_name"] for r in self.state["releases"]],
+                                 ["v0.2.0.22", "v0.2.0.23"])
+
+    def test_corrupt_payloads_block_publication_and_cleanup(self):
+        for compression in [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED]:
+            payload = package_bytes("0.2.0.23", compression=compression,
+                                    extra_files=[("Dependency.dll", b"recording dependency")])
+            for name in ["NyaaTriggers.dll", "Dependency.dll"]:
+                with self.subTest(compression=compression, member=name):
+                    self.assert_corrupt_package_rejected(corrupt_member(payload, name), name)
+
+    def test_clean_duplicate_cannot_hide_corrupt_member(self):
+        with self.assertWarns(UserWarning):
+            payload = package_bytes("0.2.0.23", extra_files=[("NyaaTriggers.dll", b"clean duplicate")])
+        self.assert_corrupt_package_rejected(corrupt_member(payload, "NyaaTriggers.dll"), "NyaaTriggers.dll")
+
+    def test_valid_compressed_package_with_directories_and_dependencies(self):
+        payload = package_bytes("0.2.0.23", compression=zipfile.ZIP_DEFLATED,
+                                extra_files=[("assets/", b""), ("Dependency.dll", b"recording dependency")])
+        self.state["releases"] = [release("v0.2.0.22"),
+            release("v0.2.0.23", package=base64.b64encode(payload).decode())]
+        self.run_channel("publish")
+        self.state["listing"][0]["AssemblyVersion"] = "0.2.0.23"
+        self.run_channel("prune")
+        self.assertEqual(self.state["deleted"], ["v0.2.0.22"])
+
+    def test_large_compressed_assembly_is_fully_read_in_bounded_chunks(self):
+        assembly = b"x" * (3 * 1024 * 1024 + 17)
+        payload = package_bytes("0.2.0.23", compression=zipfile.ZIP_DEFLATED, assembly=assembly)
+        self.state["releases"] = [release("v0.2.0.23", package=base64.b64encode(payload).decode())]
+        self.path.write_text(json.dumps(self.state))
+        read = zipfile.ZipExtFile.read
+        sizes = []
+
+        def read_member(member, size=-1):
+            if member.name != "NyaaTriggers.dll":
+                return read(member, size)
+            self.assertGreater(size, 0)
+            self.assertLessEqual(size, 1024 * 1024)
+            data = read(member, size)
+            sizes.append(len(data))
+            return data
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(zipfile.ZipExtFile, "read", read_member):
+            validate_package("local/test", "v0.2.0.23", "latest.zip")
+        self.assertEqual(sum(sizes), len(assembly))
+        self.assertGreater(len(sizes), 1)
+
+    def test_download_failure_can_resume_publication_without_reupload(self):
+        self.state["releases"] = [release("v0.2.0.23")]
+        self.state["fail_download"] = True
+        result = self.run_channel("publish", error="download interrupted")
+        self.assertNotIn("ready for listing publication", result.stdout)
+        self.assertEqual(self.mutations(), [])
+        self.state["calls"] = []
+        self.run_channel("publish")
+        self.assertEqual(self.mutations(), [])
+
+    def test_partial_cleanup_can_resume_after_revalidating_package(self):
+        self.state["releases"] = [release("v0.2.0.20"), release("v0.2.0.21"), release("v0.2.0.22")]
+        self.state["fail_delete"] = "v0.2.0.21"
+        self.run_channel("prune", error="delete interrupted")
+        self.assertEqual(self.state["deleted"], ["v0.2.0.20"])
+        self.state["calls"] = []
+        self.state["fail_download"] = True
+        self.run_channel("prune", error="download interrupted")
+        self.assertEqual(self.mutations(), [])
+        self.assertEqual(self.state["deleted"], ["v0.2.0.20"])
+        self.state["calls"] = []
+        self.run_channel("prune")
+        self.assertEqual(self.state["deleted"], ["v0.2.0.20", "v0.2.0.21"])
+        self.assertEqual([r["tag_name"] for r in self.state["releases"]], ["v0.2.0.22"])
+        self.assertEqual(self.state["calls"][2][0:2], ["release", "download"])
 
     def test_network_failure_does_not_create_or_delete(self):
         self.state["network_error"] = True

@@ -854,6 +854,36 @@ internal sealed class WebSocketServer : IDisposable
     private static Task WriteAsciiAsync(Stream stream, string text, CancellationToken token)
         => stream.WriteAsync(Encoding.ASCII.GetBytes(text), token).AsTask();
 
+    /// <summary>Release the port before a replacement starts, without waiting for sessions.</summary>
+    internal void StopListening()
+    {
+        lock (this.gate)
+        {
+            try
+            {
+                this.cts?.Cancel();
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Debug($"cancel failed: {ex.Message}");
+            }
+
+            foreach (var listener in this.listeners)
+            {
+                try
+                {
+                    listener.Stop();
+                }
+                catch (Exception ex)
+                {
+                    Services.Log.Debug($"listener stop failed: {ex.Message}");
+                }
+            }
+
+            this.listeners.Clear();
+        }
+    }
+
     public void Dispose()
     {
         Session[] open;
@@ -871,28 +901,7 @@ internal sealed class WebSocketServer : IDisposable
             running = this.sessions.Values.Concat(open.Select(s => s.Pump)).Concat(this.acceptTasks).ToArray();
         }
 
-        try
-        {
-            this.cts?.Cancel();
-        }
-        catch (Exception ex)
-        {
-            Services.Log.Debug($"cancel failed: {ex.Message}");
-        }
-
-        foreach (var listener in this.listeners)
-        {
-            try
-            {
-                listener.Stop();
-            }
-            catch (Exception ex)
-            {
-                Services.Log.Debug($"listener stop failed: {ex.Message}");
-            }
-        }
-
-        this.listeners.Clear();
+        this.StopListening();
         foreach (var session in open)
         {
             try

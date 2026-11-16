@@ -182,6 +182,16 @@ internal sealed class Configuration : MeterSettings, IPluginConfiguration
         TimelineRows = Math.Clamp(TimelineRows, 1, 12);
         AlertsMaxVisible = Math.Clamp(AlertsMaxVisible, 1, 8);
         this.SanitizeMeter();
+        foreach (var (_, style) in MeterProfiles)
+        {
+            var meter = style switch
+            {
+                DpsMeterStyle.HorizonOverlay => this.HorizonMeter,
+                DpsMeterStyle.Kagerou => this.KagerouMeter,
+                _ => this.BarsMeter,
+            };
+            if (meter != null) meter.DpsStyle = style;
+        }
         this.BarsMeter?.SanitizeMeter();
         this.HorizonMeter?.SanitizeMeter();
         this.KagerouMeter?.SanitizeMeter();

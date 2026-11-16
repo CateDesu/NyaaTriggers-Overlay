@@ -16,6 +16,7 @@ internal static class MeterWindowsTests
     internal static Task Run()
     {
         Migration();
+        DiskConfiguration();
         Profiles();
         Windows();
         MenusAndHeadings();
@@ -58,6 +59,27 @@ internal static class MeterWindowsTests
                 "Separate settings and placement survive a settings file round trip");
         }
 
+        foreach (var style in Enum.GetValues<DpsMeterStyle>())
+        {
+            var config = new Configuration();
+            var meter = config.GetMeter(style);
+            meter.DpsStyle = style == DpsMeterStyle.LMeter ? DpsMeterStyle.HorizonOverlay : DpsMeterStyle.LMeter;
+            meter.DpsBarHeight = float.NaN;
+            meter.DpsSize = new Vector2(float.NaN);
+            var restored = Configuration.Load(() => config, "unused-config-path");
+            var expected = MeterSettings.DefaultsFor(style);
+            Check(ReferenceEquals(restored.GetMeter(style), meter)
+                  && meter.DpsBarHeight == expected.DpsBarHeight && meter.DpsSize == expected.DpsSize,
+                "Nested settings recover defaults for their window despite a stale serialized style", style);
+            meter.DpsHoldLast = style != DpsMeterStyle.HorizonOverlay;
+            var reloaded = JsonSerializer.Deserialize<Configuration>(JsonSerializer.Serialize(restored, Json), Json)!;
+            reloaded.Sanitize();
+            var saved = reloaded.GetMeter(style);
+            Check(saved.DpsStyle == style && saved.DpsSize == expected.DpsSize
+                  && saved.DpsBarHeight == expected.DpsBarHeight && saved.DpsHoldLast == meter.DpsHoldLast,
+                "Recovered window defaults and retention choices survive serialization", style);
+        }
+
         var malformed = new Configuration
         {
             KagerouMeter = new MeterSettings
@@ -73,6 +95,77 @@ internal static class MeterWindowsTests
               && safe.DpsKagerouDeathsAlign == TextAlign.Center && safe.DpsKagerouDeathHeading == KagerouDeathHeading.Dead
               && safe.DpsTextColor.Y == 0 && safe.DpsTextColor.Z == 1,
             "Malformed nested settings recover safe defaults including centered deaths");
+    }
+
+    private static void DiskConfiguration()
+    {
+        var previousStore = Services.PluginInterface;
+        var folder = Directory.CreateTempSubdirectory("nyaa-meter-config-");
+        try
+        {
+            var store = new TestConfigStore { FilePath = Path.Combine(folder.FullName, "NyaaTriggers.json") };
+            Services.PluginInterface = store;
+            foreach (var undefinedStyle in new[] { false, true })
+            {
+                var config = new Configuration { Port = 31234 };
+                foreach (var style in Enum.GetValues<DpsMeterStyle>())
+                {
+                    var meter = config.GetMeter(style);
+                    meter.DpsStyle = undefinedStyle ? (DpsMeterStyle)999 : (DpsMeterStyle)(((int)style + 1) % 3);
+                    meter.DpsBarHeight = float.NaN;
+                    meter.DpsSize = new Vector2(float.NaN, float.PositiveInfinity);
+                    meter.DpsPos = new Vector2(711 + (int)style, 812);
+                    meter.DpsTextScale = 1.75f;
+                    meter.DpsHoldLast = style == DpsMeterStyle.LMeter;
+                    meter.ShowDps = style != DpsMeterStyle.HorizonOverlay;
+                    meter.DpsOnlyInDuty = true;
+                }
+                config.Save();
+                var damaged = (Configuration)store.GetPluginConfig();
+                foreach (var (style, meter) in NestedMeters(damaged))
+                    Check(!ReferenceEquals(damaged, config) && meter != null && meter.DpsStyle != style
+                          && float.IsNaN(meter.DpsBarHeight) && float.IsNaN(meter.DpsSize.X)
+                          && float.IsPositiveInfinity(meter.DpsSize.Y),
+                        "Json.NET reads malformed nested styles and geometry from the saved file", new { style, undefinedStyle });
+
+                var loaded = Configuration.Load(store.GetPluginConfig, store.ConfigFile.FullName);
+                CheckRecovered(loaded, "load");
+                loaded.Save();
+                CheckRecovered((Configuration)store.GetPluginConfig(), "saved file before sanitation");
+                CheckRecovered(Configuration.Load(store.GetPluginConfig, store.ConfigFile.FullName), "reload");
+                Check(Directory.GetFiles(folder.FullName).Length == 1,
+                    "Recoverable nested settings keep the original config file without quarantine");
+            }
+        }
+        finally
+        {
+            Services.PluginInterface = previousStore;
+            folder.Delete(true);
+        }
+        Check(!Directory.Exists(folder.FullName), "Disk configuration regression removes its temporary files");
+
+        static (DpsMeterStyle Style, MeterSettings? Meter)[] NestedMeters(Configuration config) =>
+        [
+            (DpsMeterStyle.LMeter, config.BarsMeter),
+            (DpsMeterStyle.HorizonOverlay, config.HorizonMeter),
+            (DpsMeterStyle.Kagerou, config.KagerouMeter),
+        ];
+
+        static void CheckRecovered(Configuration config, string phase)
+        {
+            Check(config.Port == 31234, "Disk recovery preserves unrelated configuration", phase);
+            foreach (var (style, meter) in NestedMeters(config))
+            {
+                var expected = MeterSettings.DefaultsFor(style);
+                Check(meter != null && meter.DpsStyle == style && meter.DpsBarHeight == expected.DpsBarHeight
+                      && meter.DpsSize == expected.DpsSize,
+                    "Disk recovery uses defaults for the owning window", new { style, phase });
+                Check(meter != null && meter.DpsPos == new Vector2(711 + (int)style, 812)
+                      && meter.DpsTextScale == 1.75f && meter.DpsHoldLast == (style == DpsMeterStyle.LMeter)
+                      && meter.ShowDps == (style != DpsMeterStyle.HorizonOverlay) && meter.DpsOnlyInDuty,
+                    "Disk recovery preserves each window's valid settings", new { style, phase });
+            }
+        }
     }
 
     private static void Profiles()

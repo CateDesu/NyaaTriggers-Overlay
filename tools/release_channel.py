@@ -56,14 +56,24 @@ def publish(repo, tag, commit, run, package):
         assets = [asset for asset in release["assets"] if asset["name"] == package.name]
     if len(assets) != 1 or assets[0]["state"] != "uploaded" or assets[0]["size"] <= 0:
         raise ValueError("Release package is not fully uploaded")
+    validate_package(repo, tag, package.name)
+    print(f"Release {tag} is ready for listing publication")
+
+
+def validate_package(repo, tag, name):
     with tempfile.TemporaryDirectory(prefix="overlay-package-") as folder:
-        gh("release", "download", tag, "--repo", repo, "--pattern", package.name, "--dir", folder)
-        with zipfile.ZipFile(Path(folder) / package.name) as archive:
+        gh("release", "download", tag, "--repo", repo, "--pattern", name, "--dir", folder)
+        with zipfile.ZipFile(Path(folder) / name) as archive:
             manifest = json.loads(archive.read("NyaaTriggers.json"))
             if (manifest.get("AssemblyVersion") != tag.removeprefix("v")
                     or archive.getinfo("NyaaTriggers.dll").file_size == 0):
                 raise ValueError("Published package does not match the release version")
-    print(f"Release {tag} is ready for listing publication")
+            # Names can repeat, so open each entry directly.
+            for member in archive.infolist():
+                with archive.open(member) as payload:
+                    while payload.read(1024 * 1024):
+                        pass
+
 
 
 def prune(repo, dry):
@@ -80,6 +90,7 @@ def prune(repo, dry):
             or not any(asset["name"] == "latest.zip" and asset["state"] == "uploaded" and asset["size"] > 0
                        for asset in published[0]["assets"])):
         raise ValueError("The published release package must exist before cleanup")
+    validate_package(repo, published[0]["tag_name"], "latest.zip")
     for release in releases:
         tag = release["tag_name"]
         if release["draft"] or release["prerelease"] or not tag.startswith("v"):

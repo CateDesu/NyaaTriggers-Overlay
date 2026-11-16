@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Interruptions/**/*.cs" />
     <!-- Link source to test internals without Dalamud. -->
     <Compile Include="..\..\NyaaTriggers.Plugin\Meter\MeterEngine.cs" Link="MeterEngine.cs" />
   </ItemGroup>

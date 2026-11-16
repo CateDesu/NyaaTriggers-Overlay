@@ -972,5 +972,46 @@ foreach (var owner in new[] { "0", "E0000000", "40000050" })
     CheckNear(stats.Hits!.Value, 2, "Malformed amounts cannot create an extra damaging hit");
 }
 
+{
+    var eng = new MeterEngine(() => 0.0);
+    eng.SetMe(0x10000001);
+    eng.SetRoster(new[] { new KeyValuePair<int, int>(0x10000002, 24) });
+    eng.Process(Ability(Player, "Self", Enemy, "Enemy", "0003", "00640000"));
+    eng.Process(Ability(PlayerTwo, "Party", Enemy, "Enemy", "0003", "00640000"));
+    for (var i = 0; i < 1100; i++)
+    {
+        var id = 0x10001000 + i;
+        eng.NoteJob(id, 31);
+        eng.Process(Ability(id.ToString("X"), $"Visitor {i}", Enemy, "Enemy", "0003", "00640000"));
+    }
+
+    var snap = eng.LiveSnapshot()!;
+    Check(snap.Participants == 1024 && snap.Title.Contains("[limited actors]"),
+        "Actor churn bounds retained rows and marks partial actor details");
+    CheckNear(snap.EncDps, 110200, "Actor retirement preserves full encounter damage");
+    Check(snap.Rows.Any(row => row.IsSelf) && snap.Rows.Any(row => row.Name == "Party"),
+        "Actor retirement preserves local and party rows");
+    eng.Process(Ability("10001000", "Returning visitor", Enemy, "Enemy", "0003", "00C80000"));
+    snap = eng.LiveSnapshot()!;
+    CheckNear(snap.EncDps, 110400, "An evicted player can return without losing or duplicating retired damage");
+    CheckNear(snap.Rows.Single(row => row.Name == "Returning visitor").Stats!.Damage!.Value, 200,
+        "A returning retired player's row contains only newly retained damage");
+}
+
+{
+    var eng = new MeterEngine(() => 0.0);
+    eng.SetMe(0x10000001);
+    eng.Process(Ability(Player, "Self", Enemy, "Enemy", "0003", "00640000"));
+    eng.OnEncounterEnd = _ => throw new InvalidOperationException("Consumer failed");
+    eng.FeedLost();
+    Check(!eng.HasLiveEncounter, "A failing final-result consumer still retires the encounter");
+    eng.SetMe(0x10000001);
+    eng.Process(Ability(Player, "Self", Enemy, "Enemy", "0003", "00C80000"));
+    OverlaySnapshot? ended = null;
+    eng.OnEncounterEnd = snap => ended = snap;
+    eng.FeedLost();
+    CheckNear(ended!.EncDps, 200, "Processing recovers after a final-result consumer fails");
+}
+
 Console.WriteLine($"{passes} passed, {failures} failed");
 return failures == 0 ? 0 : 1;

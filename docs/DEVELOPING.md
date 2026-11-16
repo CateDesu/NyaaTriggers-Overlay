@@ -32,6 +32,8 @@ Run from the repository root:
 
 ```sh
 dotnet run --project tests/MeterEngineTests
+dotnet run --project tests/MeterEngineTests/Interruptions
+dotnet run --project tests/IinactClientTests
 dotnet run --project tests/BridgeTests
 env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/HeadlessDpsTests
 env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project tests/OverlayRegressionTests
@@ -96,3 +98,13 @@ greeting advertises this support. Older senders can end the last snapshot with a
 
 With **Standalone meter** enabled, the plugin reads IINACT at `ws://127.0.0.1:10501/ws`
 while no program session is connected. A program connection takes priority.
+
+The feed sends an unsolicited pong every 30 seconds. IINACT's prefixed pong replies
+cannot satisfy .NET's strict ping matching. This avoids false disconnects but gives up
+a bounded timeout for silent peers. Peer closure and transport errors still trigger
+reconnects, and stopping the feed cancels pending reads and retries. A silent peer may
+remain connected until the transport fails or the feed is restarted.
+
+`IinactClientTests` uses the production socket setup with an in-memory upgrade and
+simulated frames. It advances .NET 10 heartbeat deadlines without opening ports.
+It does not run a live IINACT feed.

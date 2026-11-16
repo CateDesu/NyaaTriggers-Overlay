@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -26,6 +27,7 @@ internal sealed class IinactClient : IDisposable
     private readonly Uri endpoint;
     private readonly Action<string> onMessage;
     private readonly Action onSessionEnd;
+    private readonly HttpMessageInvoker? connectInvoker;
 
     /// <summary>Keep task registration atomic with Dispose.</summary>
     private readonly object gate = new();
@@ -37,17 +39,28 @@ internal sealed class IinactClient : IDisposable
     private volatile bool connected;
     private volatile string status = "Connecting to IINACT.";
 
-    internal IinactClient(Uri endpoint, Action<string> onMessage, Action? onSessionEnd = null)
+    internal IinactClient(Uri endpoint, Action<string> onMessage, Action? onSessionEnd = null,
+        HttpMessageInvoker? connectInvoker = null)
     {
         this.endpoint = endpoint;
         this.onMessage = onMessage;
         this.onSessionEnd = onSessionEnd ?? (() => { });
+        this.connectInvoker = connectInvoker;
     }
 
     /// <summary>The config window tolerates delayed updates.</summary>
     internal string Status => this.status;
 
     internal bool IsConnected => this.connected;
+
+    internal static ClientWebSocket CreateWebSocket()
+    {
+        var ws = new ClientWebSocket();
+        ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+        // IINACT prefixes pong payloads, which cannot satisfy .NET ping matching.
+        ws.Options.KeepAliveTimeout = Timeout.InfiniteTimeSpan;
+        return ws;
+    }
 
     internal void Start()
     {
@@ -75,15 +88,13 @@ internal sealed class IinactClient : IDisposable
         var backoffMs = 5000;
         while (this.running)
         {
-            using var ws = new ClientWebSocket();
-            ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-            ws.Options.KeepAliveTimeout = TimeSpan.FromSeconds(90);
+            using var ws = CreateWebSocket();
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(this.stop.Token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(ConnectTimeoutSeconds));
                 this.status = "Connecting to IINACT.";
-                await ws.ConnectAsync(this.endpoint, timeout.Token).ConfigureAwait(false);
+                await ws.ConnectAsync(this.endpoint, this.connectInvoker, timeout.Token).ConfigureAwait(false);
                 this.connected = true;
                 this.status = "Connected to IINACT.";
                 backoffMs = 5000;
