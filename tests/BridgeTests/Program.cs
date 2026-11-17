@@ -80,16 +80,15 @@ const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameComba
 }
 
 {
-    var folder = Path.Combine(Path.GetTempPath(), "nyaa-config-test-" + Guid.NewGuid());
-    Directory.CreateDirectory(folder);
+    var folder = Directory.CreateTempSubdirectory("nyaa-config-test-");
     try
     {
-        var path = Path.Combine(folder, "NyaaTriggers.json");
+        var path = Path.Combine(folder.FullName, "NyaaTriggers.json");
         const string broken = "{ broken JSON";
         File.WriteAllText(path, broken);
         var config = Configuration.Load(() => JsonSerializer.Deserialize<Configuration>(File.ReadAllText(path)), path);
         Check(config.Port == 27080 && !File.Exists(path), "corrupt config recovers to defaults");
-        var backups = Directory.GetFiles(folder, "*.broken.*");
+        var backups = Directory.GetFiles(folder.FullName, "*.broken.*");
         Check(backups.Length == 1 && File.ReadAllText(backups[0]) == broken, "damaged config preserved exactly");
         config.TimelinePos = new Vector2(float.NaN, 1);
         config.AlertsFade = float.PositiveInfinity;
@@ -111,7 +110,8 @@ const string Combat = "{\"type\":\"InCombat\",\"inACTCombat\":true,\"inGameComba
         blocked.Save();
         Check(saves.Count == savesBefore + 1, "failed quarantine never reaches configuration storage");
     }
-    finally { Directory.Delete(folder, true); }
+    finally { folder.Delete(true); }
+    Check(!Directory.Exists(folder.FullName), "configuration fixture removes its temporary files");
 }
 
 {
